@@ -1,6 +1,13 @@
 pub mod prelude {
     use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
+    use crate::lex::kind::TokenKind;
+    use crate::recon::constraint::Constraint;
+    use crate::recon::{constraint, TyCtx, TyVar};
     use std::collections::HashMap;
+
+    pub trait Precedence {
+        fn precedence(&self) -> usize;
+    }
 
     #[derive(Debug)]
     pub struct Ctx<'a> {
@@ -9,7 +16,29 @@ pub mod prelude {
         blocks: BlockStore,
         funcs: FuncStore,
         ty: TyRegistry<'a>,
+        ty_ctx: TyCtx<'a>,
     }
+
+    //impl TokenQuery for Ctx<'_> {
+    //    #[track_caller]
+    //    fn kind(&self, token: TokenId) -> TokenKind {
+    //        self.tokens.kind(token)
+    //    }
+    //
+    //    #[track_caller]
+    //    fn span(&self, token: TokenId) -> Span {
+    //        self.tokens.span(token)
+    //    }
+    //
+    //    #[track_caller]
+    //    fn ident<'a>(&'a self, token: TokenId) -> &'a str {
+    //        self.tokens.ident(token)
+    //    }
+    //
+    //    fn is_terminator(&self, token: TokenId) -> bool {
+    //        self.tokens.is_terminator(token)
+    //    }
+    //}
 
     impl<'a> Ctx<'a> {
         pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
@@ -18,6 +47,7 @@ pub mod prelude {
                 blocks: BlockStore::default(),
                 funcs: FuncStore::default(),
                 ty: TyRegistry::default(),
+                ty_ctx: TyCtx::default(),
                 tokens,
             }
         }
@@ -42,6 +72,16 @@ pub mod prelude {
             self.ty
                 .ty_str(self.tokens.ident(ty))
                 .unwrap_or(Ty::Unresolved(ty))
+        }
+
+        /// Panics if `var` does not point to a [`crate::lex::kind::TokenKind::Ident`].
+        #[track_caller]
+        pub fn register_var(&mut self, var: TokenId) -> TyVar {
+            self.ty_ctx.register(self.tokens.ident(var))
+        }
+
+        pub fn constrain(&mut self, var: TyVar, constraint: Constraint) {
+            self.ty_ctx.constrain(var, constraint);
         }
     }
 
@@ -141,6 +181,20 @@ pub mod prelude {
         pub fn new(span: Span, instrs: Vec<Instr>, ret: Ty) -> Self {
             Self { span, instrs, ret }
         }
+
+        pub fn ret(&self) -> Option<&Expr> {
+            self.instrs.last().map(|i| match i {
+                Instr::Ret(expr) => Some(expr),
+                _ => None,
+            })?
+        }
+
+        pub fn ret_mut(&mut self) -> Option<&mut Expr> {
+            self.instrs.last_mut().map(|i| match i {
+                Instr::Ret(expr) => Some(expr),
+                _ => None,
+            })?
+        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -193,8 +247,18 @@ pub mod prelude {
     #[derive(Debug, Clone, Copy)]
     pub enum Ty {
         Unresolved(TokenId),
-        Void,
+        Unit,
         Int(IntKind),
+    }
+
+    impl Ty {
+        pub fn is_resolved(&self) -> bool {
+            !matches!(self, Ty::Unresolved(_))
+        }
+
+        pub fn is_int(&self) -> bool {
+            matches!(self, Ty::Int(_))
+        }
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -208,15 +272,34 @@ pub mod prelude {
         Ret(Expr),
     }
 
+    impl Instr {
+        pub fn is_ret(&self) -> bool {
+            matches!(self, Self::Ret(_))
+        }
+    }
+
     #[derive(Debug)]
     pub struct LetInstr {
+        ty: TyVar,
         lhs: IdentId,
         rhs: Expr,
     }
 
+    impl LetInstr {
+        pub fn new(ty: TyVar, lhs: IdentId, rhs: Expr) -> Self {
+            Self { ty, lhs, rhs }
+        }
+    }
+
     #[derive(Debug)]
     pub enum Expr {
-        //Ident(IdentId),
+        Ident(IdentId),
         Lit(i64),
+        Bin(Op, Box<Expr>, Box<Expr>),
+    }
+
+    #[derive(Debug)]
+    pub enum Op {
+        Add,
     }
 }

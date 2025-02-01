@@ -6,6 +6,7 @@ use std::ops::Range;
 pub trait TokenQuery {
     fn kind(&self, token: TokenId) -> TokenKind;
     fn span(&self, token: TokenId) -> Span;
+    fn int_lit(&self, token: TokenId) -> i64;
     fn ident<'a>(&'a self, token: TokenId) -> &'a str;
     fn is_terminator(&self, token: TokenId) -> bool;
 }
@@ -15,6 +16,12 @@ pub trait TokenQuery {
 /// Used in [`TokenQuery`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenId(usize);
+
+impl TokenId {
+    pub fn new(id: usize) -> Self {
+        Self(id)
+    }
+}
 
 /// Storage of the generated tokens for a given source file.
 #[derive(Debug)]
@@ -38,10 +45,6 @@ impl<'a> TokenBuffer<'a> {
 
     pub fn source(&self) -> &Source {
         self.source
-    }
-
-    pub fn tokens(&self) -> TokenIter {
-        TokenIter::new(0, self.len())
     }
 
     pub fn token(&self, token: TokenId) -> Option<&Token> {
@@ -80,34 +83,22 @@ impl TokenQuery for TokenBuffer<'_> {
         &self.source.as_str()[self.span(token).range()]
     }
 
+    #[track_caller]
+    fn int_lit(&self, token: TokenId) -> i64 {
+        if !matches!(self.kind(token), TokenKind::Int) {
+            panic!(
+                "called `TokenQuery::int_lit` on a {:?} token",
+                self.kind(token)
+            );
+        }
+
+        self.source.as_str()[self.span(token).range()]
+            .parse()
+            .unwrap()
+    }
+
     fn is_terminator(&self, token: TokenId) -> bool {
         self.kind(token).is_terminator()
-    }
-}
-
-pub struct TokenIter {
-    id_range: Range<usize>,
-    index: usize,
-}
-
-impl TokenIter {
-    fn new(start: usize, end: usize) -> Self {
-        Self {
-            id_range: start..end,
-            index: 0,
-        }
-    }
-}
-
-impl Iterator for TokenIter {
-    type Item = TokenId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.id_range.contains(&self.index).then(|| {
-            let idx = self.index;
-            self.index += 1;
-            TokenId(idx)
-        })
     }
 }
 
@@ -137,6 +128,13 @@ impl Span {
         Self {
             start: range.start as u32,
             end: range.end as u32,
+        }
+    }
+
+    pub fn from_range_u32(range: Range<u32>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
         }
     }
 

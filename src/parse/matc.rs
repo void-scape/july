@@ -1,9 +1,9 @@
 use crate::lex::kind::TokenKind;
 use std::marker::PhantomData;
 
-/// [`TokenKind`] constraints used by [`crate::parse::rule::Rule`].
 pub trait MatchTokenKind {
     fn matches(kind: Option<TokenKind>) -> bool;
+    fn expect() -> String;
 }
 
 impl<T> MatchTokenKind for T
@@ -12,6 +12,32 @@ where
 {
     fn matches(kind: Option<TokenKind>) -> bool {
         kind.is_some_and(|kind| T::kind() == kind)
+    }
+
+    fn expect() -> String {
+        let kind = T::kind();
+        match kind {
+            TokenKind::Let
+            | TokenKind::Struct
+            | TokenKind::Fn
+            | TokenKind::Ret
+            | TokenKind::Semi
+            | TokenKind::Colon
+            | TokenKind::Equals
+            | TokenKind::OpenParen
+            | TokenKind::CloseParen
+            | TokenKind::OpenBracket
+            | TokenKind::CloseBracket
+            | TokenKind::OpenCurly
+            | TokenKind::CloseCurly
+            | TokenKind::Plus
+            | TokenKind::Slash
+            | TokenKind::Hyphen
+            | TokenKind::Greater
+            | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
+            TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
+            TokenKind::Ident => format!("expected {}", kind.as_str()),
+        }
     }
 }
 
@@ -24,45 +50,38 @@ impl MatchTokenKind for Any<()> {
     fn matches(_: Option<TokenKind>) -> bool {
         true
     }
+
+    fn expect() -> String {
+        "expected token".into()
+    }
 }
 
 macro_rules! impl_match_token {
     ($($T:ident),*) => {
         impl<$($T,)*> MatchTokenKind for Any<($($T,)*)>
         where
-            $($T: MatchTokenKind,)*
+            $($T: TokenKindType,)*
         {
             fn matches(kind: Option<TokenKind>) -> bool {
                 $($T::matches(kind) ||)* false
+            }
+
+            fn expect() -> String {
+                let mut e = String::new();
+                $(
+                    e.push_str($T::kind().as_str());
+                    e.push_str(", ");
+                )*
+                _ = e.pop();
+                _ = e.pop();
+
+                format!("expected one of [ {} ]", e)
             }
         }
     };
 }
 
 variadics_please::all_tuples!(impl_match_token, 1, 5, T);
-
-/// Matches true if no input token is supplied.
-#[derive(Debug, Default)]
-pub struct Empty;
-
-impl MatchTokenKind for Empty {
-    fn matches(kind: Option<TokenKind>) -> bool {
-        kind.is_none()
-    }
-}
-
-/// Matches true for any [`TokenKindType`] that is not `T`.
-#[derive(Debug, Default)]
-pub struct Not<T>(PhantomData<T>);
-
-impl<T> MatchTokenKind for Not<T>
-where
-    T: MatchTokenKind,
-{
-    fn matches(kind: Option<TokenKind>) -> bool {
-        !T::matches(kind)
-    }
-}
 
 /// Associates a [`TokenKind`] with the implementer.
 pub trait TokenKindType {
@@ -83,6 +102,7 @@ macro_rules! impl_tkt {
 }
 
 impl_tkt!(Fn, TokenKind::Fn);
+impl_tkt!(Struct, TokenKind::Struct);
 impl_tkt!(Ret, TokenKind::Ret);
 impl_tkt!(Let, TokenKind::Let);
 impl_tkt!(Colon, TokenKind::Colon);
@@ -96,3 +116,5 @@ impl_tkt!(OpenCurly, TokenKind::OpenCurly);
 impl_tkt!(CloseCurly, TokenKind::CloseCurly);
 impl_tkt!(OpenParen, TokenKind::OpenParen);
 impl_tkt!(CloseParen, TokenKind::CloseParen);
+impl_tkt!(Hyphen, TokenKind::Hyphen);
+impl_tkt!(Greater, TokenKind::Greater);

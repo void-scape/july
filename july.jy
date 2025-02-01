@@ -1,0 +1,14 @@
+Sandwich : struct {
+    /*
+    * Now we are _within_ the sandwich ...
+    * Holy buckets!
+    */
+}
+
+// Hello, Sailor!
+main : () -> i32 {
+    // here is an exciting variable binding!
+    let x = 10 + 3;
+    // returning `10 + 3` = 13
+    return x;
+}

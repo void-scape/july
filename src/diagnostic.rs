@@ -21,6 +21,11 @@ impl<'a> Diag<'a> {
         }
     }
 
+    pub fn level(mut self, level: Level) -> Self {
+        self.inner.level = level;
+        self
+    }
+
     pub fn msg(&mut self, msg: Msg) {
         self.inner.msgs.push(msg);
     }
@@ -57,6 +62,10 @@ impl Msg {
 
     pub fn note(span: Span, label: impl Into<String>) -> Self {
         Self::new(Level::Note, span, label)
+    }
+
+    pub fn help(span: Span, label: impl Into<String>) -> Self {
+        Self::new(Level::Help, span, label)
     }
 }
 
@@ -151,15 +160,17 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
 }
 
 pub fn report(diag: Diag) {
-    let message = diag.inner.level.title(diag.inner.title).snippet({
-        let mut snip = Snippet::source(&diag.inner.source)
+    let message = diag.inner.level.title(diag.inner.title).snippet(
+        Snippet::source(&diag.inner.source)
             .origin(diag.inner.origin)
-            .fold(true);
-        for msg in diag.inner.msgs.iter() {
-            snip = snip.annotation(msg.level.span(msg.span.range()).label(&msg.label));
-        }
-        snip
-    });
+            .fold(true)
+            .annotations(
+                diag.inner
+                    .msgs
+                    .iter()
+                    .map(|msg| msg.level.span(msg.span.range()).label(&msg.label)),
+            ),
+    );
 
     let renderer = Renderer::styled();
     anstream::println!("{}", renderer.render(message))

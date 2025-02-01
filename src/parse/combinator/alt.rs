@@ -1,60 +1,31 @@
-use crate::diagnostic::{Diag, Msg};
-use crate::parse::{Ctx, ParserRule, RuleResult, TokenQuery};
-use crate::PARSE_ERR;
-use crate::{
-    lex::buffer::{TokenBuffer, TokenId},
-    ParserRuleSet,
-};
-use std::any::type_name;
+use crate::lex::buffer::{TokenBuffer, TokenId};
+use crate::parse::{rules::*, stream::TokenStream};
 
-/// Picks the first rule from `T` that does not fail.
+/// Returns the first successful rule from `T`.
 ///
 /// Fails if all rules failed.
 #[derive(Debug, Default)]
-pub struct Alt<T> {
-    chosen: Option<usize>,
-    rules: T,
-}
+pub struct Alt<T>(T);
 
-impl<'a, T> ParserRule<'a> for Alt<T>
+impl<'a, O, A, B> ParserRule<'a> for Alt<(A, B)>
 where
-    T: ParserRuleSet<'a> + Default,
+    A: ParserRule<'a, Output = O>,
+    B: ParserRule<'a, Output = O>,
 {
-    fn apply(
-        &mut self,
+    type Output = O;
+
+    fn parse(
         buffer: &'a TokenBuffer<'a>,
-        token: TokenId,
+        stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
-        ctx: &mut Ctx<'a>,
-    ) -> RuleResult<'a> {
-        if let Some(chosen) = self.chosen {
-            self.rules.apply_nth(chosen, buffer, token, stack, ctx)
-        } else {
-            for i in 0..T::len() {
-                let result = self.rules.apply_nth(i, buffer, token, stack, ctx);
-                if !result.failed() {
-                    self.chosen = Some(i);
-                    return result;
-                }
+    ) -> RResult<'a, Self::Output> {
+        let str = *stream;
+        match A::parse(buffer, stream, stack) {
+            Err(_) => {
+                *stream = str;
+                B::parse(buffer, stream, stack)
             }
-
-            RuleResult::Failed(Diag::sourced(
-                PARSE_ERR,
-                buffer.source(),
-                Msg::error(
-                    buffer.span(token),
-                    format!("expected one of {}", type_name::<T>()),
-                ),
-            ))
+            Ok(val) => Ok(val),
         }
-    }
-
-    fn finished(&self) -> bool {
-        self.chosen.is_none_or(|i| self.rules.finished_nth(i))
-    }
-
-    fn reset(&mut self) {
-        self.chosen = None;
-        self.rules.reset();
     }
 }

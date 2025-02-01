@@ -1,6 +1,8 @@
 /// Definition of all kinds of tokens found within a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    /// `struct`
+    Struct,
     /// `let`
     Let,
     /// `fn`
@@ -33,9 +35,41 @@ pub enum TokenKind {
     Plus,
     /// `*`
     Asterisk,
+    /// `/`
+    Slash,
+    /// `>`
+    Greater,
+    /// `-`
+    Hyphen,
 }
 
 impl TokenKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Struct => "struct",
+            Self::Let => "let",
+            Self::Fn => "fn",
+            Self::Ret => "return",
+            Self::Semi => ";",
+            Self::Colon => ":",
+            Self::Equals => "=",
+            Self::OpenParen => "(",
+            Self::CloseParen => ")",
+            Self::OpenBracket => "[",
+            Self::CloseBracket => "]",
+            Self::OpenCurly => "{",
+            Self::CloseCurly => "}",
+            Self::Plus => "+",
+            Self::Asterisk => "*",
+            Self::Slash => "/",
+            Self::Greater => ">",
+            Self::Hyphen => "-",
+
+            Self::Int => "int literal",
+            Self::Ident => "identifier",
+        }
+    }
+
     pub fn is_terminator(&self) -> bool {
         matches!(self, Self::Semi)
     }

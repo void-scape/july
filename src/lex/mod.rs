@@ -1,6 +1,7 @@
 use crate::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
+use winnow::stream::Stream;
 use winnow::{combinator::alt, stream::AsChar, token::take_while, LocatingSlice, PResult, Parser};
 
 pub mod buffer;
@@ -32,28 +33,49 @@ impl<'a> Lexer<'a> {
     }
 }
 
-fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    alt((
-        ret, semi, plus, asterisk, equals, delim, colon, keyword, int_lit, ident,
-    ))
-    .parse_next(input)
-}
-
-macro_rules! simple_token {
-    ($name:ident, $str:tt, $kind:expr) => {
-        fn $name<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-            let span = $str.span().parse_next(input)?;
-            Ok(Token::new($kind, Span::from_range(span)))
+fn comment<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<()> {
+    loop {
+        take_while(.., |c| c == ' ' || c == '\n').parse_next(input)?;
+        match alt(("//", "/*")).parse_next(input)? {
+            "//" => {
+                while input.peek_token().is_some_and(|(_, c)| c != '\n') {
+                    _ = input.next_token();
+                }
+            }
+            "/*" => {
+                while input.peek_slice(2).1 != "*/" {
+                    _ = input.next_token();
+                }
+                _ = (input.next_token(), input.next_token());
+            }
+            _ => unreachable!(),
         }
-    };
+    }
 }
 
-simple_token!(ret, "return", TokenKind::Ret);
-simple_token!(semi, ';', TokenKind::Semi);
-simple_token!(plus, '+', TokenKind::Plus);
-simple_token!(asterisk, '*', TokenKind::Asterisk);
-simple_token!(equals, '=', TokenKind::Equals);
-simple_token!(colon, ':', TokenKind::Colon);
+fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
+    _ = comment(input);
+
+    alt((symbols, delim, keyword, int_lit, ident)).parse_next(input)
+}
+
+fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
+    let (sym, span) = alt((";", "+", "*", "=", ":", "-", ">"))
+        .with_span()
+        .parse_next(input)?;
+    let token = match sym {
+        ";" => TokenKind::Semi,
+        "+" => TokenKind::Plus,
+        "*" => TokenKind::Asterisk,
+        "=" => TokenKind::Equals,
+        ":" => TokenKind::Colon,
+        "-" => TokenKind::Hyphen,
+        ">" => TokenKind::Greater,
+        _ => unreachable!(),
+    };
+
+    Ok(Token::new(token, Span::from_range(span)))
+}
 
 fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     let (delim, span) = alt(('{', '}', '(', ')', '[', ']'))
@@ -102,14 +124,14 @@ fn keyword<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     let (keyword, span) = alt((
         "fn".with_span(),
         "struct".with_span(),
-        "ret".with_span(),
+        "return".with_span(),
         "let".with_span(),
     ))
     .parse_next(input)?;
     let token = match keyword {
         "fn" => TokenKind::Fn,
-        //"struct" => TokenKind::Struct,
-        //"ret" => TokenKind::Ret,
+        "struct" => TokenKind::Struct,
+        "return" => TokenKind::Ret,
         "let" => TokenKind::Let,
         _ => unreachable!(),
     };
