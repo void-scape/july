@@ -5,41 +5,19 @@ use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*, stream::T
 /// High level operation performed in blocks.
 #[derive(Debug)]
 pub enum Stmt {
-    Ret(Expr),
     Let {
         name: TokenId,
         ty: Option<TokenId>,
         assign: Expr,
     },
+    Semi(Expr),
+    Open(Expr),
 }
 
-pub struct TyBinding {
-    pub ident: TokenId,
-    pub ty: TokenId,
-}
+/// `<expr>[;]`
+pub struct StmtRule;
 
-/// `<ident>: <type>`
-pub struct TyBindingRule;
-
-impl<'a> ParserRule<'a> for TyBindingRule {
-    type Output = TyBinding;
-
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let (ident, _, ty) =
-            <(Next<Ident>, Next<Colon>, Next<Ident>) as ParserRule>::parse(buffer, stream, stack)?;
-
-        Ok(TyBinding { ident, ty })
-    }
-}
-
-/// `return <expr>;`
-pub struct RetRule;
-
-impl<'a> ParserRule<'a> for RetRule {
+impl<'a> ParserRule<'a> for StmtRule {
     type Output = Stmt;
 
     fn parse(
@@ -47,10 +25,14 @@ impl<'a> ParserRule<'a> for RetRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        let (_, expr, _) =
-            <(Next<Ret>, ExprRule, Next<Semi>) as ParserRule>::parse(buffer, stream, stack)?;
+        let (expr, semi) =
+            <(ExprRule, Opt<Next<Semi>>) as ParserRule>::parse(buffer, stream, stack)?;
 
-        Ok(Stmt::Ret(expr))
+        if semi.is_some() {
+            Ok(Stmt::Semi(expr))
+        } else {
+            Ok(Stmt::Open(expr))
+        }
     }
 }
 

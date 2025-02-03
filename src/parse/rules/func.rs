@@ -9,10 +9,10 @@ use annotate_snippets::Level;
 /// Function that takes a set of parameters and optionally returns a value.
 #[derive(Debug)]
 pub struct Func {
-    name: TokenId,
-    //params: Vec<LetInstr>,
-    ty: Option<TokenId>,
-    block: Block,
+    pub span: Span,
+    pub name: TokenId,
+    pub ty: Option<TokenId>,
+    pub block: Block,
 }
 
 /// fn <ident>() [:: <type>] <block>
@@ -27,7 +27,7 @@ impl<'a> ParserRule<'a> for FnRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        match <(
+        match Spanned::<(
             //Reported<Next<Fn>, MissingFn>,
             Next<Ident>,
             Next<Colon>,
@@ -39,14 +39,19 @@ impl<'a> ParserRule<'a> for FnRule {
                 //Reported<Next<Colon>, DoubleColon>,
                 Reported<Next<Ident>, MissingType>,
             )>,
-        ) as ParserRule>::parse(buffer, stream, stack)
+        )>::parse(buffer, stream, stack)
         {
-            Ok((_, name, _, _, ty)) => match BlockRules::parse(buffer, stream, stack) {
-                Ok(block) => Ok(Func {
-                    ty: ty.map(|(_, _, t)| t),
-                    name,
-                    block,
-                }),
+            Ok(res) => match BlockRules::parse(buffer, stream, stack) {
+                Ok(block) => {
+                    let span = res.span();
+                    let (name, _, _, _, ty) = res.into_inner();
+                    Ok(Func {
+                        ty: ty.map(|(_, _, t)| t),
+                        span,
+                        name,
+                        block,
+                    })
+                }
                 Err(e) => {
                     stream.eat_until_consume(CloseCurly);
                     Err(e)

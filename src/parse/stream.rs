@@ -1,5 +1,7 @@
 use super::matc::MatchTokenKind;
-use crate::lex::buffer::{TokenBuffer, TokenId, TokenQuery};
+use super::PARSE_ERR;
+use crate::diagnostic::{Diag, Msg};
+use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
 
 impl TokenBuffer<'_> {
@@ -25,6 +27,31 @@ impl<'a> TokenStream<'a> {
             index: 0,
             buffer,
         }
+    }
+
+    pub fn slice(&self, len: usize) -> Self {
+        Self {
+            end: (self.index + len).min(self.end),
+            start: self.start,
+            index: self.index,
+            buffer: self.buffer,
+        }
+    }
+
+    pub fn find_offset<T: MatchTokenKind>(&self, token: T) -> usize {
+        let index = self.index;
+        let mut other = self.clone();
+        other.eat_until(token);
+        other.index.saturating_sub(index)
+    }
+
+    pub fn full_error(&self, title: &'static str, span: Span, msg: impl Into<String>) -> Diag<'a> {
+        Diag::sourced(title, self.buffer.source(), Msg::error(span, msg))
+    }
+
+    pub fn error(&self, msg: impl Into<String>) -> Diag<'a> {
+        let span = self.buffer.span(self.prev());
+        self.full_error(PARSE_ERR, span, msg)
     }
 
     pub fn remaining(&self) -> usize {

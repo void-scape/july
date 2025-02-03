@@ -7,7 +7,7 @@ pub struct Opt<T>(T);
 
 impl<'a, T> ParserRule<'a> for Opt<T>
 where
-    T: ParserRule<'a> + Default,
+    T: ParserRule<'a>,
 {
     type Output = Option<<T as ParserRule<'a>>::Output>;
 

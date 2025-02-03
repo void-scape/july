@@ -7,8 +7,18 @@ Sandwich : struct {
 
 // Hello, Sailor!
 main : () -> i32 {
-    // here is an exciting variable binding!
-    let x = 10 + 3;
-    // returning `10 + 3` = 13
-    return x;
+    // Here is an exciting variable binding!
+    let x = num() + ((10 + 2) * 2);
+
+    // This expression does nothing, and is discarded;
+    x + 1;
+
+    // let y = 10; // ---> Compiler error!
+    let y: i32 = 10;
+
+    x // `x` or `return x;`
+}
+
+num : () -> i32 {
+    1
 }

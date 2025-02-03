@@ -1,5 +1,5 @@
 use crate::lex::buffer::Span;
-use crate::source::Source;
+use crate::unit::source::Source;
 use annotate_snippets::{Level, Renderer, Snippet};
 use std::borrow::Cow;
 
@@ -26,8 +26,9 @@ impl<'a> Diag<'a> {
         self
     }
 
-    pub fn msg(&mut self, msg: Msg) {
+    pub fn msg(mut self, msg: Msg) -> Self {
         self.inner.msgs.push(msg);
+        self
     }
 }
 
@@ -35,7 +36,7 @@ impl<'a> Diag<'a> {
 pub struct DiagInner<'a> {
     title: &'static str,
     source: &'a str,
-    origin: &'a str,
+    origin: Cow<'a, str>,
     level: Level,
     msgs: Vec<Msg>,
 }
@@ -134,8 +135,8 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
     fn into_diagnostic(self, title: &'static str) -> DiagInner<'a> {
         DiagInner {
             title,
-            source: self.source.as_str(),
-            origin: self.source.origin(),
+            source: self.source.raw(),
+            origin: self.source.origin().to_string_lossy(),
             level: Level::Error,
 
             msgs: vec![Msg::new(
@@ -151,10 +152,22 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
     fn into_diagnostic(self, title: &'static str) -> DiagInner<'a> {
         DiagInner {
             title,
-            source: self.source.as_str(),
-            origin: self.source.origin(),
+            source: self.source.raw(),
+            origin: self.source.origin().to_string_lossy(),
             level: Level::Error,
             msgs: vec![self.inner],
+        }
+    }
+}
+
+impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
+    fn into_diagnostic(self, title: &'static str) -> DiagInner<'a> {
+        DiagInner {
+            title,
+            source: self.source.raw(),
+            origin: self.source.origin().to_string_lossy(),
+            level: self.inner,
+            msgs: Vec::new(),
         }
     }
 }
@@ -162,7 +175,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
 pub fn report(diag: Diag) {
     let message = diag.inner.level.title(diag.inner.title).snippet(
         Snippet::source(&diag.inner.source)
-            .origin(diag.inner.origin)
+            .origin(&diag.inner.origin)
             .fold(true)
             .annotations(
                 diag.inner

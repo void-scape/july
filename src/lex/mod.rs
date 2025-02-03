@@ -1,4 +1,4 @@
-use crate::source::Source;
+use crate::unit::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
 use winnow::stream::Stream;
@@ -18,7 +18,7 @@ impl<'a> Lexer<'a> {
 
     pub fn lex(self) -> PResult<TokenBuffer<'a>> {
         let mut tokens = Vec::new();
-        let mut input = LocatingSlice::new(self.source.as_str());
+        let mut input = LocatingSlice::new(self.source.raw());
 
         while !input.is_empty() {
             take_while(.., |c| c == ' ' || c == '\n').parse_next(&mut input)?;

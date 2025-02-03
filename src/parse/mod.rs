@@ -1,4 +1,4 @@
-use self::combinator::alt::Alt;
+use self::rules::prelude::{Func, Struct};
 use self::rules::ParserRule;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
@@ -6,19 +6,26 @@ use crate::lex::kind::TokenKind;
 
 mod combinator;
 mod matc;
-mod rules;
+pub mod rules;
 mod stream;
 
 pub const PARSE_ERR: &'static str = "failed to parse";
 
+#[derive(Debug)]
+pub enum Item {
+    Struct(Struct),
+    Func(Func),
+}
+
 pub struct Parser;
 
 impl Parser {
-    pub fn parse<'a>(buffer: &'a TokenBuffer<'a>) -> Result<(), Vec<Diag<'a>>> {
+    pub fn parse<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, Vec<Diag<'a>>> {
         Self::parse_buffer(buffer)
     }
 
-    fn parse_buffer<'a>(buffer: &'a TokenBuffer<'a>) -> Result<(), Vec<Diag<'a>>> {
+    fn parse_buffer<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, Vec<Diag<'a>>> {
+        let mut items = Vec::new();
         let mut stack = Vec::with_capacity(buffer.len());
         let mut diags = Vec::new();
         let mut stream = buffer.stream();
@@ -32,8 +39,8 @@ impl Parser {
                     Err(diag) => {
                         diags.extend(diag.into_diags());
                     }
-                    Ok(f) => {
-                        println!("{f:#?}");
+                    Ok(s) => {
+                        items.push(Item::Struct(s));
                     }
                 }
             } else {
@@ -42,7 +49,7 @@ impl Parser {
                         diags.extend(diag.into_diags());
                     }
                     Ok(f) => {
-                        println!("{f:#?}");
+                        items.push(Item::Func(f));
                     }
                 }
             }
@@ -51,7 +58,7 @@ impl Parser {
         if !diags.is_empty() {
             Err(diags)
         } else {
-            Ok(())
+            Ok(items)
         }
     }
 }

@@ -73,4 +73,11 @@ impl TokenKind {
     pub fn is_terminator(&self) -> bool {
         matches!(self, Self::Semi)
     }
+
+    pub fn is_keyword(&self) -> bool {
+        match self {
+            Self::Ret | Self::Struct | Self::Fn | Self::Let => true,
+            _ => false,
+        }
+    }
 }

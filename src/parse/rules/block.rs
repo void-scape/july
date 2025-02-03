@@ -6,10 +6,11 @@ use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*};
 /// Collection of [`Stmt`]s.
 #[derive(Debug)]
 pub struct Block {
+    pub span: Span,
     pub stmts: Vec<Stmt>,
 }
 
-/// `{ <[stmt]>, ... }`
+/// `{ <[stmt]>[, ...] }`
 #[derive(Default)]
 pub struct BlockRules;
 
@@ -34,9 +35,9 @@ impl<'a> ParserRule<'a> for BlockRules {
         )>::parse(buffer, stream, stack)
         {
             Ok(block) => {
-                let _span = block.span();
+                let span = block.span();
                 let (_, stmts, _) = block.into_inner();
-                Ok(Block { stmts })
+                Ok(Block { span, stmts })
             }
             Err(e) => {
                 stream.eat_until_consume(CloseCurly);
@@ -66,8 +67,7 @@ impl<'a> ParserRule<'a> for StmtSeqRules {
         while !stream.match_peek(CloseCurly) {
             let instr = match stream.peek_kind().unwrap() {
                 TokenKind::Let => LetRule::parse(buffer, stream, stack)?,
-                TokenKind::Ret => RetRule::parse(buffer, stream, stack)?,
-                _ => todo!("error"),
+                _ => StmtRule::parse(buffer, stream, stack)?,
             };
 
             instrs.push(instr);
