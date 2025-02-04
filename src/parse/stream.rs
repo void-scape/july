@@ -38,10 +38,10 @@ impl<'a> TokenStream<'a> {
         }
     }
 
-    pub fn find_offset<T: MatchTokenKind>(&self, token: T) -> usize {
+    pub fn find_offset<T: MatchTokenKind>(&self) -> usize {
         let index = self.index;
         let mut other = self.clone();
-        other.eat_until(token);
+        other.eat_until::<T>();
         other.index.saturating_sub(index)
     }
 
@@ -83,11 +83,16 @@ impl<'a> TokenStream<'a> {
         })
     }
 
+    #[track_caller]
+    pub fn expect(&mut self) -> TokenId {
+        self.next().unwrap()
+    }
+
     pub fn eat(&mut self) {
         self.index += 1;
     }
 
-    pub fn eat_until<T: MatchTokenKind>(&mut self, _token: T) {
+    pub fn eat_until<T: MatchTokenKind>(&mut self) {
         while self
             .peek()
             .is_some_and(|t| !T::matches(Some(self.buffer.kind(t))))

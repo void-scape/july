@@ -28,8 +28,7 @@ impl<'a> IdentStore<'a> {
         }
     }
 
-    #[track_caller]
-    pub fn ident(&self, id: IdentId) -> &'a str {
-        *self.buf.get(id.0).expect("invalid ident id")
+    pub fn get_ident(&self, id: IdentId) -> Option<&'a str> {
+        self.buf.get(id.0).copied()
     }
 }

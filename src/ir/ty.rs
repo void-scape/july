@@ -1,8 +1,7 @@
-use crate::lex::buffer::Span;
-use std::collections::HashMap;
-
 use super::ctx::Ctx;
 use super::ident::IdentId;
+use crate::lex::buffer::Span;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {
@@ -23,7 +22,14 @@ impl Ty {
         match self {
             Self::Unit => "()",
             Self::Int(kind) => match kind {
+                IntKind::I8 => "i8",
+                IntKind::I16 => "i16",
                 IntKind::I32 => "i32",
+                IntKind::I64 => "i64",
+                IntKind::U8 => "u8",
+                IntKind::U16 => "u16",
+                IntKind::U32 => "u32",
+                IntKind::U64 => "u64",
             },
         }
     }
@@ -31,7 +37,15 @@ impl Ty {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntKind {
+    I8,
+    I16,
     I32,
+    I64,
+
+    U8,
+    U16,
+    U32,
+    U64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -40,28 +54,24 @@ pub struct TyVar(usize);
 #[derive(Debug, Default)]
 pub struct TyCtx {
     consts: Vec<Vec<Constraint>>,
-    idents: HashMap<IdentId, Vec<TyVar>>,
+    idents: HashMap<IdentId, TyVar>,
 }
 
 impl TyCtx {
-    pub fn var(&mut self) -> TyVar {
+    pub fn var(&mut self, ident: IdentId) -> TyVar {
         let idx = self.consts.len();
+        self.idents.insert(ident, TyVar(idx));
         self.consts.push(Vec::new());
         TyVar(idx)
     }
 
-    pub fn register(&mut self, ty_var: TyVar, ident: IdentId) {
-        self.idents.entry(ident).or_default().push(ty_var);
+    pub fn try_get_var(&self, ident: IdentId) -> Option<TyVar> {
+        self.idents.get(&ident).copied()
     }
 
     #[track_caller]
-    pub fn get_vars(&self, ident: IdentId) -> &[TyVar] {
-        self.try_get_vars(ident)
-            .expect("invalid ident var relationship")
-    }
-
-    pub fn try_get_vars(&self, ident: IdentId) -> Option<&[TyVar]> {
-        self.idents.get(&ident).map(|v| &**v)
+    pub fn get_var(&self, ident: IdentId) -> TyVar {
+        self.try_get_var(ident).expect("invalid ident")
     }
 
     #[track_caller]
@@ -72,23 +82,20 @@ impl TyCtx {
             .push(constraint);
     }
 
-    #[track_caller]
-    pub fn hint_satisfies(&self, ty_var: TyVar, ty: Ty) -> bool {
-        self.consts
-            .get(ty_var.0)
-            .expect("invalid ty var")
-            .iter()
-            .all(|c| c.kind.hint_satisfies(ty))
-    }
-
     pub fn resolve(&self, ctx: &Ctx) -> Result<TypeKey, Vec<TyErr>> {
+        let map = self
+            .idents
+            .iter()
+            .map(|(ident, var)| (*var, *ident))
+            .collect::<HashMap<_, _>>();
+
         let mut key = HashMap::with_capacity(self.consts.len());
         let mut errs = Vec::new();
         for (i, c) in self.consts.iter().enumerate() {
             let var = TyVar(i);
-            match Constraint::unify(ctx, var, c) {
+            match Constraint::unify(self, ctx, var, c) {
                 Ok(ty) => {
-                    key.insert(var, ty);
+                    key.insert(*map.get(&var).unwrap(), ty);
                 }
                 Err(err) => errs.push(err),
             }
@@ -120,21 +127,21 @@ impl Default for TyRegistry<'_> {
             tys: Vec::new(),
         };
 
+        slf.register_ty("i8", Ty::Int(IntKind::I8));
+        slf.register_ty("i16", Ty::Int(IntKind::I16));
         slf.register_ty("i32", Ty::Int(IntKind::I32));
+        slf.register_ty("i64", Ty::Int(IntKind::I64));
+
+        slf.register_ty("u8", Ty::Int(IntKind::U8));
+        slf.register_ty("u16", Ty::Int(IntKind::U16));
+        slf.register_ty("u32", Ty::Int(IntKind::U32));
+        slf.register_ty("u64", Ty::Int(IntKind::U64));
 
         slf
     }
 }
 
 impl<'a> TyRegistry<'a> {
-    pub fn register(&mut self, ty: &'a str) -> TyId {
-        let idx = self.tys.len();
-        self.tys.push(ty);
-        self.symbol_map.insert(ty, TyId(idx));
-        TyId(idx);
-        todo!();
-    }
-
     pub fn ty_str(&self, ty: &'a str) -> Option<Ty> {
         self.symbol_map
             .get(ty)
@@ -163,11 +170,19 @@ pub enum ConstraintKind {
 }
 
 impl ConstraintKind {
-    pub fn hint_satisfies(&self, ty: Ty) -> bool {
+    pub fn hint_satisfies(&self, ty: Ty) -> Option<bool> {
         match self {
-            Self::Arch(arch) => arch.satisfies(ty),
-            Self::Abs(abs) => *abs == ty,
-            Self::Equate(_) => true,
+            Self::Arch(arch) => Some(arch.satisfies(ty)),
+            Self::Abs(abs) => Some(*abs == ty),
+            Self::Equate(_) => None,
+        }
+    }
+
+    pub fn is_int(&self) -> Option<bool> {
+        match self {
+            Self::Arch(arch) => Some(matches!(arch, Arch::Int)),
+            Self::Abs(abs) => Some(abs.is_int()),
+            Self::Equate(_) => None,
         }
     }
 }
@@ -180,13 +195,18 @@ pub enum TyErr {
 }
 
 impl Constraint {
-    pub fn unify(ctx: &Ctx, var: TyVar, constraints: &[Constraint]) -> Result<Ty, TyErr> {
+    pub fn unify(
+        ty_ctx: &TyCtx,
+        ctx: &Ctx,
+        var: TyVar,
+        constraints: &[Constraint],
+    ) -> Result<Ty, TyErr> {
         let mut archs = Vec::with_capacity(constraints.len());
         let mut abs = None;
         //let mut equates = Vec::new();
 
         let mut constraints = constraints.to_vec();
-        Self::resolve_equates(ctx, &mut constraints, &mut vec![var]);
+        Self::resolve_equates(ty_ctx, ctx, &mut constraints, &mut vec![var]);
 
         for c in constraints.iter() {
             match c.kind {
@@ -203,11 +223,12 @@ impl Constraint {
         }
 
         let ty = abs.ok_or_else(|| {
-            ctx.exprs
-                .iter()
-                .find(|expr| expr.ty == var)
-                .map(|expr| TyErr::NotEnoughInfo(expr.span, var))
-                .unwrap_or_else(|| panic!("no one uses this ty var?"))
+            panic!("not enoug info")
+            //ctx.exprs
+            //    .iter()
+            //    .find(|expr| expr.ty == var)
+            //    .map(|expr| TyErr::NotEnoughInfo(expr.span, var))
+            //    .unwrap_or_else(|| panic!("no one uses this ty var?"))
         })?;
 
         for (span, arch) in archs.iter() {
@@ -219,7 +240,12 @@ impl Constraint {
         Ok(ty)
     }
 
-    fn resolve_equates(ctx: &Ctx, constraints: &mut Vec<Constraint>, resolved: &mut Vec<TyVar>) {
+    fn resolve_equates(
+        ty_ctx: &TyCtx,
+        ctx: &Ctx,
+        constraints: &mut Vec<Constraint>,
+        resolved: &mut Vec<TyVar>,
+    ) {
         let mut new_constraints = Vec::<Constraint>::new();
 
         *constraints = constraints
@@ -229,7 +255,7 @@ impl Constraint {
                 ConstraintKind::Equate(other) => {
                     if !resolved.contains(&other) {
                         resolved.push(other);
-                        new_constraints.extend(ctx.ty_ctx.consts[other.0].iter().filter(|c| {
+                        new_constraints.extend(ty_ctx.consts[other.0].iter().filter(|c| {
                             if let ConstraintKind::Equate(other) = c.kind {
                                 !resolved.contains(&other)
                             } else {
@@ -246,7 +272,7 @@ impl Constraint {
 
         if !new_constraints.is_empty() {
             constraints.extend(new_constraints);
-            Self::resolve_equates(ctx, constraints, resolved);
+            Self::resolve_equates(ty_ctx, ctx, constraints, resolved);
         }
     }
 }
@@ -257,6 +283,12 @@ pub enum Arch {
 }
 
 impl Arch {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Int => "int",
+        }
+    }
+
     pub fn satisfies(&self, ty: Ty) -> bool {
         match self {
             Arch::Int => ty.is_int(),
@@ -265,12 +297,12 @@ impl Arch {
 }
 
 pub struct TypeKey {
-    key: HashMap<TyVar, Ty>,
+    key: HashMap<IdentId, Ty>,
 }
 
 impl TypeKey {
     #[track_caller]
-    pub fn ty(&self, var: TyVar) -> Ty {
-        *self.key.get(&var).expect("invalid type var")
+    pub fn ty(&self, ident: IdentId) -> Ty {
+        *self.key.get(&ident).expect("invalid type var")
     }
 }

@@ -58,7 +58,7 @@ impl<'a> ParserRule<'a> for FnRule {
                 }
             },
             Err(e) => {
-                stream.eat_until(OpenCurly);
+                stream.eat_until::<OpenCurly>();
                 match BlockRules::parse(buffer, stream, stack) {
                     Ok(_) => Err(e),
                     Err(be) => Err(RuleErr::from_diags(

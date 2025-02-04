@@ -1,12 +1,19 @@
 use super::ty::Ty;
+use crate::lex::buffer::Span;
 
-#[derive(Debug)]
-pub enum Lit<'a> {
+#[derive(Debug, Clone, Copy)]
+pub struct Lit {
+    pub span: Span,
+    pub kind: LitId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum LitKind<'a> {
     Int(i64),
     Str(&'a str),
 }
 
-impl Lit<'_> {
+impl LitKind<'_> {
     pub fn is_int(&self) -> bool {
         matches!(self, Self::Int(_))
     }
@@ -14,7 +21,7 @@ impl Lit<'_> {
     pub fn satisfies(&self, ty: Ty) -> bool {
         match self {
             Self::Int(_) => ty.is_int(),
-            _ => todo!()
+            _ => todo!(),
         }
     }
 }
@@ -24,18 +31,17 @@ pub struct LitId(usize);
 
 #[derive(Debug, Default)]
 pub struct LitStore<'a> {
-    lits: Vec<Lit<'a>>,
+    lits: Vec<LitKind<'a>>,
 }
 
 impl<'a> LitStore<'a> {
-    pub fn store(&mut self, lit: Lit<'a>) -> LitId {
+    pub fn store(&mut self, lit: LitKind<'a>) -> LitId {
         let idx = self.lits.len();
         self.lits.push(lit);
         LitId(idx)
     }
 
-    #[track_caller]
-    pub fn lit(&self, id: LitId) -> &Lit<'a> {
-        self.lits.get(id.0).expect("invalid block id")
+    pub fn get_lit(&self, id: LitId) -> Option<LitKind<'a>> {
+        self.lits.get(id.0).copied()
     }
 }

@@ -1,6 +1,6 @@
 Sandwich : struct {
     /*
-    * Now we are _within_ the sandwich ...
+    * Now we are _within_ the sandwich...
     * Holy buckets!
     */
 }
@@ -9,14 +9,16 @@ Sandwich : struct {
 main : () -> i32 {
     // Here is an exciting variable binding!
     let x = num() + ((10 + 2) * 2);
+    x += 1 + 2;
 
-    // This expression does nothing, and is discarded;
+    // Discarded!
     x + 1;
 
-    // let y = 10; // ---> Compiler error!
-    let y: i32 = 10;
+    // let z = 10; // ---> Compiler error!
+    let y = 4;
+    y = y - 2;
 
-    x // `x` or `return x;`
+    x + y // or `return x + y;`
 }
 
 num : () -> i32 {

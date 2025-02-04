@@ -26,7 +26,7 @@ impl<'a> ParserRule<'a> for StmtRule {
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
         let (expr, semi) =
-            <(ExprRule, Opt<Next<Semi>>) as ParserRule>::parse(buffer, stream, stack)?;
+            <(Alt<(ExprRule, AssignRule)>, Opt<Next<Semi>>)>::parse(buffer, stream, stack)?;
 
         if semi.is_some() {
             Ok(Stmt::Semi(expr))

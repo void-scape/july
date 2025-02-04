@@ -1,15 +1,20 @@
 use annotate_snippets::Level;
-
-use super::block::*;
-use super::expr::Expr;
-use super::expr::ExprId;
-use super::expr::ExprKind;
-use super::expr::ExprStore;
-use super::func::*;
+//use super::block::*;
+//use super::expr::Expr;
+//use super::expr::ExprId;
+//use super::expr::ExprKind;
+//use super::expr::ExprStore;
+//use super::func::*;
 use super::ident::*;
+use super::lit::Lit;
+use super::lit::LitId;
+use super::lit::LitKind;
 use super::lit::LitStore;
-use super::stmt::Stmt;
+use super::sig::Sig;
+use super::sig::SigStore;
+//use super::stmt::Stmt;
 use super::ty::*;
+use super::Func;
 use crate::diagnostic::Diag;
 use crate::diagnostic::Msg;
 use crate::diagnostic::Sourced;
@@ -21,13 +26,15 @@ use crate::lex::buffer::{TokenBuffer, TokenId};
 #[derive(Debug)]
 pub struct Ctx<'a> {
     pub tokens: &'a TokenBuffer<'a>,
-    pub exprs: ExprStore,
-    pub idents: IdentStore<'a>,
-    pub blocks: BlockStore,
-    pub lits: LitStore<'a>,
-    pub funcs: FuncStore,
-    pub ty: TyRegistry<'a>,
-    pub ty_ctx: TyCtx,
+    //pub exprs: ExprStore,
+    idents: IdentStore<'a>,
+    //pub blocks: BlockStore,
+    lits: LitStore<'a>,
+    //pub funcs: FuncStore,
+    ty: TyRegistry<'a>,
+    sigs: SigStore,
+    pub funcs: Vec<Func>,
+    //pub ty_ctx: TyCtx,
 }
 
 impl<'a> Buffer<'a> for Ctx<'a> {
@@ -40,12 +47,14 @@ impl<'a> Ctx<'a> {
     pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
         Self {
             idents: IdentStore::default(),
-            blocks: BlockStore::default(),
-            funcs: FuncStore::default(),
+            //blocks: BlockStore::default(),
+            //funcs: FuncStore::default(),
             ty: TyRegistry::default(),
             lits: LitStore::default(),
-            exprs: ExprStore::default(),
-            ty_ctx: TyCtx::default(),
+            sigs: SigStore::default(),
+            funcs: Vec::new(),
+            //exprs: ExprStore::default(),
+            //ty_ctx: TyCtx::default(),
             tokens,
         }
     }
@@ -54,7 +63,7 @@ impl<'a> Ctx<'a> {
         Diag::sourced(title, self.tokens.source(), Msg::error(span, msg))
     }
 
-    pub fn errors(&self, title: &'static str, msgs: impl Iterator<Item = Msg>) -> Diag<'a> {
+    pub fn errors(&self, title: &'static str, msgs: impl IntoIterator<Item = Msg>) -> Diag<'a> {
         let mut diag = Diag::new(title, Sourced::new(self.tokens.source(), Level::Error));
         for msg in msgs {
             diag = diag.msg(msg);
@@ -62,21 +71,16 @@ impl<'a> Ctx<'a> {
         diag
     }
 
-    pub fn store_func(&mut self, func: Func) -> FuncId {
-        self.funcs.store(func)
+    pub fn store_funcs(&mut self, funcs: Vec<Func>) {
+        self.funcs.extend(funcs.into_iter());
     }
 
-    pub fn store_block(&mut self, block: Block) -> BlockId {
-        self.blocks.store(block)
+    pub fn store_sig(&mut self, sig: Sig) {
+        self.sigs.store(sig);
     }
 
-    pub fn store_expr(&mut self, expr: Expr) -> ExprId {
-        self.exprs.store(expr)
-    }
-
-    #[track_caller]
-    pub fn expr(&self, expr: ExprId) -> Expr {
-        *self.exprs.expr(expr)
+    pub fn get_sig(&self, ident: IdentId) -> Option<&Sig> {
+        self.sigs.get_sig(ident)
     }
 
     #[track_caller]
@@ -87,43 +91,69 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    pub fn get_ident(&self, id: IdentId) -> Option<&'a str> {
+        self.idents.get_ident(id)
+    }
+
+    #[track_caller]
+    pub fn expect_ident(&self, id: IdentId) -> &'a str {
+        self.get_ident(id).expect("invalid ident id")
+    }
+
+    pub fn get_lit(&self, id: LitId) -> Option<LitKind<'a>> {
+        self.lits.get_lit(id)
+    }
+
+    #[track_caller]
+    pub fn expect_lit(&self, id: LitId) -> LitKind<'a> {
+        self.get_lit(id).expect("invalid lit id")
+    }
+
+    #[track_caller]
+    pub fn store_int(&mut self, int: TokenId) -> Lit {
+        Lit {
+            span: self.span(int),
+            kind: self.lits.store(LitKind::Int(self.int_lit(int))),
+        }
+    }
+
     pub fn ty(&self, ty: TokenId) -> Option<Ty> {
         self.ty.ty_str(self.tokens.ident(ty))
     }
 
-    pub fn key(&self) -> Result<TypeKey, Diag<'a>> {
-        match self.ty_ctx.resolve(self) {
-            Ok(map) => Ok(map),
-            Err(errs) => Err(self.errors(
-                "type resolution",
-                errs.iter().map(|e| match e {
-                    TyErr::NotEnoughInfo(span, ty_var) => {
-                        let mut msg = None;
-                        for block in self.blocks.iter() {
-                            for stmt in block.stmts.iter() {
-                                match stmt {
-                                    Stmt::Let(ident, _, expr) => {
-                                        if self.expr(*expr).ty == *ty_var {
-                                            msg = Some(Msg::error(ident.span, "cannot infer type"));
-                                            break;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            if msg.is_some() {
-                                break;
-                            }
-                        }
-
-                        msg.unwrap_or_else(|| Msg::error(*span, "cannot infer type"))
-                    }
-                    TyErr::Arch(span, arch, ty) => {
-                        Msg::error(*span, format!("`{ty:?}` does not satify `{arch:?}`"))
-                    }
-                    TyErr::Abs(span) => Msg::error(*span, format!("conflicting types")),
-                }),
-            )),
-        }
-    }
+    //pub fn key(&self) -> Result<TypeKey, Diag<'a>> {
+    //    match self.ty_ctx.resolve(self) {
+    //        Ok(map) => Ok(map),
+    //        Err(errs) => Err(self.errors(
+    //            "type resolution",
+    //            errs.iter().map(|e| match e {
+    //                TyErr::NotEnoughInfo(span, ty_var) => {
+    //                    let mut msg = None;
+    //                    for block in self.blocks.iter() {
+    //                        for stmt in block.stmts.iter() {
+    //                            match stmt {
+    //                                Stmt::Let(ident, _, expr) => {
+    //                                    if self.expr(*expr).ty == *ty_var {
+    //                                        msg = Some(Msg::error(ident.span, "cannot infer type"));
+    //                                        break;
+    //                                    }
+    //                                }
+    //                                _ => {}
+    //                            }
+    //                        }
+    //                        if msg.is_some() {
+    //                            break;
+    //                        }
+    //                    }
+    //
+    //                    msg.unwrap_or_else(|| Msg::error(*span, "cannot infer type"))
+    //                }
+    //                TyErr::Arch(span, arch, ty) => {
+    //                    Msg::error(*span, format!("`{ty:?}` does not satify `{arch:?}`"))
+    //                }
+    //                TyErr::Abs(span) => Msg::error(*span, format!("conflicting types")),
+    //            }),
+    //        )),
+    //    }
+    //}
 }

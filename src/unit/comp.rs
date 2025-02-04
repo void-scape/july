@@ -1,5 +1,6 @@
 use super::source::Source;
-use crate::ir::{block, expr};
+use crate::diagnostic::Diag;
+use crate::lex::buffer::TokenBuffer;
 use crate::lex::Lexer;
 use crate::parse::Parser;
 use crate::unit::io;
@@ -17,34 +18,19 @@ impl CompUnit {
         })
     }
 
-    pub fn compile(self) {
-        let buf = Lexer::new(&self.source).lex().unwrap();
-        match Parser::parse(&buf) {
-            Ok(items) => {
-                let ctx = ir::lower(&buf, &items);
-                //if let Err(diag) = expr::validate_bin_ops(&ctx) {
-                //    diagnostic::report(diag);
-                //    return;
-                //}
+    pub fn compile<'a>(&'a self) {
+        fn compile<'a>(buf: &'a TokenBuffer<'a>) -> Result<(), Vec<Diag<'a>>> {
+            let items = Parser::parse(&buf)?;
+            let ctx = ir::lower(&buf, &items);
+            let key = ir::resolve_types(&ctx)?;
+            io::write("out.o", &codegen::codegen(&ctx, &key)).unwrap();
+            Ok(())
+        }
 
-                //println!("{:#?}", ctx);
-                match ctx.key() {
-                    Ok(key) => {
-                        if let Err(diag) = block::validate_end_exprs(&ctx, &key) {
-                            diagnostic::report(diag);
-                        } else {
-                            io::write("out.o", &codegen::codegen(&ctx, &key)).unwrap();
-                        }
-                    }
-                    Err(diag) => {
-                        diagnostic::report(diag);
-                    }
-                }
-            }
-            Err(diags) => {
-                for diag in diags.into_iter() {
-                    diagnostic::report(diag);
-                }
+        let buf = Lexer::new(&self.source).lex().unwrap();
+        if let Err(diags) = compile(&buf) {
+            for diag in diags.into_iter() {
+                diagnostic::report(diag);
             }
         }
     }

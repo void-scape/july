@@ -1,7 +1,5 @@
-use cranelift_codegen::timing::wasm_translate_module;
-
 use super::{Next, ParserRule, RResult};
-use crate::ir::expr::{BinOp, BinOpKind};
+use crate::ir::{AssignKind, BinOpKind};
 use crate::lex::{buffer::*, kind::*};
 use crate::parse::combinator::opt::Opt;
 use crate::parse::rules::RuleErr;
@@ -14,47 +12,33 @@ pub enum Expr {
     Lit(TokenId),
     Bin(BinOp, Box<Expr>, Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
-    Binding(TyBinding),
+    Assign(Assign),
     Call { span: Span, func: TokenId },
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct TyBinding {
-    pub ident: TokenId,
-    pub ty: TokenId,
+pub struct BinOp {
+    pub span: Span,
+    pub kind: BinOpKind,
 }
 
-/// Produce the next [`TyBinding`].
-pub struct TyBindingRule;
-
-impl<'a> ParserRule<'a> for TyBindingRule {
-    type Output = TyBinding;
-
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let (ident, _, ty) =
-            <(Next<Ident>, Next<Colon>, Next<Ident>) as ParserRule>::parse(buffer, stream, stack)?;
-
-        Ok(TyBinding { ident, ty })
-    }
+#[derive(Debug, Clone)]
+pub struct Assign {
+    pub assign_span: Span,
+    pub kind: AssignKind,
+    pub lhs: Box<Expr>,
+    pub rhs: Box<Expr>,
 }
 
 impl From<BinOpTokens> for BinOpKind {
     fn from(value: BinOpTokens) -> Self {
         match value {
             BinOpTokens::Plus(_) => Self::Add,
-            BinOpTokens::Asterisk(_) => Self::Multiply,
-            BinOpTokens::PlusEquals(_, _) => Self::Multiply,
+            BinOpTokens::Hyphen(_) => Self::Sub,
+            BinOpTokens::Asterisk(_) => Self::Mul,
             _ => panic!(),
         }
     }
-}
-
-trait Precedence {
-    fn precedence(&self) -> usize;
 }
 
 /// Produce the next [`BinOpKind`].
@@ -63,8 +47,8 @@ pub struct BinOpKindRule;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpTokens {
     Plus(TokenId),
+    Hyphen(TokenId),
     Asterisk(TokenId),
-    PlusEquals(TokenId, TokenId),
     OpenParen(TokenId),
     CloseParen(TokenId),
 }
@@ -72,18 +56,23 @@ pub enum BinOpTokens {
 impl BinOpTokens {
     pub fn span(&self, buffer: &TokenBuffer) -> Span {
         match self {
-            Self::Plus(t) | Self::Asterisk(t) | Self::OpenParen(t) | Self::CloseParen(t) => {
-                buffer.span(*t)
-            }
-            Self::PlusEquals(t1, t2) => Span::from_spans(buffer.span(*t1), buffer.span(*t2)),
+            Self::Hyphen(t)
+            | Self::Plus(t)
+            | Self::Asterisk(t)
+            | Self::OpenParen(t)
+            | Self::CloseParen(t) => buffer.span(*t),
         }
     }
+}
+
+trait Precedence {
+    fn precedence(&self) -> usize;
 }
 
 impl Precedence for BinOpTokens {
     fn precedence(&self) -> usize {
         match self {
-            Self::Plus(_) | Self::PlusEquals(_, _) | Self::OpenParen(_) | Self::CloseParen(_) => 1,
+            Self::Hyphen(_) | Self::Plus(_) | Self::OpenParen(_) | Self::CloseParen(_) => 1,
             Self::Asterisk(_) => 2,
         }
     }
@@ -93,17 +82,22 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
     type Output = BinOpTokens;
 
     fn parse(
-        _buffer: &'a TokenBuffer<'a>,
+        buffer: &'a TokenBuffer<'a>,
         stream: &mut TokenStream<'a>,
         _stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
         let str = *stream;
+
         match stream.peek_kind() {
             Some(TokenKind::Plus) => {
-                let plus = stream.next().unwrap();
+                let plus = stream.expect();
                 if stream.peek_kind() == Some(TokenKind::Equals) {
-                    let equals = stream.next().unwrap();
-                    return Ok(BinOpTokens::PlusEquals(plus, equals));
+                    let equals = stream.expect();
+                    return Err(RuleErr::from_diag(stream.full_error(
+                        "invalid assign",
+                        Span::from_spans(buffer.span(plus), buffer.span(equals)),
+                        "cannot assign expression",
+                    )));
                 }
             }
             _ => {}
@@ -111,10 +105,19 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
 
         *stream = str;
         match stream.peek_kind() {
-            Some(TokenKind::Plus) => Ok(BinOpTokens::Plus(stream.next().unwrap())),
-            Some(TokenKind::Asterisk) => Ok(BinOpTokens::Asterisk(stream.next().unwrap())),
-            Some(TokenKind::OpenParen) => Ok(BinOpTokens::OpenParen(stream.next().unwrap())),
-            Some(TokenKind::CloseParen) => Ok(BinOpTokens::CloseParen(stream.next().unwrap())),
+            Some(TokenKind::Equals) => {
+                let equals = stream.expect();
+                Err(RuleErr::from_diag(stream.full_error(
+                    "invalid assign",
+                    buffer.span(equals),
+                    "cannot assign expression",
+                )))
+            }
+            Some(TokenKind::Plus) => Ok(BinOpTokens::Plus(stream.expect())),
+            Some(TokenKind::Hyphen) => Ok(BinOpTokens::Hyphen(stream.expect())),
+            Some(TokenKind::Asterisk) => Ok(BinOpTokens::Asterisk(stream.expect())),
+            Some(TokenKind::OpenParen) => Ok(BinOpTokens::OpenParen(stream.expect())),
+            Some(TokenKind::CloseParen) => Ok(BinOpTokens::CloseParen(stream.expect())),
             kind => Err(RuleErr::from_diag(stream.error(format!(
                 "expected binary operator, got `{}`",
                 kind.map(|k| k.as_str()).unwrap_or("???")
@@ -162,9 +165,7 @@ impl<'a> ParserRule<'a> for TermRule {
                         let (_, close) =
                             <(Next<OpenParen>, Next<CloseParen>)>::parse(buffer, stream, stack)
                                 .unwrap();
-
-                        let span =
-                            Span::from_range_u32(buffer.span(ident).start..buffer.span(close).end);
+                        let span = Span::from_spans(buffer.span(ident), buffer.span(close));
 
                         Ok(Term::Call { span, func: ident })
                     }
@@ -183,6 +184,50 @@ impl<'a> ParserRule<'a> for TermRule {
                     kind.map(|k| k.as_str()).unwrap_or("???")
                 ),
             ))),
+        }
+    }
+}
+
+/// Produce the next [`Assign`].
+#[derive(Debug, Default)]
+pub struct AssignRule;
+
+impl<'a> ParserRule<'a> for AssignRule {
+    type Output = Expr;
+
+    fn parse(
+        buffer: &'a TokenBuffer<'a>,
+        stream: &mut TokenStream<'a>,
+        stack: &mut Vec<TokenId>,
+    ) -> RResult<'a, Self::Output> {
+        let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus)>>());
+        let expr = ExprRule::parse(buffer, &mut slice, stack)?;
+        stream.eat_until::<Any<(Equals, Plus)>>();
+
+        match stream.peek_kind() {
+            Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
+                assign_span: buffer.span(stream.expect()),
+                kind: AssignKind::Equals,
+                lhs: Box::new(expr),
+                rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
+            })),
+            Some(TokenKind::Plus) => {
+                let plus = stream.expect();
+                let next = stream.next();
+                match next.map(|next| buffer.kind(next)) {
+                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
+                        assign_span: Span::from_spans(
+                            buffer.span(plus),
+                            buffer.span(next.unwrap()),
+                        ),
+                        kind: AssignKind::Add,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
+                    })),
+                    _ => Err(RuleErr::from_diag(stream.error("expected `+`"))),
+                }
+            }
+            _ => Err(RuleErr::from_diag(stream.error("expected assignment"))),
         }
     }
 }
@@ -222,7 +267,7 @@ impl<'a> ParserRule<'a> for ExprRule {
         {
             if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
                 match op {
-                    BinOpTokens::Plus(_) | BinOpTokens::Asterisk(_) => {
+                    BinOpTokens::Hyphen(_) | BinOpTokens::Plus(_) | BinOpTokens::Asterisk(_) => {
                         while operators.last().is_some_and(|t: &BinOpTokens| {
                             t.precedence() > op.precedence()
                                 && !matches!(t, BinOpTokens::OpenParen(_))
@@ -258,7 +303,6 @@ impl<'a> ParserRule<'a> for ExprRule {
                             }
                         }
                     }
-                    _ => panic!(),
                 }
             } else {
                 let term = TermRule::parse(buffer, stream, stack)?;
@@ -293,12 +337,21 @@ impl<'a> ParserRule<'a> for ExprRule {
             }
         }
 
+        //let mut assigns = 0;
         let mut accum_op = None;
         let mut terms = Vec::with_capacity(expr_stack.len());
         while let Some(item) = expr_stack.pop() {
             match item {
                 Item::Op(op) => match accum_op {
                     Some(acop) => {
+                        //if matches!(op, BinOpTokens::Assign(_, _, _)) && assigns > 0 {
+                        //    return Err(RuleErr::from_diag(stream.full_error(
+                        //        "invalid assignment",
+                        //        op.span(buffer),
+                        //        "cannot assign expression",
+                        //    )));
+                        //}
+
                         accum_op = Some(Expr::Bin(
                             BinOp {
                                 span: op.span(buffer),
@@ -309,6 +362,15 @@ impl<'a> ParserRule<'a> for ExprRule {
                         ));
                     }
                     None => {
+                        //if let BinOpTokens::Assign(kind, _, _) = op {
+                        //    assigns += 1;
+                        //    accum_op = Some(Expr::Assign(Assign {
+                        //        assign_span: op.span(buffer),
+                        //        kind,
+                        //        lhs: Box::new(terms.pop().unwrap()),
+                        //        rhs: Box::new(terms.pop().unwrap()),
+                        //    }));
+                        //} else {
                         accum_op = Some(Expr::Bin(
                             BinOp {
                                 span: op.span(buffer),
@@ -317,6 +379,7 @@ impl<'a> ParserRule<'a> for ExprRule {
                             Box::new(terms.pop().unwrap()),
                             Box::new(terms.pop().unwrap()),
                         ));
+                        //}
                     }
                 },
                 Item::Term(next) => {
