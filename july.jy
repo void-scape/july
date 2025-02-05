@@ -1,17 +1,15 @@
-Sandwich : struct {
-    /*
-    * Now we are _within_ the sandwich...
-    * Holy buckets!
-    */
+// Hello, Sailor!
+main: () -> i32 {
+    structs();
+    operations()
 }
 
-// Hello, Sailor!
-main : () -> i32 {
+operations: () -> i32 {
     // Here is an exciting variable binding!
     let x = num() + ((10 + 2) * 2);
     x += 1 + 2;
 
-    // Discarded!
+    // discarded, does nothing
     x + 1;
 
     // let z = 10; // ---> Compiler error!
@@ -21,6 +19,32 @@ main : () -> i32 {
     x + y // or `return x + y;`
 }
 
-num : () -> i32 {
+num: () -> i32 {
     1
+}
+
+Sandwich: struct {
+    /*
+    * Now we are _within_ the sandwich...
+    * Holy buckets!
+    */
+    bread: Bread,
+    butter: u8,
+}
+
+Bread: struct {
+    grain: i32,
+    seed: i64,
+}
+
+structs: () -> Sandwich {
+    let sandwich = Sandwich {
+        butter: 0,
+        // bread: Bread {
+        //     grain: 1,
+        //     seed: 2,
+        // }
+    };
+
+    sandwich
 }

@@ -12,6 +12,9 @@ use super::lit::LitKind;
 use super::lit::LitStore;
 use super::sig::Sig;
 use super::sig::SigStore;
+use super::strukt::Struct;
+use super::strukt::StructId;
+use super::strukt::StructStore;
 //use super::stmt::Stmt;
 use super::ty::*;
 use super::Func;
@@ -33,6 +36,7 @@ pub struct Ctx<'a> {
     //pub funcs: FuncStore,
     ty: TyRegistry<'a>,
     sigs: SigStore,
+    structs: StructStore,
     pub funcs: Vec<Func>,
     //pub ty_ctx: TyCtx,
 }
@@ -52,6 +56,7 @@ impl<'a> Ctx<'a> {
             ty: TyRegistry::default(),
             lits: LitStore::default(),
             sigs: SigStore::default(),
+            structs: StructStore::default(),
             funcs: Vec::new(),
             //exprs: ExprStore::default(),
             //ty_ctx: TyCtx::default(),
@@ -73,6 +78,21 @@ impl<'a> Ctx<'a> {
 
     pub fn store_funcs(&mut self, funcs: Vec<Func>) {
         self.funcs.extend(funcs.into_iter());
+    }
+
+    pub fn store_structs(&mut self, structs: Vec<Struct>) {
+        for strukt in structs.into_iter() {
+            self.structs.store(strukt);
+        }
+    }
+
+    pub fn struct_id(&self, id: IdentId) -> Option<StructId> {
+        self.structs.struct_id(id)
+    }
+
+    pub fn layout_structs(&mut self) {
+        let layouts = self.structs.layout(self).unwrap();
+        self.structs.layouts = layouts;
     }
 
     pub fn store_sig(&mut self, sig: Sig) {

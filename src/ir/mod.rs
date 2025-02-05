@@ -1,12 +1,13 @@
 use self::sig::Sig;
-use self::ty::TyErr;
+use self::strukt::{Field, FieldDef, Struct, StructDef};
+use self::ty::{FullTy, TyErr};
 use crate::diagnostic::{self, Diag, Msg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::Ident;
 use crate::ir::lit::Lit;
 use crate::ir::ty::{Arch, Constraint, ConstraintKind, Ty, TyCtx, TyVar, TypeKey};
-use crate::lex::buffer::TokenBuffer;
 use crate::lex::buffer::{Span, TokenQuery};
+use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::parse::rules::prelude as rules;
 use crate::parse::Item;
 
@@ -14,6 +15,7 @@ pub mod ctx;
 pub mod ident;
 pub mod lit;
 pub mod sig;
+pub mod strukt;
 pub mod ty;
 
 pub const SYM_DEF: &str = "undefined symbol";
@@ -27,26 +29,39 @@ pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &[Item]) -> Ctx<'a> {
             Item::Struct(strukt) => Some(strukt),
             _ => None,
         })
-        .map(|_| Ok(()))
-        .collect::<Result<(), _>>()
+        .map(|s| strukt(&mut ctx, s))
+        .collect::<Result<Vec<_>, _>>()
     {
-        Ok(_) => {}
+        Ok(structs) => {
+            //println!("{:#?}", structs);
+            ctx.store_structs(structs);
+            ctx.layout_structs();
+        }
         Err(diag) => {
             diagnostic::report(diag);
             panic!()
         }
     }
 
-    items
+    match items
         .iter()
         .filter_map(|i| match i {
             Item::Func(func) => Some(func),
             _ => None,
         })
-        .for_each(|f| {
-            let sig = func_sig(&mut ctx, f);
-            ctx.store_sig(sig);
-        });
+        .map(|f| func_sig(&mut ctx, f))
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(sigs) => {
+            for sig in sigs.into_iter() {
+                ctx.store_sig(sig);
+            }
+        }
+        Err(diag) => {
+            diagnostic::report(diag);
+            panic!()
+        }
+    }
 
     match items
         .iter()
@@ -69,27 +84,81 @@ pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &[Item]) -> Ctx<'a> {
     ctx
 }
 
+fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag<'a>> {
+    let mut field_names = Vec::with_capacity(strukt.fields.len());
+
+    for field in strukt.fields.iter() {
+        if field_names.contains(&ctx.ident(field.name)) {
+            return Err(ctx.errors(
+                "failed to parse struct",
+                [
+                    Msg::error(ctx.span(field.name), "field already declared"),
+                    Msg::note(
+                        ctx.span(strukt.name),
+                        format!("while parsing `{}`", ctx.ident(strukt.name)),
+                    ),
+                ],
+            ));
+        }
+        field_names.push(ctx.ident(field.name));
+    }
+
+    Ok(Struct {
+        span: strukt.span,
+        name: ctx.store_ident(strukt.name),
+        fields: strukt.fields.iter().map(|f| field(ctx, f)).collect(),
+    })
+}
+
+fn field<'a>(ctx: &mut Ctx<'a>, field: &rules::Field) -> Field {
+    Field {
+        span: field.span,
+        name: ctx.store_ident(field.name),
+        ty: ctx
+            .ty(field.ty)
+            .map(|t| FullTy::Ty(t))
+            .unwrap_or_else(|| FullTy::Struct(ctx.store_ident(field.ty).id)),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Func {
     pub sig: Sig,
     pub block: Block,
 }
 
-fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Sig {
-    Sig {
+fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig, Diag<'a>> {
+    let ty = if let Some(ty) = func.ty {
+        if let Some(ty) = ctx.ty(ty) {
+            FullTy::Ty(ty)
+        } else {
+            let ident = ctx.store_ident(ty).id;
+            if ctx.struct_id(ident).is_none() {
+                return Err(ctx.error(
+                    SYM_DEF,
+                    ctx.span(ty),
+                    format!("expected type, got `{}`", ctx.ident(ty)),
+                ));
+            }
+
+            FullTy::Struct(ident)
+        }
+    } else {
+        FullTy::Ty(Ty::Unit)
+    };
+
+    Ok(Sig {
         span: func.span,
         ident: ctx.store_ident(func.name).id,
-        ty: func
-            .ty
-            .map(|ty| ctx.ty(ty).expect("unregistered type"))
-            .unwrap_or_else(|| Ty::Unit),
-    }
+        ty,
+    })
 }
 
 fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func, Diag<'a>> {
     Ok(Func {
-        block: block(ctx, &func.block)?,
-        sig: func_sig(ctx, func),
+        block: block(ctx, &func.block)
+            .map_err(|err| err.msg(Msg::note(func.block.span, "while parsing this function")))?,
+        sig: func_sig(ctx, func)?,
     })
 }
 
@@ -138,6 +207,7 @@ pub enum OpenStmt {
     Ident(Ident),
     Lit(Lit),
     Bin(BinOp),
+    Call(Call),
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +216,7 @@ pub enum SemiStmt {
     Assign(Assign),
     Ret(Return),
     Bin(BinOp),
+    Call(Call),
 }
 
 fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
@@ -185,12 +256,18 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
                 expr: ret_expr(ctx, expr.as_deref()).unwrap(),
             })),
             rules::Expr::Bin(_, _, _) => Stmt::Semi(SemiStmt::Bin(bin_op(ctx, expr)?)),
+            rules::Expr::Call { span, func } => {
+                Stmt::Semi(SemiStmt::Call(call(ctx, *span, *func)?))
+            }
             expr => todo!("{expr:#?}"),
         },
         rules::Stmt::Open(expr) => match expr {
             rules::Expr::Ident(ident) => Stmt::Open(OpenStmt::Ident(ctx.store_ident(*ident))),
             rules::Expr::Lit(lit) => Stmt::Open(OpenStmt::Lit(ctx.store_int(*lit))),
             rules::Expr::Bin(_, _, _) => Stmt::Open(OpenStmt::Bin(bin_op(ctx, expr)?)),
+            rules::Expr::Call { span, func } => {
+                Stmt::Open(OpenStmt::Call(call(ctx, *span, *func)?))
+            }
             _ => todo!(),
         },
     })
@@ -214,6 +291,7 @@ pub enum LetExpr {
     Ident(Ident),
     Lit(Lit),
     Bin(BinOp),
+    Struct(StructDef),
 }
 
 fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
@@ -228,7 +306,28 @@ fn let_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<LetExpr, Diag<'
         rules::Expr::Ident(ident) => LetExpr::Ident(ctx.store_ident(*ident)),
         rules::Expr::Lit(lit) => LetExpr::Lit(ctx.store_int(*lit)),
         rules::Expr::Bin(_, _, _) => LetExpr::Bin(bin_op(ctx, expr)?),
+        rules::Expr::StructDef(def) => LetExpr::Struct(struct_def(ctx, def)?),
         _ => todo!(),
+    })
+}
+
+fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef, Diag<'a>> {
+    Ok(StructDef {
+        span: def.span,
+        name: ctx.store_ident(def.name),
+        fields: def
+            .fields
+            .iter()
+            .map(|f| field_def(ctx, f))
+            .collect::<Result<_, _>>()?,
+    })
+}
+
+fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef, Diag<'a>> {
+    Ok(FieldDef {
+        span: def.span,
+        name: ctx.store_ident(def.name),
+        expr: let_expr(ctx, &def.expr)?,
     })
 }
 
@@ -272,15 +371,7 @@ fn bin_op_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<BinOpExpr, D
         rules::Expr::Ident(ident) => BinOpExpr::Ident(ctx.store_ident(*ident)),
         rules::Expr::Lit(lit) => BinOpExpr::Lit(ctx.store_int(*lit)),
         rules::Expr::Bin(_, _, _) => BinOpExpr::Bin(Box::new(bin_op(ctx, expr)?)),
-        rules::Expr::Call { span, func } => {
-            let id = ctx.store_ident(*func).id;
-            BinOpExpr::Call(Call {
-                span: *span,
-                sig: *ctx.get_sig(id).ok_or_else(|| {
-                    ctx.error(SYM_DEF, ctx.span(*func), "function is not defined")
-                })?,
-            })
-        }
+        rules::Expr::Call { span, func } => BinOpExpr::Call(call(ctx, *span, *func)?),
         _ => todo!(),
     })
 }
@@ -361,6 +452,16 @@ pub struct Call {
     pub sig: Sig,
 }
 
+fn call<'a>(ctx: &mut Ctx<'a>, span: Span, name: TokenId) -> Result<Call, Diag<'a>> {
+    let id = ctx.store_ident(name).id;
+    Ok(Call {
+        span,
+        sig: *ctx
+            .get_sig(id)
+            .ok_or_else(|| ctx.error(SYM_DEF, ctx.span(name), "function is not defined"))?,
+    })
+}
+
 // TODO:
 //
 // garauntee:
@@ -404,15 +505,15 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                     SemiStmt::Bin(bin) => bin_op_constrain_unkown(ctx, &mut ty_ctx, bin),
                     SemiStmt::Ret(ret) => match &ret.expr {
                         RetExpr::Unit => {
-                            assert!(func.sig.ty.is_unit());
+                            assert!(func.sig.ty.is_ty_and(|ty| ty.is_unit()));
                         }
-                        RetExpr::Lit(lit) => {
-                            assert!(func.sig.ty.is_int());
+                        RetExpr::Lit(_) => {
+                            assert!(func.sig.ty.is_ty_and(|ty| ty.is_int()));
                         }
                         RetExpr::Bin(bin) => {
                             let constraint = Constraint {
                                 span: func.sig.span,
-                                kind: ConstraintKind::Abs(func.sig.ty),
+                                kind: ConstraintKind::full(func.sig.ty),
                             };
 
                             bin_op_expr_constrain_to(ctx, &mut ty_ctx, constraint, &bin.lhs)
@@ -426,11 +527,12 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                                 var,
                                 Constraint {
                                     span: func.sig.span,
-                                    kind: ConstraintKind::Abs(func.sig.ty),
+                                    kind: ConstraintKind::full(func.sig.ty),
                                 },
                             );
                         }
                     },
+                    SemiStmt::Call(_) => {}
                 },
                 Stmt::Open(_) => {
                     todo!();
@@ -446,18 +548,18 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                         var,
                         Constraint {
                             span: func.sig.span,
-                            kind: ConstraintKind::Abs(func.sig.ty),
+                            kind: ConstraintKind::full(func.sig.ty),
                         },
                     );
                 }
                 OpenStmt::Lit(lit) => {
-                    if !func.sig.ty.is_int() {
+                    if !func.sig.ty.is_ty_and(|ty| ty.is_int()) {
                         return Err(vec![ctx.errors(
                             "mismatched return type",
                             [
                                 Msg::error(
                                     lit.span,
-                                    format!("expected `{}`, got `int`", func.sig.ty.as_str()),
+                                    format!("expected `{}`, got `int`", func.sig.ty.as_str(ctx)),
                                 ),
                                 Msg::note(func.block.span, "because of the signature"),
                             ],
@@ -467,13 +569,28 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                 OpenStmt::Bin(bin) => {
                     let constraint = Constraint {
                         span: func.sig.span,
-                        kind: ConstraintKind::Abs(func.sig.ty),
+                        kind: ConstraintKind::full(func.sig.ty),
                     };
 
                     bin_op_expr_constrain_to(ctx, &mut ty_ctx, constraint, &bin.lhs)
                         .map_err(|d| vec![d])?;
                     bin_op_expr_constrain_to(ctx, &mut ty_ctx, constraint, &bin.rhs)
                         .map_err(|d| vec![d])?;
+                }
+                OpenStmt::Call(call) => {
+                    if call.sig.ty != func.sig.ty {
+                        return Err(vec![ctx.errors(
+                            "invalid return type",
+                            [Msg::error(
+                                call.span,
+                                format!(
+                                    "expected `{}`, got `{}`",
+                                    func.sig.ty.as_str(ctx),
+                                    call.sig.ty.as_str(ctx)
+                                ),
+                            )],
+                        )]);
+                    }
                 }
             }
         }
@@ -490,6 +607,7 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                     format!("expected `{}`, got `{}`", ty.as_str(), arch.as_str()),
                 ),
                 TyErr::Abs(span) => ctx.error("mismatched types", span, format!("invalid type")),
+                //TyErr::Struct(name) => ctx.error("mismatched types", span, msg)
                 _ => todo!(),
             })
             .collect()),
@@ -503,6 +621,15 @@ fn let_expr_constrain<'a>(ctx: &Ctx<'a>, ty_ctx: &mut TyCtx, var: TyVar, expr: &
         }
         LetExpr::Bin(bin) => {
             bin_op_constrain(ctx, ty_ctx, var, bin);
+        }
+        LetExpr::Struct(def) => {
+            ty_ctx.constrain(
+                var,
+                Constraint {
+                    span: def.name.span,
+                    kind: ConstraintKind::Struct(def.name.id),
+                },
+            );
         }
         LetExpr::Ident(_) => todo!(),
     }
@@ -539,7 +666,7 @@ fn bin_op_expr_constrain<'a>(ctx: &Ctx<'a>, ty_ctx: &mut TyCtx, var: TyVar, bin:
                 var,
                 Constraint {
                     span: call.span,
-                    kind: ConstraintKind::Abs(call.sig.ty),
+                    kind: ConstraintKind::full(call.sig.ty),
                 },
             );
         }

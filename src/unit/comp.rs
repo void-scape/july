@@ -18,7 +18,7 @@ impl CompUnit {
         })
     }
 
-    pub fn compile<'a>(&'a self) {
+    pub fn compile<'a>(&'a self) -> Result<(), ()> {
         fn compile<'a>(buf: &'a TokenBuffer<'a>) -> Result<(), Vec<Diag<'a>>> {
             let items = Parser::parse(&buf)?;
             let ctx = ir::lower(&buf, &items);
@@ -32,6 +32,9 @@ impl CompUnit {
             for diag in diags.into_iter() {
                 diagnostic::report(diag);
             }
+            return Err(());
         }
+
+        Ok(())
     }
 }

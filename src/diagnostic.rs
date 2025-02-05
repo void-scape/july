@@ -5,30 +5,65 @@ use std::borrow::Cow;
 
 #[derive(Debug)]
 pub struct Diag<'a> {
-    inner: Box<DiagInner<'a>>,
+    inner: DiagInnerPtr<'a>,
+}
+
+#[derive(Debug)]
+pub enum DiagInnerPtr<'a> {
+    One(Box<DiagInner<'a>>),
+    Many(Vec<DiagInner<'a>>),
 }
 
 impl<'a> Diag<'a> {
     pub fn new(title: &'static str, diag: impl Diagnostic<'a>) -> Self {
         Self {
-            inner: Box::new(diag.into_diagnostic(title)),
+            inner: DiagInnerPtr::One(Box::new(diag.into_diagnostic(title))),
         }
     }
 
     pub fn sourced(title: &'static str, source: &'a Source, msg: Msg) -> Self {
         Self {
-            inner: Box::new(Sourced::new(source, msg).into_diagnostic(title)),
+            inner: DiagInnerPtr::One(Box::new(Sourced::new(source, msg).into_diagnostic(title))),
+        }
+    }
+
+    pub fn wrap(self, other: Self) -> Self {
+        let mut new = other.into_inner();
+        new.extend(self.into_inner());
+        Self {
+            inner: DiagInnerPtr::Many(new),
         }
     }
 
     pub fn level(mut self, level: Level) -> Self {
-        self.inner.level = level;
+        match &mut self.inner {
+            DiagInnerPtr::One(diag) => {
+                diag.level = level;
+            }
+            DiagInnerPtr::Many(diags) => {
+                diags.last_mut().map(|diag| diag.level = level);
+            }
+        }
         self
     }
 
     pub fn msg(mut self, msg: Msg) -> Self {
-        self.inner.msgs.push(msg);
+        match &mut self.inner {
+            DiagInnerPtr::One(diag) => {
+                diag.msgs.push(msg);
+            }
+            DiagInnerPtr::Many(diags) => {
+                diags.last_mut().map(|diag| diag.msgs.push(msg));
+            }
+        }
         self
+    }
+
+    fn into_inner(self) -> Vec<DiagInner<'a>> {
+        match self.inner {
+            DiagInnerPtr::One(diag) => vec![*diag],
+            DiagInnerPtr::Many(diags) => diags,
+        }
     }
 }
 
@@ -173,18 +208,19 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
 }
 
 pub fn report(diag: Diag) {
-    let message = diag.inner.level.title(diag.inner.title).snippet(
-        Snippet::source(&diag.inner.source)
-            .origin(&diag.inner.origin)
-            .fold(true)
-            .annotations(
-                diag.inner
-                    .msgs
-                    .iter()
-                    .map(|msg| msg.level.span(msg.span.range()).label(&msg.label)),
-            ),
-    );
+    for diag in diag.into_inner() {
+        let message = diag.level.title(diag.title).snippet(
+            Snippet::source(&diag.source)
+                .origin(&diag.origin)
+                .fold(true)
+                .annotations(
+                    diag.msgs
+                        .iter()
+                        .map(|msg| msg.level.span(msg.span.range()).label(&msg.label)),
+                ),
+        );
 
-    let renderer = Renderer::styled();
-    anstream::println!("{}", renderer.render(message))
+        let renderer = Renderer::styled();
+        anstream::println!("{}", renderer.render(message))
+    }
 }

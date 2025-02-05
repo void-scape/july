@@ -34,10 +34,26 @@ where
             | TokenKind::Slash
             | TokenKind::Hyphen
             | TokenKind::Greater
+            | TokenKind::Comma
             | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
             TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
             TokenKind::Ident => format!("expected {}", kind.as_str()),
         }
+    }
+}
+
+pub struct Not<T>(PhantomData<T>);
+
+impl<T> MatchTokenKind for Not<T>
+where
+    T: MatchTokenKind,
+{
+    fn matches(kind: Option<TokenKind>) -> bool {
+        !T::matches(kind)
+    }
+
+    fn expect() -> String {
+        format!("Not<`{}`>", T::expect())
     }
 }
 
@@ -118,3 +134,4 @@ impl_tkt!(OpenParen, TokenKind::OpenParen);
 impl_tkt!(CloseParen, TokenKind::CloseParen);
 impl_tkt!(Hyphen, TokenKind::Hyphen);
 impl_tkt!(Greater, TokenKind::Greater);
+impl_tkt!(Comma, TokenKind::Comma);

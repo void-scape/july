@@ -64,7 +64,7 @@ impl<'a> ParserRule<'a> for StmtSeqRules {
     ) -> RResult<'a, Self::Output> {
         let mut instrs = Vec::new();
 
-        while !stream.match_peek(CloseCurly) {
+        while !stream.match_peek::<CloseCurly>() {
             let instr = match stream.peek_kind().unwrap() {
                 TokenKind::Let => LetRule::parse(buffer, stream, stack)?,
                 _ => StmtRule::parse(buffer, stream, stack)?,

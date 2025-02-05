@@ -11,27 +11,27 @@ mod unit;
 fn main() {
     let file = std::env::args().nth(1).expect("no input file given");
     let unit = CompUnit::new(file).unwrap();
-    unit.compile();
-
-    run();
+    if unit.compile().is_ok() {
+        run();
+    }
 }
 
 fn run() {
     //otool -x -v out.o
-    let output = Command::new("otool")
-        .arg("-x")
-        .arg("-v")
-        .arg("out.o")
-        .output()
-        .unwrap();
-    println!(
-        "{}",
-        output.stdout.iter().map(|c| *c as char).collect::<String>()
-    );
-    println!(
-        "{}",
-        output.stderr.iter().map(|c| *c as char).collect::<String>()
-    );
+    //let output = Command::new("otool")
+    //    .arg("-x")
+    //    .arg("-v")
+    //    .arg("out.o")
+    //    .output()
+    //    .unwrap();
+    //println!(
+    //    "{}",
+    //    output.stdout.iter().map(|c| *c as char).collect::<String>()
+    //);
+    //println!(
+    //    "{}",
+    //    output.stderr.iter().map(|c| *c as char).collect::<String>()
+    //);
 
     //ld out.o -o out -macosx_version_min 11.0 -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lSystem
     let output = Command::new("ld")

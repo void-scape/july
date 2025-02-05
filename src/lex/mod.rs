@@ -56,14 +56,16 @@ fn comment<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<()> {
 fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     _ = comment(input);
 
-    alt((symbols, delim, keyword, int_lit, ident)).parse_next(input)
+    let token = alt((symbols, delim, int_lit, keyword_ident)).parse_next(input)?;
+    Ok(token)
 }
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (sym, span) = alt((";", "+", "*", "=", ":", "-", ">"))
+    let (sym, span) = alt((",", ";", "+", "*", "=", ":", "-", ">"))
         .with_span()
         .parse_next(input)?;
     let token = match sym {
+        "," => TokenKind::Comma,
         ";" => TokenKind::Semi,
         "+" => TokenKind::Plus,
         "*" => TokenKind::Asterisk,
@@ -102,9 +104,10 @@ fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     Ok(Token::new(TokenKind::Int, Span::from_range(span)))
 }
 
-fn ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (_, span) = take_while(1.., |c: char| {
+fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
+    let (result, span) = take_while(1.., |c: char| {
         !c.is_whitespace()
+            && c != ','
             && c != ':'
             && c != ';'
             && c != '('
@@ -117,23 +120,12 @@ fn ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     .with_span()
     .parse_next(input)?;
 
-    Ok(Token::new(TokenKind::Ident, Span::from_range(span)))
-}
-
-fn keyword<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (keyword, span) = alt((
-        "fn".with_span(),
-        "struct".with_span(),
-        "return".with_span(),
-        "let".with_span(),
-    ))
-    .parse_next(input)?;
-    let token = match keyword {
+    let token = match result {
         "fn" => TokenKind::Fn,
         "struct" => TokenKind::Struct,
         "return" => TokenKind::Ret,
         "let" => TokenKind::Let,
-        _ => unreachable!(),
+        _ => TokenKind::Ident,
     };
 
     Ok(Token::new(token, Span::from_range(span)))

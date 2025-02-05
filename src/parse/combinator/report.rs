@@ -1,12 +1,10 @@
+use crate::diagnostic::Diag;
 use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::parse::{rules::*, stream::TokenStream};
 
 pub trait Report {
-    fn report<'a>(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &TokenStream<'a>,
-        err: RuleErr<'a>,
-    ) -> RuleErr<'a>;
+    fn report<'a>(buffer: &'a TokenBuffer<'a>, stream: &TokenStream<'a>, err: Diag<'a>)
+        -> Diag<'a>;
 }
 
 #[derive(Debug, Default)]
@@ -38,17 +36,15 @@ macro_rules! help {
             fn report<'a>(
                 buffer: &'a TokenBuffer<'a>,
                 stream: &TokenStream<'a>,
-                mut err: super::RuleErr<'a>,
-            ) -> super::RuleErr<'a> {
-                err.diag(
-                    Diag::sourced(
-                        $title,
-                        buffer.source(),
-                        crate::diagnostic::Msg::help(buffer.span(stream.prev()), $msg),
-                    )
-                    .level(Level::Help),
-                );
-                err
+                err: Diag<'a>,
+            ) -> Diag<'a> {
+                Diag::sourced(
+                    $title,
+                    buffer.source(),
+                    crate::diagnostic::Msg::help(buffer.span(stream.prev()), $msg),
+                )
+                .level(Level::Help)
+                .wrap(err)
             }
         }
     };

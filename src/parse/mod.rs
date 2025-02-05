@@ -37,7 +37,7 @@ impl Parser {
             {
                 match rules::prelude::StructRule::parse(buffer, &mut stream, &mut stack) {
                     Err(diag) => {
-                        diags.extend(diag.into_diags());
+                        diags.push(diag);
                     }
                     Ok(s) => {
                         items.push(Item::Struct(s));
@@ -46,7 +46,7 @@ impl Parser {
             } else {
                 match rules::prelude::FnRule::parse(buffer, &mut stream, &mut stack) {
                     Err(diag) => {
-                        diags.extend(diag.into_diags());
+                        diags.push(diag);
                     }
                     Ok(f) => {
                         items.push(Item::Func(f));

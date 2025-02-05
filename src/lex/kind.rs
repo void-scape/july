@@ -41,6 +41,8 @@ pub enum TokenKind {
     Greater,
     /// `-`
     Hyphen,
+    /// `,`
+    Comma,
 }
 
 impl TokenKind {
@@ -64,6 +66,7 @@ impl TokenKind {
             Self::Slash => "/",
             Self::Greater => ">",
             Self::Hyphen => "-",
+            Self::Comma => ",",
 
             Self::Int => "int literal",
             Self::Ident => "identifier",

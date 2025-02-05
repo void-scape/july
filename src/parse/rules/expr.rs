@@ -1,8 +1,9 @@
+use super::strukt::StructDef;
 use super::{Next, ParserRule, RResult};
 use crate::ir::{AssignKind, BinOpKind};
 use crate::lex::{buffer::*, kind::*};
 use crate::parse::combinator::opt::Opt;
-use crate::parse::rules::RuleErr;
+use crate::parse::rules::strukt::StructDefRule;
 use crate::parse::{matc::*, stream::TokenStream};
 
 /// A composition of tokens that resolve into a value.
@@ -13,6 +14,7 @@ pub enum Expr {
     Bin(BinOp, Box<Expr>, Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
+    StructDef(StructDef),
     Call { span: Span, func: TokenId },
 }
 
@@ -93,11 +95,11 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
                 let plus = stream.expect();
                 if stream.peek_kind() == Some(TokenKind::Equals) {
                     let equals = stream.expect();
-                    return Err(RuleErr::from_diag(stream.full_error(
+                    return Err(stream.full_error(
                         "invalid assign",
                         Span::from_spans(buffer.span(plus), buffer.span(equals)),
                         "cannot assign expression",
-                    )));
+                    ));
                 }
             }
             _ => {}
@@ -107,21 +109,21 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
         match stream.peek_kind() {
             Some(TokenKind::Equals) => {
                 let equals = stream.expect();
-                Err(RuleErr::from_diag(stream.full_error(
+                Err(stream.full_error(
                     "invalid assign",
                     buffer.span(equals),
                     "cannot assign expression",
-                )))
+                ))
             }
             Some(TokenKind::Plus) => Ok(BinOpTokens::Plus(stream.expect())),
             Some(TokenKind::Hyphen) => Ok(BinOpTokens::Hyphen(stream.expect())),
             Some(TokenKind::Asterisk) => Ok(BinOpTokens::Asterisk(stream.expect())),
             Some(TokenKind::OpenParen) => Ok(BinOpTokens::OpenParen(stream.expect())),
             Some(TokenKind::CloseParen) => Ok(BinOpTokens::CloseParen(stream.expect())),
-            kind => Err(RuleErr::from_diag(stream.error(format!(
+            kind => Err(stream.error(format!(
                 "expected binary operator, got `{}`",
                 kind.map(|k| k.as_str()).unwrap_or("???")
-            )))),
+            ))),
         }
     }
 }
@@ -176,14 +178,14 @@ impl<'a> ParserRule<'a> for TermRule {
                 let lit = Next::<Int>::parse(buffer, stream, stack).unwrap();
                 Ok(Term::Lit(lit))
             }
-            kind => Err(RuleErr::from_diag(stream.full_error(
+            kind => Err(stream.full_error(
                 "malformed expression",
                 buffer.span(stream.peek().unwrap()),
                 format!(
                     "expected one of `int literal`, `function call`, or `identifier`, got `{}`",
                     kind.map(|k| k.as_str()).unwrap_or("???")
                 ),
-            ))),
+            )),
         }
     }
 }
@@ -224,10 +226,10 @@ impl<'a> ParserRule<'a> for AssignRule {
                         lhs: Box::new(expr),
                         rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
                     })),
-                    _ => Err(RuleErr::from_diag(stream.error("expected `+`"))),
+                    _ => Err(stream.error("expected `+`")),
                 }
             }
-            _ => Err(RuleErr::from_diag(stream.error("expected assignment"))),
+            _ => Err(stream.error("expected assignment")),
         }
     }
 }
@@ -244,11 +246,23 @@ impl<'a> ParserRule<'a> for ExprRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        if stream.peek_kind() == Some(TokenKind::Ret) {
+        if stream.match_peek::<Ret>() {
             let span = buffer.span(stream.next().unwrap());
             let expr = Opt::<ExprRule>::parse(buffer, stream, stack)?;
             return Ok(Expr::Ret(span, expr.map(Box::new)));
         }
+
+        let str = *stream;
+        if stream.match_peek::<Ident>() {
+            stream.eat();
+            if stream.match_peek::<OpenCurly>() {
+                *stream = str;
+                let def = StructDefRule::parse(buffer, stream, stack)?;
+                return Ok(Expr::StructDef(def));
+            }
+        }
+
+        *stream = str;
 
         #[derive(Debug)]
         enum Item {
@@ -260,11 +274,7 @@ impl<'a> ParserRule<'a> for ExprRule {
         let mut expr_stack = Vec::new();
         let mut operators = Vec::new();
         let mut open_parens = 0;
-        while stream.peek_kind().is_some_and(|k| k != TokenKind::Semi)
-            && stream
-                .peek_kind()
-                .is_some_and(|k| k != TokenKind::CloseCurly)
-        {
+        while stream.match_peek::<Not<Any<(Semi, CloseCurly, Comma)>>>() {
             if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
                 match op {
                     BinOpTokens::Hyphen(_) | BinOpTokens::Plus(_) | BinOpTokens::Asterisk(_) => {
@@ -283,11 +293,11 @@ impl<'a> ParserRule<'a> for ExprRule {
                     BinOpTokens::CloseParen(t) => {
                         open_parens -= 1;
                         if open_parens < 0 {
-                            return Err(RuleErr::from_diag(stream.full_error(
+                            return Err(stream.full_error(
                                 "malformed expression",
                                 buffer.span(t),
                                 "unopened delimiter",
-                            )));
+                            ));
                         }
 
                         loop {
@@ -326,11 +336,11 @@ impl<'a> ParserRule<'a> for ExprRule {
             if let Item::Op(op) = item {
                 match op {
                     BinOpTokens::OpenParen(t) => {
-                        return Err(RuleErr::from_diag(stream.full_error(
+                        return Err(stream.full_error(
                             "malformed expression",
                             buffer.span(*t),
                             "unclosed delimiter",
-                        )))
+                        ))
                     }
                     _ => {}
                 }

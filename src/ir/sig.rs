@@ -1,14 +1,13 @@
-use std::collections::HashMap;
-
 use super::ident::IdentId;
-use super::ty::Ty;
+use super::ty::FullTy;
 use crate::lex::buffer::Span;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Sig {
     pub span: Span,
     pub ident: IdentId,
-    pub ty: Ty,
+    pub ty: FullTy,
 }
 
 #[derive(Debug, Default)]

@@ -1,8 +1,10 @@
 use super::ctx::Ctx;
 use super::ident::IdentId;
-use crate::lex::buffer::Span;
+use super::strukt::Layout;
+use crate::lex::buffer::{Span, TokenQuery};
 use std::collections::HashMap;
 
+/// Primitive type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {
     Unit,
@@ -16,6 +18,20 @@ impl Ty {
 
     pub fn is_int(&self) -> bool {
         matches!(self, Ty::Int(_))
+    }
+
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Unit => 0,
+            Self::Int(kind) => kind.size(),
+        }
+    }
+
+    pub fn layout(&self) -> Layout {
+        match self {
+            Self::Unit => Layout::new(0, 1),
+            Self::Int(kind) => kind.layout(),
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -46,6 +62,80 @@ pub enum IntKind {
     U16,
     U32,
     U64,
+}
+
+impl IntKind {
+    pub fn size(&self) -> usize {
+        match self {
+            Self::I8 | Self::U8 => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 => 4,
+            Self::I64 | Self::U64 => 8,
+        }
+    }
+
+    pub fn layout(&self) -> Layout {
+        match self {
+            Self::I8 | Self::U8 => Layout::splat(1),
+            Self::I16 | Self::U16 => Layout::splat(2),
+            Self::I32 | Self::U32 => Layout::splat(4),
+            Self::I64 | Self::U64 => Layout::splat(8),
+        }
+    }
+}
+
+/// Unifies primitive and user types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullTy {
+    Ty(Ty),
+    Struct(IdentId),
+}
+
+impl FullTy {
+    pub fn is_unit(&self) -> bool {
+        self.is_ty_and(|ty| ty.is_unit())
+    }
+
+    pub fn is_int(&self) -> bool {
+        self.is_ty_and(|ty| ty.is_int())
+    }
+
+    pub fn is_ty_and(&self, f: impl FnOnce(&Ty) -> bool) -> bool {
+        match self {
+            Self::Ty(ty) => f(ty),
+            Self::Struct(_) => false,
+        }
+    }
+
+    pub fn is_struct_and(&self, f: impl FnOnce(&IdentId) -> bool) -> bool {
+        match self {
+            Self::Struct(strukt) => f(strukt),
+            Self::Ty(_) => false,
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_ty(&self) -> Ty {
+        match self {
+            Self::Ty(ty) => *ty,
+            Self::Struct(_) => panic!("expected ty"),
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_struct(&self) -> IdentId {
+        match self {
+            Self::Struct(s) => *s,
+            Self::Ty(_) => panic!("expected struct"),
+        }
+    }
+
+    pub fn as_str<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
+        match self {
+            Self::Ty(ty) => ty.as_str(),
+            Self::Struct(s) => ctx.expect_ident(*s),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -167,13 +257,22 @@ pub enum ConstraintKind {
     Arch(Arch),
     Equate(TyVar),
     Abs(Ty),
+    Struct(IdentId),
 }
 
 impl ConstraintKind {
-    pub fn hint_satisfies(&self, ty: Ty) -> Option<bool> {
+    pub fn full(ty: FullTy) -> Self {
+        match ty {
+            FullTy::Ty(ty) => Self::Abs(ty),
+            FullTy::Struct(s) => Self::Struct(s),
+        }
+    }
+
+    pub fn hint_satisfies(&self, ty: FullTy) -> Option<bool> {
         match self {
-            Self::Arch(arch) => Some(arch.satisfies(ty)),
-            Self::Abs(abs) => Some(*abs == ty),
+            Self::Arch(arch) => Some(ty.is_ty_and(|ty| arch.satisfies(*ty))),
+            Self::Abs(abs) => Some(ty.is_ty_and(|ty| abs == ty)),
+            Self::Struct(strukt) => Some(ty.is_struct_and(|s| s == strukt)),
             Self::Equate(_) => None,
         }
     }
@@ -182,6 +281,7 @@ impl ConstraintKind {
         match self {
             Self::Arch(arch) => Some(matches!(arch, Arch::Int)),
             Self::Abs(abs) => Some(abs.is_int()),
+            Self::Struct(_) => Some(false),
             Self::Equate(_) => None,
         }
     }
@@ -192,6 +292,7 @@ pub enum TyErr {
     NotEnoughInfo(Span, TyVar),
     Arch(Span, Arch, Ty),
     Abs(Span),
+    Struct(IdentId),
 }
 
 impl Constraint {
@@ -200,9 +301,10 @@ impl Constraint {
         ctx: &Ctx,
         var: TyVar,
         constraints: &[Constraint],
-    ) -> Result<Ty, TyErr> {
+    ) -> Result<FullTy, TyErr> {
         let mut archs = Vec::with_capacity(constraints.len());
         let mut abs = None;
+        let mut strukt = None;
         //let mut equates = Vec::new();
 
         let mut constraints = constraints.to_vec();
@@ -218,26 +320,44 @@ impl Constraint {
                     abs = Some(ty);
                 }
                 ConstraintKind::Arch(a) => archs.push((c.span, a)),
+                ConstraintKind::Struct(s) => {
+                    if strukt.is_some_and(|ident| s != ident) {
+                        return Err(TyErr::Struct(s));
+                    }
+
+                    strukt = Some(s);
+                }
                 _ => unreachable!(),
             }
         }
 
-        let ty = abs.ok_or_else(|| {
-            panic!("not enoug info")
+        if let Some(abs) = abs {
+            if strukt.is_some() {
+                return Err(TyErr::Struct(strukt.unwrap()));
+            }
+
+            for (span, arch) in archs.iter() {
+                if !arch.satisfies(abs) {
+                    return Err(TyErr::Arch(*span, *arch, abs));
+                }
+            }
+
+            Ok(FullTy::Ty(abs))
+        } else if let Some(strukt) = strukt {
+            for (_span, _arch) in archs.iter() {
+                panic!("type err");
+                //return Err(TyErr::Arch(*span, *arch, abs));
+            }
+
+            Ok(FullTy::Struct(strukt))
+        } else {
+            panic!("not enough info");
             //ctx.exprs
             //    .iter()
             //    .find(|expr| expr.ty == var)
             //    .map(|expr| TyErr::NotEnoughInfo(expr.span, var))
             //    .unwrap_or_else(|| panic!("no one uses this ty var?"))
-        })?;
-
-        for (span, arch) in archs.iter() {
-            if !arch.satisfies(ty) {
-                return Err(TyErr::Arch(*span, *arch, ty));
-            }
         }
-
-        Ok(ty)
     }
 
     fn resolve_equates(
@@ -297,12 +417,12 @@ impl Arch {
 }
 
 pub struct TypeKey {
-    key: HashMap<IdentId, Ty>,
+    key: HashMap<IdentId, FullTy>,
 }
 
 impl TypeKey {
     #[track_caller]
-    pub fn ty(&self, ident: IdentId) -> Ty {
+    pub fn ty(&self, ident: IdentId) -> FullTy {
         *self.key.get(&ident).expect("invalid type var")
     }
 }

@@ -1,4 +1,4 @@
-use super::{Next, ParserRule, RResult, RuleErr};
+use super::{Next, ParserRule, RResult};
 use crate::diagnostic::Diag;
 use crate::help;
 use crate::lex::buffer::*;
@@ -61,11 +61,7 @@ impl<'a> ParserRule<'a> for FnRule {
                 stream.eat_until::<OpenCurly>();
                 match BlockRules::parse(buffer, stream, stack) {
                     Ok(_) => Err(e),
-                    Err(be) => Err(RuleErr::from_diags(
-                        e.into_diags()
-                            .into_iter()
-                            .chain(be.into_diags().into_iter()),
-                    )),
+                    Err(be) => todo!(),
                 }
             }
         }

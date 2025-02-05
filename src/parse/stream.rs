@@ -125,7 +125,7 @@ impl<'a> TokenStream<'a> {
             .unwrap_or_else(|| TokenId::new(self.end - 1))
     }
 
-    pub fn match_peek<T: MatchTokenKind>(&self, _token: T) -> bool {
+    pub fn match_peek<T: MatchTokenKind>(&self) -> bool {
         self.peek()
             .is_some_and(|t| T::matches(Some(self.buffer.kind(t))))
     }

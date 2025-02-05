@@ -1,4 +1,3 @@
-use crate::diagnostic::Diagnostic;
 use crate::{
     diagnostic::{Diag, Msg},
     parse::matc::{Any, MatchTokenKind},
@@ -11,17 +10,17 @@ use std::marker::PhantomData;
 
 mod block;
 mod expr;
-mod strukt;
 mod func;
 mod stmt;
+mod strukt;
 
 #[allow(unused)]
 pub mod prelude {
-    pub use super::strukt::*;
     pub use super::block::*;
     pub use super::expr::*;
     pub use super::func::*;
     pub use super::stmt::*;
+    pub use super::strukt::*;
 }
 
 pub trait ParserRule<'a> {
@@ -34,32 +33,7 @@ pub trait ParserRule<'a> {
     ) -> RResult<'a, Self::Output>;
 }
 
-pub type RResult<'a, T> = Result<T, RuleErr<'a>>;
-
-#[derive(Debug)]
-pub struct RuleErr<'a>(Vec<Diag<'a>>);
-
-impl<'a> RuleErr<'a> {
-    pub fn new(title: &'static str, diag: impl Diagnostic<'a>) -> Self {
-        Self(vec![Diag::new(title, diag)])
-    }
-
-    pub fn from_diag(diag: Diag<'a>) -> Self {
-        Self(vec![diag])
-    }
-
-    pub fn from_diags(diags: impl Iterator<Item = Diag<'a>>) -> Self {
-        Self(diags.collect())
-    }
-
-    pub fn diag(&mut self, diag: Diag<'a>) {
-        self.0.push(diag);
-    }
-
-    pub fn into_diags(self) -> Vec<Diag<'a>> {
-        self.0
-    }
-}
+pub type RResult<'a, T> = Result<T, Diag<'a>>;
 
 /// Consumes next token if it passes the `Next` constraint. Fails otherwise.
 pub type Next<Next> = Rule<Next, Any>;
@@ -97,17 +71,17 @@ where
                 if C::matches(Some(buffer.kind(c))) && N::matches(Some(buffer.kind(n))) {
                     Ok(c)
                 } else {
-                    Err(RuleErr::from_diag(R::report(buffer, Some(c))))
+                    Err(R::report(buffer, Some(c)))
                 }
             }
             (Some(c), None) => {
                 if C::matches(Some(buffer.kind(c))) && N::matches(None) {
                     Ok(c)
                 } else {
-                    Err(RuleErr::from_diag(R::report(buffer, Some(c))))
+                    Err(R::report(buffer, Some(c)))
                 }
             }
-            (None, _) => Err(RuleErr::from_diag(R::report(buffer, None))),
+            (None, _) => Err(R::report(buffer, None)),
         }
     }
 }
