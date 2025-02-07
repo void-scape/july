@@ -43,6 +43,8 @@ pub enum TokenKind {
     Hyphen,
     /// `,`
     Comma,
+    /// `.`
+    Dot,
 }
 
 impl TokenKind {
@@ -67,6 +69,7 @@ impl TokenKind {
             Self::Greater => ">",
             Self::Hyphen => "-",
             Self::Comma => ",",
+            Self::Dot => ".",
 
             Self::Int => "int literal",
             Self::Ident => "identifier",

@@ -319,6 +319,7 @@ dependencies = [
  "cranelift-native",
  "cranelift-object",
  "serde",
+ "target-lexicon",
  "variadics_please",
  "winnow",
 ]

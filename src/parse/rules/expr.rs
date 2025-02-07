@@ -38,6 +38,7 @@ impl From<BinOpTokens> for BinOpKind {
             BinOpTokens::Plus(_) => Self::Add,
             BinOpTokens::Hyphen(_) => Self::Sub,
             BinOpTokens::Asterisk(_) => Self::Mul,
+            BinOpTokens::Field(_) => Self::Field,
             _ => panic!(),
         }
     }
@@ -53,6 +54,7 @@ pub enum BinOpTokens {
     Asterisk(TokenId),
     OpenParen(TokenId),
     CloseParen(TokenId),
+    Field(TokenId),
 }
 
 impl BinOpTokens {
@@ -62,6 +64,7 @@ impl BinOpTokens {
             | Self::Plus(t)
             | Self::Asterisk(t)
             | Self::OpenParen(t)
+            | Self::Field(t)
             | Self::CloseParen(t) => buffer.span(*t),
         }
     }
@@ -76,6 +79,7 @@ impl Precedence for BinOpTokens {
         match self {
             Self::Hyphen(_) | Self::Plus(_) | Self::OpenParen(_) | Self::CloseParen(_) => 1,
             Self::Asterisk(_) => 2,
+            Self::Field(_) => 3,
         }
     }
 }
@@ -120,6 +124,7 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
             Some(TokenKind::Asterisk) => Ok(BinOpTokens::Asterisk(stream.expect())),
             Some(TokenKind::OpenParen) => Ok(BinOpTokens::OpenParen(stream.expect())),
             Some(TokenKind::CloseParen) => Ok(BinOpTokens::CloseParen(stream.expect())),
+            Some(TokenKind::Dot) => Ok(BinOpTokens::Field(stream.expect())),
             kind => Err(stream.error(format!(
                 "expected binary operator, got `{}`",
                 kind.map(|k| k.as_str()).unwrap_or("???")
@@ -277,7 +282,10 @@ impl<'a> ParserRule<'a> for ExprRule {
         while stream.match_peek::<Not<Any<(Semi, CloseCurly, Comma)>>>() {
             if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
                 match op {
-                    BinOpTokens::Hyphen(_) | BinOpTokens::Plus(_) | BinOpTokens::Asterisk(_) => {
+                    BinOpTokens::Field(_)
+                    | BinOpTokens::Hyphen(_)
+                    | BinOpTokens::Plus(_)
+                    | BinOpTokens::Asterisk(_) => {
                         while operators.last().is_some_and(|t: &BinOpTokens| {
                             t.precedence() > op.precedence()
                                 && !matches!(t, BinOpTokens::OpenParen(_))
@@ -354,14 +362,6 @@ impl<'a> ParserRule<'a> for ExprRule {
             match item {
                 Item::Op(op) => match accum_op {
                     Some(acop) => {
-                        //if matches!(op, BinOpTokens::Assign(_, _, _)) && assigns > 0 {
-                        //    return Err(RuleErr::from_diag(stream.full_error(
-                        //        "invalid assignment",
-                        //        op.span(buffer),
-                        //        "cannot assign expression",
-                        //    )));
-                        //}
-
                         accum_op = Some(Expr::Bin(
                             BinOp {
                                 span: op.span(buffer),
@@ -372,15 +372,6 @@ impl<'a> ParserRule<'a> for ExprRule {
                         ));
                     }
                     None => {
-                        //if let BinOpTokens::Assign(kind, _, _) = op {
-                        //    assigns += 1;
-                        //    accum_op = Some(Expr::Assign(Assign {
-                        //        assign_span: op.span(buffer),
-                        //        kind,
-                        //        lhs: Box::new(terms.pop().unwrap()),
-                        //        rhs: Box::new(terms.pop().unwrap()),
-                        //    }));
-                        //} else {
                         accum_op = Some(Expr::Bin(
                             BinOp {
                                 span: op.span(buffer),
@@ -389,7 +380,6 @@ impl<'a> ParserRule<'a> for ExprRule {
                             Box::new(terms.pop().unwrap()),
                             Box::new(terms.pop().unwrap()),
                         ));
-                        //}
                     }
                 },
                 Item::Term(next) => {

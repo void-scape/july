@@ -1,4 +1,5 @@
 use crate::unit::source::Source;
+use anstream::print;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
 use winnow::stream::Stream;
@@ -26,7 +27,10 @@ impl<'a> Lexer<'a> {
                 break;
             }
 
-            tokens.push(any_token(&mut input)?);
+            match any_token(&mut input) {
+                Some(token) => tokens.push(token?),
+                None => {}
+            }
         }
 
         Ok(TokenBuffer::new(tokens, self.source))
@@ -53,18 +57,22 @@ fn comment<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<()> {
     }
 }
 
-fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
+fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> Option<PResult<Token>> {
     _ = comment(input);
+    if input.is_empty() {
+        return None;
+    }
 
-    let token = alt((symbols, delim, int_lit, keyword_ident)).parse_next(input)?;
-    Ok(token)
+    let token = alt((symbols, delim, int_lit, keyword_ident)).parse_next(input);
+    Some(token)
 }
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (sym, span) = alt((",", ";", "+", "*", "=", ":", "-", ">"))
+    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">"))
         .with_span()
         .parse_next(input)?;
     let token = match sym {
+        "." => TokenKind::Dot,
         "," => TokenKind::Comma,
         ";" => TokenKind::Semi,
         "+" => TokenKind::Plus,
@@ -107,6 +115,7 @@ fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     let (result, span) = take_while(1.., |c: char| {
         !c.is_whitespace()
+            && c != '.'
             && c != ','
             && c != ':'
             && c != ';'

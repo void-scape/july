@@ -34,16 +34,35 @@ fn run() {
     //);
 
     //ld out.o -o out -macosx_version_min 11.0 -L /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib -lSystem
-    let output = Command::new("ld")
+    //let output = Command::new("ld")
+    //    .arg("out.o")
+    //    .arg("-o")
+    //    .arg("out")
+    //    .arg("-macosx_version_min")
+    //    .arg("11.0")
+    //    .arg("-L")
+    //    .arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib")
+    //    .arg("-l")
+    //    .arg("System")
+    //    .output()
+    //    .unwrap();
+    //if !output.stdout.is_empty() {
+    //    println!(
+    //        "ld: {}",
+    //        output.stdout.iter().map(|c| *c as char).collect::<String>()
+    //    );
+    //}
+    //if !output.stderr.is_empty() {
+    //    println!(
+    //        "ld: {}",
+    //        output.stderr.iter().map(|c| *c as char).collect::<String>()
+    //    );
+    //}
+
+    let output = Command::new("clang")
         .arg("out.o")
         .arg("-o")
         .arg("out")
-        .arg("-macosx_version_min")
-        .arg("11.0")
-        .arg("-L")
-        .arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib")
-        .arg("-l")
-        .arg("System")
         .output()
         .unwrap();
     if !output.stdout.is_empty() {

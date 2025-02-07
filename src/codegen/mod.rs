@@ -1,18 +1,24 @@
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
-use crate::ir::lit::LitKind;
+use crate::ir::lit::{Lit, LitKind};
+use crate::ir::strukt::StructId;
 use crate::ir::ty::{FullTy, IntKind, Ty, TypeKey};
-use crate::ir::*;
-use cranelift_codegen::ir::{types::*, FuncRef, StackSlotData, StackSlotKind};
+use crate::ir::{self, *};
+use cranelift_codegen::ir::InstBuilder;
+use cranelift_codegen::ir::{types::*, StackSlot};
 use cranelift_codegen::ir::{AbiParam, Function, Signature, UserFuncName};
-use cranelift_codegen::ir::{InstBuilder, Value};
 use cranelift_codegen::isa::CallConv;
+use cranelift_codegen::settings::Configurable;
 use cranelift_codegen::{settings, Context};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
+use ctx::*;
 use std::collections::HashMap;
-use std::ops::Deref;
+use var::*;
+
+mod ctx;
+mod var;
 
 pub fn codegen(ctx: &Ctx, key: &TypeKey) -> Vec<u8> {
     let mut module = module();
@@ -21,13 +27,17 @@ pub fn codegen(ctx: &Ctx, key: &TypeKey) -> Vec<u8> {
 }
 
 fn module() -> ObjectModule {
+    let mut builder = cranelift_codegen::settings::builder();
+    builder.set("libcall_call_conv", "apple_aarch64").unwrap();
+    builder.set("tls_model", "macho").unwrap();
+    builder.set("is_pic", "true").unwrap();
+    //builder.set("opt_level", "speed_and_size").unwrap();
+
     ObjectModule::new(
         ObjectBuilder::new(
             cranelift_native::builder()
                 .unwrap()
-                .finish(cranelift_codegen::settings::Flags::new(
-                    cranelift_codegen::settings::builder(),
-                ))
+                .finish(cranelift_codegen::settings::Flags::new(builder))
                 .unwrap(),
             b"ax",
             cranelift_module::default_libcall_names(),
@@ -64,7 +74,7 @@ fn register_function(module: &mut ObjectModule, ctx: &Ctx, key: &TypeKey, func: 
         .declare_function(
             ctx.expect_ident(func.sig.ident),
             Linkage::Export,
-            &build_sig(ctx, func, key),
+            &build_sig(func, key),
         )
         .unwrap()
 }
@@ -79,205 +89,30 @@ fn define_function(
     func_map: &HashMap<IdentId, FuncId>,
     i: u32,
 ) {
-    let cl_func = build_function(ctx, builder, module, key, func, func_map, i);
-    verify_function(&cl_func);
-    cl_ctx.func = cl_func;
+    let mut f = Function::with_name_signature(UserFuncName::user(i, i), build_sig(func, key));
+    let mut ctx = GenCtx::new(
+        FunctionBuilder::new(&mut f, builder),
+        func.hash(),
+        ctx,
+        module,
+        key,
+        func_map,
+    );
+    build_function(&mut ctx, func);
+    ctx.builder.finalize();
+
+    verify_function(&f);
+    cl_ctx.func = f;
     module
         .define_function(*func_map.get(&func.sig.ident).unwrap(), cl_ctx)
         .unwrap();
 }
 
-fn build_sig(ctx: &Ctx, func: &Func, _key: &TypeKey) -> Signature {
-    let mut sig = Signature::new(CallConv::AppleAarch64);
-    //for param in func.params.iter() {
-    //    sig.params.push(param.ty.abi());
-    //}
-
-    match func.sig.ty {
-        FullTy::Ty(ty) => {
-            if !ty.is_unit() {
-                sig.returns.push(ctx.abi(ty));
-            }
-        }
-        FullTy::Struct(_) => {
-            // address to struct
-            sig.returns.push(AbiParam::new(I32));
-        }
-    }
-
-    sig
-}
-
-struct GenCtx<'a> {
-    pub ctx: &'a Ctx<'a>,
-    pub alloc: VarAlloc,
-    pub module: &'a mut ObjectModule,
-    pub builder: FunctionBuilder<'a>,
-    pub key: &'a TypeKey,
-    pub func_map: &'a HashMap<IdentId, FuncId>,
-}
-
-impl<'a> Deref for GenCtx<'a> {
-    type Target = Ctx<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ctx
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ClType {
-    Cl(cranelift_codegen::ir::Type),
-    Struct(IdentId),
-}
-
-impl ClType {
-    #[track_caller]
-    pub fn expect_cl(&self) -> cranelift_codegen::ir::Type {
-        match self {
-            Self::Cl(cl) => *cl,
-            Self::Struct(_) => panic!("expected cl"),
-        }
-    }
-}
-
-impl GenCtx<'_> {
-    pub fn declare_var(&mut self, var: Variable, ty: ClType) {
-        match ty {
-            ClType::Cl(ty) => {
-                self.builder.declare_var(var, ty);
-            }
-            ClType::Struct(s) => {
-                let slot = self.builder.create_sized_stack_slot(StackSlotData {
-                    kind: StackSlotKind::ExplicitSlot,
-                    size: 8,
-                    align_shift: 2,
-                });
-            }
-        }
-    }
-
-    pub fn clty(&self, ty: FullTy) -> ClType {
-        match ty {
-            FullTy::Ty(ty) => ClType::Cl(self.ctx.clty(ty)),
-            FullTy::Struct(s) => ClType::Struct(s),
-        }
-    }
-
-    pub fn ident_clty(&self, ident: IdentId) -> ClType {
-        self.clty(self.key.ty(ident))
-    }
-
-    pub fn declare_func(&mut self, ident: IdentId) -> FuncRef {
-        let id = self.func_map.get(&ident).unwrap();
-        self.module.declare_func_in_func(*id, self.builder.func)
-    }
-
-    pub fn add(&mut self, dest: Variable, lhs: impl IntoValue, rhs: impl IntoValue) {
-        let v1 = lhs.into_value(self);
-        let v2 = rhs.into_value(self);
-        let (value, overflow) = self.builder.ins().uadd_overflow(v2, v1);
-        self.builder.def_var(dest, value);
-    }
-
-    pub fn sub(&mut self, dest: Variable, lhs: impl IntoValue, rhs: impl IntoValue) {
-        let v1 = lhs.into_value(self);
-        let v2 = rhs.into_value(self);
-        let (value, overflow) = self.builder.ins().usub_overflow(v2, v1);
-        self.builder.def_var(dest, value);
-    }
-
-    pub fn mul(&mut self, dest: Variable, lhs: impl IntoValue, rhs: impl IntoValue) {
-        let v1 = lhs.into_value(self);
-        let v2 = rhs.into_value(self);
-        let (value, overflow) = self.builder.ins().umul_overflow(v2, v1);
-        self.builder.def_var(dest, value);
-    }
-}
-
-trait IntoValue {
-    fn into_value(self, ctx: &mut GenCtx) -> Value;
-}
-
-impl IntoValue for Value {
-    fn into_value(self, _ctx: &mut GenCtx) -> Value {
-        self
-    }
-}
-
-impl IntoValue for Variable {
-    fn into_value(self, ctx: &mut GenCtx) -> Value {
-        ctx.builder.use_var(self)
-    }
-}
-
-fn build_function(
-    ctx: &Ctx,
-    fn_ctx: &mut FunctionBuilderContext,
-    module: &mut ObjectModule,
-    key: &TypeKey,
-    func: &Func,
-    func_map: &HashMap<IdentId, FuncId>,
-    i: u32,
-) -> Function {
-    let mut f = Function::with_name_signature(UserFuncName::user(i, i), build_sig(ctx, func, key));
-    let mut ctx = GenCtx {
-        alloc: VarAlloc::default(),
-        builder: FunctionBuilder::new(&mut f, fn_ctx),
-        ctx,
-        module,
-        key,
-        func_map,
-    };
-
-    let cl_block = ctx.builder.create_block();
-    ctx.builder.switch_to_block(cl_block);
-
-    for stmt in func.block.stmts.iter() {
-        match stmt {
-            Stmt::Semi(stmt) => match stmt {
-                SemiStmt::Let(let_) => let_stmt(&mut ctx, let_),
-                SemiStmt::Assign(assign) => assign_stmt(&mut ctx, assign),
-                SemiStmt::Bin(bin) => bin_stmt(&mut ctx, bin),
-                SemiStmt::Call(call) => call_stmt(&mut ctx, call),
-                _ => todo!(),
-            },
-            Stmt::Open(stmt) => panic!("{stmt:#?}"),
-        }
-    }
-
-    if let Some(end) = &func.block.end {
-        if !func.sig.ty.is_unit() {
-            return_open(&mut ctx, func.sig.ty, end);
-        }
-    } else {
-        if ctx.expect_ident(func.sig.ident) == "structs" {
-            //let slot = ctx.builder.create_sized_stack_slot(StackSlotData {
-            //    kind: StackSlotKind::ExplicitSlot,
-            //    size: 8,
-            //    align_shift: 2,
-            //});
-            //
-            //let val = ctx.builder.ins().iconst(I32, 69);
-            //ctx.builder.ins().stack_store(val, slot, 0);
-            //let val = ctx.builder.ins().iconst(I32, 72);
-            //ctx.builder.ins().stack_store(val, slot, 4);
-            //
-            //let v1 = ctx.builder.ins().stack_load(I32, slot, 4);
-            //ctx.builder.ins().return_(&[v1]);
-        } else {
-            ctx.builder.ins().return_(&[]);
-        }
-    }
-
-    ctx.builder.seal_block(cl_block);
-    ctx.builder.finalize();
-
-    f
-}
-
 fn verify_function(func: &Function) {
-    let flags = settings::Flags::new(settings::builder());
+    let mut builder = cranelift_codegen::settings::builder();
+    builder.set("libcall_call_conv", "apple_aarch64").unwrap();
+    builder.set("opt_level", "speed_and_size").unwrap();
+    let flags = settings::Flags::new(builder);
     let res = cranelift_codegen::verify_function(func, &flags);
 
     println!("{}", func.display());
@@ -286,13 +121,528 @@ fn verify_function(func: &Function) {
     }
 }
 
-impl Ctx<'_> {
-    pub fn abi(&self, ty: Ty) -> AbiParam {
-        AbiParam::new(self.clty(ty))
+fn build_sig(func: &Func, _key: &TypeKey) -> Signature {
+    let mut sig = Signature::new(CallConv::AppleAarch64);
+    //for param in func.params.iter() {
+    //    sig.params.push(param.ty.abi());
+    //}
+
+    match func.sig.ty {
+        FullTy::Ty(ty) => {
+            if !ty.is_unit() {
+                sig.returns.push(AbiParam::new(ty.clty()));
+            }
+        }
+        FullTy::Struct(_) => {
+            // address to struct
+            sig.returns.push(AbiParam::new(I64));
+        }
     }
 
-    pub fn clty(&self, ty: Ty) -> Type {
-        match ty {
+    sig
+}
+
+fn build_function(ctx: &mut GenCtx, func: &Func) {
+    let cl_block = ctx.builder.create_block();
+    ctx.builder.switch_to_block(cl_block);
+
+    for stmt in func.block.stmts.iter() {
+        match stmt {
+            Stmt::Semi(stmt) => match stmt {
+                SemiStmt::Let(let_) => let_stmt(ctx, let_),
+                SemiStmt::Bin(bin) => bin_stmt(ctx, bin),
+                SemiStmt::Call(call) => call_stmt(ctx, call),
+                SemiStmt::Assign(assign) => assign_stmt(ctx, assign),
+                _ => todo!(),
+            },
+            Stmt::Open(stmt) => panic!("{stmt:#?}"),
+        }
+    }
+
+    if let Some(end) = &func.block.end {
+        if !func.sig.ty.is_unit() {
+            return_open(ctx, func.sig.ty, end);
+        }
+    } else {
+        ctx.builder.ins().return_(&[]);
+    }
+
+    ctx.builder.seal_block(cl_block);
+}
+
+fn bin_stmt(_ctx: &mut GenCtx, stmt: &BinOp) {
+    match stmt.kind {
+        BinOpKind::Add => {}
+        BinOpKind::Sub => {}
+        BinOpKind::Mul => {}
+        BinOpKind::Field => {}
+    }
+}
+
+fn assign_stmt(ctx: &mut GenCtx, stmt: &Assign) {
+    todo!();
+    //match stmt.lhs {
+    //    AssignTarget::Ident(ident) => {
+    //        let var = ctx.var(ident.id);
+    //        match &stmt.rhs {
+    //            AssignExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+    //                LitKind::Int(int) => match stmt.kind {
+    //                    AssignKind::Equals => {
+    //                        let lit = define_lit(ctx, var.kind.expect_primitive().ty, lit);
+    //                        ctx.builder
+    //                            .def_var(var.kind.expect_primitive().clvar, lit.value(ctx));
+    //                    }
+    //                    AssignKind::Add => {
+    //                        let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
+    //                        ctx.add(var, var, int);
+    //                    }
+    //                },
+    //                _ => todo!(),
+    //            },
+    //            AssignExpr::Ident(ident) => match stmt.kind {
+    //                AssignKind::Equals => {
+    //                    let other = ctx.alloc.expect_var(ident.id);
+    //                    let value = ctx.builder.use_var(other);
+    //                    ctx.builder.def_var(var, value);
+    //                }
+    //                AssignKind::Add => {
+    //                    ctx.add(var, var, ctx.alloc.expect_var(ident.id));
+    //                }
+    //            },
+    //            AssignExpr::Bin(bin) => match stmt.kind {
+    //                AssignKind::Equals => {
+    //                    bin_op_fill_var(ctx, var, bin, clty);
+    //                }
+    //                AssignKind::Add => {
+    //                    let other = ctx.alloc.new_var();
+    //                    ctx.builder.declare_var(other, clty.expect_cl());
+    //                    bin_op_fill_var(ctx, other, bin, clty);
+    //                    ctx.add(var, var, other);
+    //                }
+    //            },
+    //        }
+    //    }
+    //}
+}
+
+//fn let_stmt(ctx: &mut GenCtx, stmt: &Let) {
+//    match stmt.lhs {
+//        LetTarget::Ident(ident) => {
+//            let clty = ctx.ident_clty(ident.id);
+//            let var = ctx.declare(clty, ident.id);
+//
+//            let value = let_expr_value(ctx, &stmt.rhs, clty);
+//            //ctx.builder.def_var(var, value);
+//
+//            // TODO: this is wrong.
+//            match &stmt.rhs {
+//                LetExpr::Call(call) => match ctx.clty(call.sig.ty) {
+//                    ClType::Struct(s) => {
+//                        //let id = ctx.expect_struct_id(s);
+//                        //let layout = ctx.structs.expect_layout(id);
+//                        //let slot = ctx.builder.create_sized_stack_slot(StackSlotData {
+//                        //    kind: StackSlotKind::ExplicitSlot,
+//                        //    size: layout.size as u32,
+//                        //    align_shift: layout.align_shift(),
+//                        //});
+//
+//                        //let addr = ctx.builder.ins().stack_addr(I32, slot, 0);
+//                        //ctx.builder.def_var(var, addr);
+//                        //let addr = ctx.builder.ins().sextend(I64, addr);
+//                        //let size = ctx.builder.ins().iconst(I64, layout.size as i64);
+//                        //let value = ctx.builder.ins().sextend(I64, value);
+//                        //ctx.builder.def_var(var, value);
+//                    }
+//                    _ => {}
+//                },
+//                _ => {}
+//            }
+//        }
+//    }
+//}
+//
+//#[derive(Debug, Clone, Copy)]
+//pub enum LetExprValue {
+//    Cl(Value),
+//    Struct(StackSlot),
+//}
+//
+//impl Into<LetExprValue> for Value {
+//    fn into(self) -> LetExprValue {
+//        LetExprValue::Cl(self)
+//    }
+//}
+//
+//impl Into<LetExprValue> for StackSlot {
+//    fn into(self) -> LetExprValue {
+//        LetExprValue::Struct(self)
+//    }
+//}
+//
+//fn let_expr_value(ctx: &mut GenCtx, expr: &LetExpr, clty: ClType) -> LetExprValue {
+//    match expr {
+//        LetExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+//            LitKind::Int(int) => ctx.builder.ins().iconst(clty.expect_cl(), int).into(),
+//            _ => todo!(),
+//        },
+//        LetExpr::Ident(ident) => {
+//            let other = ctx.alloc.expect_var(ident.id);
+//            match other {
+//                Var::Cl(other) => ctx.builder.use_var(other).into(),
+//                Var::Struct(slot) => {
+//                    todo!()
+//                }
+//            }
+//        }
+//        LetExpr::Bin(bin) => {
+//            let var = ctx.alloc.new_var();
+//            ctx.builder.declare_var(var, clty.expect_cl());
+//            bin_op_fill_var(ctx, var, bin, clty);
+//            ctx.builder.use_var(var).into()
+//        }
+//        LetExpr::Call(call) => match clty {
+//            ClType::Cl(_cl) => {
+//                let func = ctx.declare_func(call.sig.ident);
+//                let call = ctx.builder.ins().call(func, &[]);
+//                ctx.builder.inst_results(call)[0].into()
+//            }
+//            ClType::Struct(_s) => {
+//                todo!()
+//            }
+//        },
+//        LetExpr::Struct(def) => {
+//            let id = ctx.expect_struct_id(def.name.id);
+//            let layout = ctx.structs.expect_layout(id);
+//            let slot = ctx.builder.create_sized_stack_slot(StackSlotData {
+//                kind: StackSlotKind::ExplicitSlot,
+//                size: layout.size as u32,
+//                align_shift: layout.align_shift(),
+//            });
+//
+//            for field in def.fields.iter() {
+//                let clty = ctx.clty(
+//                    ctx.structs
+//                        .strukt(id)
+//                        .unwrap()
+//                        .fields
+//                        .iter()
+//                        .find(|f| f.name.id == field.name.id)
+//                        .map(|f| f.ty)
+//                        .unwrap(),
+//                );
+//
+//                //let value = let_expr_value(ctx, &field.expr, clty);
+//                //match value {
+//                //    LetExprValue::Cl(value) => {
+//                //        let offset = *ctx
+//                //            .structs
+//                //            .offsets(id)
+//                //            .unwrap()
+//                //            .get(&field.name.id)
+//                //            .unwrap() as i32;
+//                //        ctx.builder.ins().stack_store(value, slot, offset);
+//                //    }
+//                //    LetExprValue::Struct(slot) => {}
+//                //}
+//            }
+//
+//            slot.into()
+//        }
+//    }
+//}
+//
+//fn store_struct_in_offset(
+//    ctx: &mut GenCtx,
+//    offset: u32,
+//    def: StructDef,
+//    dst: StackSlot,
+//    src: StackSlot,
+//) {
+//}
+//
+//fn bin_op_fill_var(ctx: &mut GenCtx, var: Variable, bin: &BinOp, clty: ClType) {
+//    let lhs_var = ctx.alloc.new_var();
+//    ctx.builder.declare_var(lhs_var, clty.expect_cl());
+//    bin_op_expr_fill_var(ctx, bin.kind, lhs_var, &bin.lhs, clty);
+//
+//    let rhs_var = ctx.alloc.new_var();
+//    ctx.builder.declare_var(rhs_var, clty.expect_cl());
+//    bin_op_expr_fill_var(ctx, bin.kind, rhs_var, &bin.rhs, clty);
+//
+//    match bin.kind {
+//        BinOpKind::Add => {
+//            ctx.add(var, lhs_var, rhs_var);
+//        }
+//        BinOpKind::Sub => {
+//            ctx.sub(var, lhs_var, rhs_var);
+//        }
+//        BinOpKind::Mul => {
+//            ctx.mul(var, lhs_var, rhs_var);
+//        }
+//    }
+//}
+//
+//fn bin_op_expr_fill_var(
+//    ctx: &mut GenCtx,
+//    kind: BinOpKind,
+//    var: Variable,
+//    expr: &BinOpExpr,
+//    clty: ClType,
+//) {
+//    match expr {
+//        BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+//            LitKind::Int(int) => {
+//                let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
+//                ctx.builder.def_var(var, int);
+//            }
+//            _ => todo!(),
+//        },
+//        BinOpExpr::Bin(bin) => {
+//            bin_op_fill_var(ctx, var, bin, clty);
+//        }
+//        BinOpExpr::Ident(ident) => match kind {
+//            BinOpKind::Sub | BinOpKind::Mul | BinOpKind::Add => {
+//                let other = ctx.alloc.expect_var(ident.id);
+//                let value = ctx.builder.use_var(other.expect_cl());
+//                ctx.builder.def_var(var, value);
+//            }
+//        },
+//        BinOpExpr::Call(call) => {
+//            let func = ctx.declare_func(call.sig.ident);
+//            let call = ctx.builder.ins().call(func, &[]);
+//            let result = ctx.builder.inst_results(call);
+//            ctx.builder.def_var(var, result[0]);
+//        }
+//    }
+//}
+
+fn define_lit(ctx: &mut GenCtx, ty: Ty, lit: &Lit) -> Prim {
+    let clty = ty.clty();
+    let clvar = ctx.new_var();
+    ctx.builder.declare_var(clvar, clty);
+    match ctx.expect_lit(lit.kind) {
+        LitKind::Int(int) => {
+            let val = ctx.builder.ins().iconst(clty, int);
+            ctx.builder.def_var(clvar, val);
+        }
+        _ => todo!(),
+    }
+    Prim { clvar, clty, ty }
+}
+
+fn eval_let_expr(ctx: &mut GenCtx, ty: FullTy, expr: &LetExpr) -> Var {
+    match expr {
+        LetExpr::Lit(lit) => Var::prim(ty, define_lit(ctx, ty.expect_ty(), lit)),
+        LetExpr::Struct(def) => Var::strukt(ty, define_struct(ctx, def)),
+        LetExpr::Call(call) => match call.sig.ty {
+            FullTy::Struct(s) => {
+                let func = ctx.declare_func(call.sig.ident);
+                let call = ctx.builder.ins().call(func, &[]);
+                let addr = ctx.builder.inst_results(call)[0];
+                let id = ctx.expect_struct_id(s);
+                Var::strukt(ty, copy_return_struct(ctx, id, addr))
+            }
+            _ => todo!(),
+        },
+        LetExpr::Ident(ident) => ctx.var(ident.id).clone(),
+        LetExpr::Bin(bin) => eval_bin_op(ctx, ty, bin),
+        _ => todo!(),
+    }
+}
+
+fn eval_bin_op(ctx: &mut GenCtx, ty: FullTy, bin: &BinOp) -> Var {
+    if bin.kind.is_primitive() {
+        let clvar = ctx.new_var();
+        ctx.builder.declare_var(clvar, ty.expect_ty().clty());
+        let v1 = eval_bin_op_expr(ctx, ty, &bin.lhs)
+            .kind
+            .expect_primitive()
+            .value(ctx);
+        let v2 = eval_bin_op_expr(ctx, ty, &bin.rhs)
+            .kind
+            .expect_primitive()
+            .value(ctx);
+
+        match bin.kind {
+            BinOpKind::Add => {
+                let (value, overflow) = ctx.builder.ins().usub_overflow(v2, v1);
+                ctx.builder.def_var(clvar, value);
+            }
+            BinOpKind::Sub => {
+                let (value, overflow) = ctx.builder.ins().usub_overflow(v2, v1);
+                ctx.builder.def_var(clvar, value);
+            }
+            BinOpKind::Mul => {
+                let (value, overflow) = ctx.builder.ins().usub_overflow(v2, v1);
+                ctx.builder.def_var(clvar, value);
+            }
+            _ => unreachable!(),
+        }
+
+        Var::prim(ty, Prim::new(ty, clvar))
+    } else {
+        match bin.kind {
+            BinOpKind::Field => todo!(),
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn eval_bin_op_expr(ctx: &mut GenCtx, ty: FullTy, expr: &BinOpExpr) -> Var {
+    match expr {
+        BinOpExpr::Ident(ident) => ctx.var(ident.id).clone(),
+        BinOpExpr::Lit(lit) => Var::prim(ty, define_lit(ctx, ty.expect_ty(), lit)),
+        BinOpExpr::Bin(bin) => eval_bin_op(ctx, ty, bin),
+        BinOpExpr::Call(call) => {
+            let clty = ty.expect_ty().clty();
+            let clvar = ctx.new_var();
+            ctx.builder.declare_var(clvar, clty);
+
+            let func = ctx.declare_func(call.sig.ident);
+            let call = ctx.builder.ins().call(func, &[]);
+            let results = ctx.builder.inst_results(call);
+
+            ctx.builder.def_var(clvar, results[0]);
+            Var::prim(
+                ty,
+                Prim {
+                    clty,
+                    clvar,
+                    ty: ty.expect_ty(),
+                },
+            )
+        }
+    }
+}
+
+fn let_stmt(ctx: &mut GenCtx, stmt: &Let) {
+    match stmt.lhs {
+        LetTarget::Ident(ident) => {
+            let var = eval_let_expr(ctx, ctx.ty(ident.id), &stmt.rhs);
+            println!("register: {:?}", ident.id);
+            ctx.register(ident.id, var);
+        }
+    }
+}
+
+fn call_stmt(ctx: &mut GenCtx, stmt: &Call) {
+    let func = ctx.declare_func(stmt.sig.ident);
+    ctx.builder.ins().call(func, &[]);
+}
+
+fn return_open(ctx: &mut GenCtx, ty: FullTy, stmt: &OpenStmt) {
+    match stmt {
+        OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            LitKind::Int(int) => {
+                let clty = ty.expect_ty().clty();
+                let int = ctx.builder.ins().iconst(clty, int);
+                ctx.builder.ins().return_(&[int]);
+            }
+            _ => todo!(),
+        },
+        OpenStmt::Ident(ident) => {
+            return_var(ctx, ident.id);
+        }
+        OpenStmt::Struct(s) => {
+            let strukt = define_struct(ctx, s);
+            let addr = ctx.builder.ins().stack_addr(I64, strukt.slot, 0);
+            ctx.builder.ins().return_(&[addr]);
+        }
+        OpenStmt::Bin(bin) => match bin.kind {
+            BinOpKind::Field => {
+                access_struct_field(
+                    ctx,
+                    bin,
+                    |ctx, strukt, ident, ty, slot, offset| {
+                        let field_offset = strukt.field_offset(ctx, ident);
+                        let val =
+                            ctx.builder
+                                .ins()
+                                .stack_load(ty.clty(), slot, offset + field_offset);
+                        ctx.builder.ins().return_(&[val]);
+                    },
+                    |_, _, _, _| todo!(),
+                );
+            }
+            _ => todo!(),
+        },
+        _ => todo!(),
+    }
+}
+
+fn access_struct_field(
+    ctx: &mut GenCtx,
+    bin: &BinOp,
+    with_prim: impl Fn(&mut GenCtx, ir::strukt::Struct, IdentId, Ty, StackSlot, i32),
+    with_struct: impl Fn(&ir::strukt::Struct, IdentId, StackSlot, i32),
+) {
+    let mut path = Vec::new();
+    descend_bin_op_field(ctx, bin, &mut path);
+
+    let mut offset = 0;
+    let ident = *path.first().unwrap();
+    let var = ctx.var(ident);
+    let var = var.kind.expect_struct();
+    let mut strukt = ctx.structs.strukt(var.id);
+    let slot = var.slot;
+
+    for (i, ident) in path.iter().enumerate().skip(1) {
+        match strukt.field_ty(*ident) {
+            FullTy::Ty(ty) => {
+                with_prim(ctx, strukt.clone(), *ident, ty, slot, offset);
+                break;
+            }
+            FullTy::Struct(s) => {
+                if i == path.len() - 1 {
+                    with_struct(strukt, s, slot, offset);
+                } else {
+                    offset += strukt.field_offset(ctx, *ident);
+                    strukt = ctx.structs.expect_struct_ident(s);
+                }
+            }
+        }
+    }
+}
+
+fn descend_bin_op_field(ctx: &mut GenCtx, bin: &BinOp, accesses: &mut Vec<IdentId>) {
+    if bin.kind == BinOpKind::Field {
+        match bin.lhs {
+            BinOpExpr::Ident(ident) => {
+                if let BinOpExpr::Bin(bin) = &bin.rhs {
+                    accesses.push(ident.id);
+                    descend_bin_op_field(ctx, bin, accesses);
+                } else {
+                    let BinOpExpr::Ident(other) = bin.rhs else {
+                        panic!()
+                    };
+
+                    accesses.push(other.id);
+                    accesses.push(ident.id);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn return_var(ctx: &mut GenCtx, var: IdentId) {
+    match &ctx.var(var).kind {
+        VarKind::Primitive(prim) => {
+            let val = ctx.builder.use_var(prim.clvar);
+            //let val = prim.value(ctx);
+            ctx.builder.ins().return_(&[val]);
+        }
+        VarKind::Struct(s) => {
+            let slot = s.slot;
+            let val = ctx.builder.ins().stack_addr(I64, slot, 0);
+            ctx.builder.ins().return_(&[val]);
+        }
+    }
+}
+
+impl Ty {
+    pub fn clty(&self) -> Type {
+        match self {
             Ty::Int(kind) => match kind {
                 IntKind::I8 => I8,
                 IntKind::I16 => I16,
@@ -305,215 +655,5 @@ impl Ctx<'_> {
             },
             Ty::Unit => panic!("handle unit abi"),
         }
-    }
-}
-
-fn return_open(ctx: &mut GenCtx, ty: FullTy, stmt: &OpenStmt) {
-    match stmt {
-        OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
-            LitKind::Int(int) => {
-                let clty = ctx.clty(ty);
-                let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
-                ctx.builder.ins().return_(&[int]);
-            }
-            _ => todo!(),
-        },
-        OpenStmt::Ident(ident) => {
-            let other = ctx.alloc.expect_var(ident.id);
-            let value = ctx.builder.use_var(other);
-            ctx.builder.ins().return_(&[value]);
-        }
-        OpenStmt::Bin(bin) => {
-            let clty = ctx.clty(ty);
-            let var = ctx.alloc.new_var();
-            ctx.declare_var(var, clty);
-            bin_op_fill_var(ctx, var, bin, clty);
-
-            let value = ctx.builder.use_var(var);
-            ctx.builder.ins().return_(&[value]);
-        }
-        OpenStmt::Call(call) => {
-            let func = ctx.declare_func(call.sig.ident);
-            let call = ctx.builder.ins().call(func, &[]);
-            let result = ctx.builder.inst_results(call)[0];
-            ctx.builder.ins().return_(&[result]);
-        }
-    }
-}
-
-fn call_stmt(ctx: &mut GenCtx, stmt: &Call) {
-    let func = ctx.declare_func(stmt.sig.ident);
-    let call = ctx.builder.ins().call(func, &[]);
-    ctx.builder.inst_results(call);
-}
-
-fn bin_stmt(_ctx: &mut GenCtx, stmt: &BinOp) {
-    match stmt.kind {
-        BinOpKind::Add => {}
-        BinOpKind::Sub => {}
-        BinOpKind::Mul => {}
-    }
-}
-
-fn assign_stmt(ctx: &mut GenCtx, stmt: &Assign) {
-    match stmt.lhs {
-        AssignTarget::Ident(ident) => {
-            let var = ctx.alloc.expect_var(ident.id);
-            let clty = ctx.ident_clty(ident.id);
-
-            match &stmt.rhs {
-                AssignExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
-                    LitKind::Int(int) => match stmt.kind {
-                        AssignKind::Equals => {
-                            let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
-                            ctx.builder.def_var(var, int);
-                        }
-                        AssignKind::Add => {
-                            let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
-                            ctx.add(var, var, int);
-                        }
-                    },
-                    _ => todo!(),
-                },
-                AssignExpr::Ident(ident) => match stmt.kind {
-                    AssignKind::Equals => {
-                        let other = ctx.alloc.expect_var(ident.id);
-                        let value = ctx.builder.use_var(other);
-                        ctx.builder.def_var(var, value);
-                    }
-                    AssignKind::Add => {
-                        ctx.add(var, var, ctx.alloc.expect_var(ident.id));
-                    }
-                },
-                AssignExpr::Bin(bin) => match stmt.kind {
-                    AssignKind::Equals => {
-                        bin_op_fill_var(ctx, var, bin, clty);
-                    }
-                    AssignKind::Add => {
-                        let other = ctx.alloc.new_var();
-                        ctx.builder.declare_var(other, clty.expect_cl());
-                        bin_op_fill_var(ctx, other, bin, clty);
-                        ctx.add(var, var, other);
-                    }
-                },
-            }
-        }
-    }
-}
-
-fn let_stmt(ctx: &mut GenCtx, stmt: &Let) {
-    match stmt.lhs {
-        LetTarget::Ident(ident) => {
-            let var = ctx.alloc.register(ident.id);
-            let clty = ctx.ident_clty(ident.id);
-            //ctx.declare_var(var, clty);
-
-            match &stmt.rhs {
-                LetExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
-                    LitKind::Int(int) => {
-                        ctx.builder.declare_var(var, clty.expect_cl());
-                        let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
-                        ctx.builder.def_var(var, int);
-                    }
-                    _ => todo!(),
-                },
-                LetExpr::Ident(ident) => {
-                    ctx.builder.declare_var(var, clty.expect_cl());
-                    let other = ctx.alloc.expect_var(ident.id);
-                    let value = ctx.builder.use_var(other);
-                    ctx.builder.def_var(var, value);
-                }
-                LetExpr::Bin(bin) => {
-                    ctx.builder.declare_var(var, clty.expect_cl());
-                    bin_op_fill_var(ctx, var, bin, clty);
-                }
-                LetExpr::Struct(def) => {
-                    ctx.builder.declare_var(var, clty.expect_cl());
-                    let slot = ctx.builder.create_sized_stack_slot(StackSlotData {
-                        kind: StackSlotKind::ExplicitSlot,
-                        size: 8,
-                        align_shift: 2,
-                    });
-                }
-            }
-        }
-    }
-}
-
-fn bin_op_fill_var(ctx: &mut GenCtx, var: Variable, bin: &BinOp, clty: ClType) {
-    let lhs_var = ctx.alloc.new_var();
-    ctx.declare_var(lhs_var, clty);
-    bin_op_expr_fill_var(ctx, lhs_var, &bin.lhs, clty);
-
-    let rhs_var = ctx.alloc.new_var();
-    ctx.declare_var(rhs_var, clty);
-    bin_op_expr_fill_var(ctx, rhs_var, &bin.rhs, clty);
-
-    match bin.kind {
-        BinOpKind::Add => {
-            ctx.add(var, lhs_var, rhs_var);
-        }
-        BinOpKind::Sub => {
-            ctx.sub(var, lhs_var, rhs_var);
-        }
-        BinOpKind::Mul => {
-            ctx.mul(var, lhs_var, rhs_var);
-        }
-    }
-}
-
-fn bin_op_expr_fill_var(ctx: &mut GenCtx, var: Variable, expr: &BinOpExpr, clty: ClType) {
-    match expr {
-        BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
-            LitKind::Int(int) => {
-                let int = ctx.builder.ins().iconst(clty.expect_cl(), int);
-                ctx.builder.def_var(var, int);
-            }
-            _ => todo!(),
-        },
-        BinOpExpr::Bin(bin) => {
-            bin_op_fill_var(ctx, var, bin, clty);
-        }
-        BinOpExpr::Ident(ident) => {
-            let other = ctx.alloc.expect_var(ident.id);
-            let value = ctx.builder.use_var(other);
-            ctx.builder.def_var(var, value);
-        }
-        BinOpExpr::Call(call) => {
-            let func = ctx.declare_func(call.sig.ident);
-            let call = ctx.builder.ins().call(func, &[]);
-            let result = ctx.builder.inst_results(call);
-            ctx.builder.def_var(var, result[0]);
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct VarAlloc {
-    index: u32,
-    vars: HashMap<IdentId, Variable>,
-}
-
-impl VarAlloc {
-    pub fn new_var(&mut self) -> Variable {
-        let idx = self.index;
-        self.index += 1;
-
-        Variable::from_u32(idx)
-    }
-
-    pub fn register(&mut self, ident: IdentId) -> Variable {
-        let var = self.new_var();
-        self.vars.insert(ident, var);
-        var
-    }
-
-    pub fn get_var(&self, ident: IdentId) -> Option<Variable> {
-        self.vars.get(&ident).copied()
-    }
-
-    #[track_caller]
-    pub fn expect_var(&self, ident: IdentId) -> Variable {
-        self.get_var(ident).expect("invalid var")
     }
 }

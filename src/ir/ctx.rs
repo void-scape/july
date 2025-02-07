@@ -1,10 +1,3 @@
-use annotate_snippets::Level;
-//use super::block::*;
-//use super::expr::Expr;
-//use super::expr::ExprId;
-//use super::expr::ExprKind;
-//use super::expr::ExprStore;
-//use super::func::*;
 use super::ident::*;
 use super::lit::Lit;
 use super::lit::LitId;
@@ -15,7 +8,6 @@ use super::sig::SigStore;
 use super::strukt::Struct;
 use super::strukt::StructId;
 use super::strukt::StructStore;
-//use super::stmt::Stmt;
 use super::ty::*;
 use super::Func;
 use crate::diagnostic::Diag;
@@ -25,20 +17,17 @@ use crate::lex::buffer::Buffer;
 use crate::lex::buffer::Span;
 use crate::lex::buffer::TokenQuery;
 use crate::lex::buffer::{TokenBuffer, TokenId};
+use annotate_snippets::Level;
 
 #[derive(Debug)]
 pub struct Ctx<'a> {
     pub tokens: &'a TokenBuffer<'a>,
-    //pub exprs: ExprStore,
-    idents: IdentStore<'a>,
-    //pub blocks: BlockStore,
+    pub idents: IdentStore<'a>,
+    pub structs: StructStore,
+    pub funcs: Vec<Func>,
     lits: LitStore<'a>,
-    //pub funcs: FuncStore,
     ty: TyRegistry<'a>,
     sigs: SigStore,
-    structs: StructStore,
-    pub funcs: Vec<Func>,
-    //pub ty_ctx: TyCtx,
 }
 
 impl<'a> Buffer<'a> for Ctx<'a> {
@@ -51,15 +40,11 @@ impl<'a> Ctx<'a> {
     pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
         Self {
             idents: IdentStore::default(),
-            //blocks: BlockStore::default(),
-            //funcs: FuncStore::default(),
             ty: TyRegistry::default(),
             lits: LitStore::default(),
             sigs: SigStore::default(),
             structs: StructStore::default(),
             funcs: Vec::new(),
-            //exprs: ExprStore::default(),
-            //ty_ctx: TyCtx::default(),
             tokens,
         }
     }
@@ -90,9 +75,15 @@ impl<'a> Ctx<'a> {
         self.structs.struct_id(id)
     }
 
+    #[track_caller]
+    pub fn expect_struct_id(&self, id: IdentId) -> StructId {
+        self.structs.expect_struct_id(id)
+    }
+
     pub fn layout_structs(&mut self) {
-        let layouts = self.structs.layout(self).unwrap();
+        let (layouts, fields) = self.structs.build_layouts(self).unwrap();
         self.structs.layouts = layouts;
+        self.structs.fields = fields;
     }
 
     pub fn store_sig(&mut self, sig: Sig) {
@@ -140,40 +131,4 @@ impl<'a> Ctx<'a> {
     pub fn ty(&self, ty: TokenId) -> Option<Ty> {
         self.ty.ty_str(self.tokens.ident(ty))
     }
-
-    //pub fn key(&self) -> Result<TypeKey, Diag<'a>> {
-    //    match self.ty_ctx.resolve(self) {
-    //        Ok(map) => Ok(map),
-    //        Err(errs) => Err(self.errors(
-    //            "type resolution",
-    //            errs.iter().map(|e| match e {
-    //                TyErr::NotEnoughInfo(span, ty_var) => {
-    //                    let mut msg = None;
-    //                    for block in self.blocks.iter() {
-    //                        for stmt in block.stmts.iter() {
-    //                            match stmt {
-    //                                Stmt::Let(ident, _, expr) => {
-    //                                    if self.expr(*expr).ty == *ty_var {
-    //                                        msg = Some(Msg::error(ident.span, "cannot infer type"));
-    //                                        break;
-    //                                    }
-    //                                }
-    //                                _ => {}
-    //                            }
-    //                        }
-    //                        if msg.is_some() {
-    //                            break;
-    //                        }
-    //                    }
-    //
-    //                    msg.unwrap_or_else(|| Msg::error(*span, "cannot infer type"))
-    //                }
-    //                TyErr::Arch(span, arch, ty) => {
-    //                    Msg::error(*span, format!("`{ty:?}` does not satify `{arch:?}`"))
-    //                }
-    //                TyErr::Abs(span) => Msg::error(*span, format!("conflicting types")),
-    //            }),
-    //        )),
-    //    }
-    //}
 }

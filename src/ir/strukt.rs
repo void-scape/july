@@ -5,13 +5,32 @@ use super::LetExpr;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
-use std::fmt::Alignment;
 
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub span: Span,
     pub name: Ident,
     pub fields: Vec<Field>,
+}
+
+impl Struct {
+    pub fn get_field_ty(&self, field: IdentId) -> Option<FullTy> {
+        self.fields
+            .iter()
+            .find(|f| f.name.id == field)
+            .map(|f| f.ty)
+    }
+
+    #[track_caller]
+    pub fn field_ty(&self, field: IdentId) -> FullTy {
+        self.get_field_ty(field).expect("invalid field")
+    }
+
+    #[track_caller]
+    pub fn field_offset(&self, ctx: &Ctx, field: IdentId) -> i32 {
+        let map = ctx.structs.fields(ctx.expect_struct_id(self.name.id));
+        map.fields.get(&field).expect("invalid field").1
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +54,13 @@ pub struct FieldDef {
     pub expr: LetExpr,
 }
 
+#[derive(Debug, Clone)]
+pub struct FieldMap {
+    pub fields: HashMap<IdentId, (FullTy, ByteOffset)>,
+}
+
+pub type ByteOffset = i32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StructId(usize);
 
@@ -42,6 +68,7 @@ pub struct StructId(usize);
 pub struct StructStore {
     pub(super) map: HashMap<IdentId, StructId>,
     pub(super) layouts: HashMap<StructId, Layout>,
+    pub(super) fields: HashMap<StructId, FieldMap>,
     pub(super) buf: Vec<Struct>,
 }
 
@@ -53,24 +80,15 @@ impl StructStore {
         StructId(idx)
     }
 
-    pub fn strukt(&self, id: StructId) -> Option<&Struct> {
-        self.buf.get(id.0)
+    #[track_caller]
+    pub fn strukt(&self, id: StructId) -> &Struct {
+        self.buf.get(id.0).expect("invalid struct id")
     }
 
-    pub fn id(&self, ident: IdentId) -> Option<StructId> {
-        self.map.get(&ident).copied()
-    }
-
-    pub fn layout<'a>(&self, ctx: &Ctx<'a>) -> Result<HashMap<StructId, Layout>, Diag<'a>> {
-        let mut map = HashMap::default();
-
-        for (i, strukt) in self.buf.iter().enumerate() {
-            if !map.contains_key(&StructId(i)) {
-                self.layout_struct(ctx, &mut map, self.expect_struct_id(strukt.name.id), None)?;
-            }
-        }
-
-        Ok(map)
+    #[track_caller]
+    pub fn expect_struct_ident(&self, ident: IdentId) -> &Struct {
+        let id = self.expect_struct_id(ident);
+        self.strukt(id)
     }
 
     pub fn struct_id(&self, ident: IdentId) -> Option<StructId> {
@@ -78,14 +96,47 @@ impl StructStore {
     }
 
     #[track_caller]
-    fn expect_struct_id(&self, ident: IdentId) -> StructId {
+    pub fn expect_struct_id(&self, ident: IdentId) -> StructId {
         self.struct_id(ident).expect("invalid struct ident")
+    }
+
+    #[track_caller]
+    pub fn fields(&self, id: StructId) -> &FieldMap {
+        self.fields.get(&id).expect("invalid struct id")
+    }
+
+    #[track_caller]
+    pub fn layout(&self, id: StructId) -> Layout {
+        *self.layouts.get(&id).expect("invalid struct id")
+    }
+
+    pub(super) fn build_layouts<'a>(
+        &self,
+        ctx: &Ctx<'a>,
+    ) -> Result<(HashMap<StructId, Layout>, HashMap<StructId, FieldMap>), Diag<'a>> {
+        let mut map = HashMap::default();
+        let mut fields = HashMap::default();
+
+        for (i, strukt) in self.buf.iter().enumerate() {
+            if !map.contains_key(&StructId(i)) {
+                self.layout_struct(
+                    ctx,
+                    &mut map,
+                    &mut fields,
+                    self.expect_struct_id(strukt.name.id),
+                    None,
+                )?;
+            }
+        }
+
+        Ok((map, fields))
     }
 
     fn layout_struct<'a>(
         &self,
         ctx: &Ctx<'a>,
         layouts: &mut HashMap<StructId, Layout>,
+        offsets: &mut HashMap<StructId, FieldMap>,
         strukt: StructId,
         prev: Option<IdentId>,
     ) -> Result<(), Diag<'a>> {
@@ -118,7 +169,7 @@ impl StructStore {
 
         let name = strukt.name.id;
         for id in unresolved_layouts.iter() {
-            self.layout_struct(ctx, layouts, *id, Some(name))?
+            self.layout_struct(ctx, layouts, offsets, *id, Some(name))?
         }
 
         let strukt = &self.buf[struct_id.0];
@@ -143,13 +194,28 @@ impl StructStore {
             }
         }
 
+        let mut struct_offsets = HashMap::new();
         let mut byte = 0;
-        for layout in struct_layouts.iter() {
-            //if layout.
+        for (layout, field) in struct_layouts.iter().zip(strukt.fields.iter()) {
+            while byte % layout.alignment != 0 {
+                byte += 1;
+            }
+
+            struct_offsets.insert(field.name.id, (field.ty, byte as i32));
+            byte += layout.size;
         }
 
-        println!("pushing: {struct_id:?}");
-        layouts.insert(struct_id, Layout::splat(1));
+        while byte % alignment != 0 {
+            byte += 1;
+        }
+
+        layouts.insert(struct_id, Layout::new(byte, alignment));
+        offsets.insert(
+            struct_id,
+            FieldMap {
+                fields: struct_offsets,
+            },
+        );
 
         Ok(())
     }
@@ -168,5 +234,15 @@ impl Layout {
 
     pub fn splat(n: usize) -> Self {
         Self::new(n, n)
+    }
+
+    pub fn align_shift(&self) -> u8 {
+        match self.alignment {
+            1 => 0,
+            2 => 1,
+            4 => 2,
+            8 => 3,
+            _ => panic!("invalid alignment"),
+        }
     }
 }

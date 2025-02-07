@@ -13,5 +13,6 @@ cranelift-module = "0.116.1"
 cranelift-native = "0.116.1"
 cranelift-object = "0.116.1"
 serde = {version = "1.0.217", features = ["derive"]}
+target-lexicon = "0.13.1"
 variadics_please = "1.1.0"
 winnow = "0.6.24"

@@ -3,7 +3,7 @@ use super::ty::FullTy;
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Sig {
     pub span: Span,
     pub ident: IdentId,

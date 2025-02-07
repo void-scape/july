@@ -1,11 +1,12 @@
 use super::ctx::Ctx;
 use super::ident::IdentId;
 use super::strukt::Layout;
-use crate::lex::buffer::{Span, TokenQuery};
+use super::FuncHash;
+use crate::lex::buffer::Span;
 use std::collections::HashMap;
 
 /// Primitive type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ty {
     Unit,
     Int(IntKind),
@@ -51,7 +52,7 @@ impl Ty {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntKind {
     I8,
     I16,
@@ -85,7 +86,7 @@ impl IntKind {
 }
 
 /// Unifies primitive and user types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FullTy {
     Ty(Ty),
     Struct(IdentId),
@@ -141,27 +142,33 @@ impl FullTy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyVar(usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VarHash {
+    pub ident: IdentId,
+    pub func: FuncHash,
+}
+
 #[derive(Debug, Default)]
 pub struct TyCtx {
     consts: Vec<Vec<Constraint>>,
-    idents: HashMap<IdentId, TyVar>,
+    vars: HashMap<VarHash, TyVar>,
 }
 
 impl TyCtx {
-    pub fn var(&mut self, ident: IdentId) -> TyVar {
+    pub fn var(&mut self, ident: IdentId, func: FuncHash) -> TyVar {
         let idx = self.consts.len();
-        self.idents.insert(ident, TyVar(idx));
+        self.vars.insert(VarHash { ident, func }, TyVar(idx));
         self.consts.push(Vec::new());
         TyVar(idx)
     }
 
-    pub fn try_get_var(&self, ident: IdentId) -> Option<TyVar> {
-        self.idents.get(&ident).copied()
+    pub fn try_get_var(&self, ident: IdentId, func: FuncHash) -> Option<TyVar> {
+        self.vars.get(&VarHash { ident, func }).copied()
     }
 
     #[track_caller]
-    pub fn get_var(&self, ident: IdentId) -> TyVar {
-        self.try_get_var(ident).expect("invalid ident")
+    pub fn get_var(&self, ident: IdentId, func: FuncHash) -> TyVar {
+        self.try_get_var(ident, func).expect("invalid ident")
     }
 
     #[track_caller]
@@ -174,7 +181,7 @@ impl TyCtx {
 
     pub fn resolve(&self, ctx: &Ctx) -> Result<TypeKey, Vec<TyErr>> {
         let map = self
-            .idents
+            .vars
             .iter()
             .map(|(ident, var)| (*var, *ident))
             .collect::<HashMap<_, _>>();
@@ -246,18 +253,20 @@ impl<'a> TyRegistry<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Constraint {
     pub span: Span,
     pub kind: ConstraintKind,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ConstraintKind {
     Arch(Arch),
     Equate(TyVar),
     Abs(Ty),
     Struct(IdentId),
+    // TODO: this makes me want to throw up
+    Field(Vec<IdentId>, Box<Constraint>),
 }
 
 impl ConstraintKind {
@@ -273,6 +282,7 @@ impl ConstraintKind {
             Self::Arch(arch) => Some(ty.is_ty_and(|ty| arch.satisfies(*ty))),
             Self::Abs(abs) => Some(ty.is_ty_and(|ty| abs == ty)),
             Self::Struct(strukt) => Some(ty.is_struct_and(|s| s == strukt)),
+            Self::Field(_, _) => None,
             Self::Equate(_) => None,
         }
     }
@@ -282,6 +292,7 @@ impl ConstraintKind {
             Self::Arch(arch) => Some(matches!(arch, Arch::Int)),
             Self::Abs(abs) => Some(abs.is_int()),
             Self::Struct(_) => Some(false),
+            Self::Field(_, _) => None,
             Self::Equate(_) => None,
         }
     }
@@ -302,30 +313,37 @@ impl Constraint {
         var: TyVar,
         constraints: &[Constraint],
     ) -> Result<FullTy, TyErr> {
+        println!("{:#?}", ty_ctx);
         let mut archs = Vec::with_capacity(constraints.len());
         let mut abs = None;
         let mut strukt = None;
-        //let mut equates = Vec::new();
+        let mut field_constraints = HashMap::<&[IdentId], Vec<Box<Constraint>>>::new();
 
         let mut constraints = constraints.to_vec();
         Self::resolve_equates(ty_ctx, ctx, &mut constraints, &mut vec![var]);
 
         for c in constraints.iter() {
-            match c.kind {
+            match &c.kind {
                 ConstraintKind::Abs(ty) => {
-                    if abs.is_some_and(|abs| abs != ty) {
+                    if abs.is_some_and(|abs| abs != *ty) {
                         return Err(TyErr::Abs(c.span));
                     }
 
-                    abs = Some(ty);
+                    abs = Some(*ty);
                 }
                 ConstraintKind::Arch(a) => archs.push((c.span, a)),
                 ConstraintKind::Struct(s) => {
-                    if strukt.is_some_and(|ident| s != ident) {
-                        return Err(TyErr::Struct(s));
+                    if strukt.is_some_and(|ident| ident != *s) {
+                        return Err(TyErr::Struct(*s));
                     }
 
-                    strukt = Some(s);
+                    strukt = Some(*s);
+                }
+                ConstraintKind::Field(path, constraint) => {
+                    field_constraints
+                        .entry(&path)
+                        .or_default()
+                        .push(constraint.clone());
                 }
                 _ => unreachable!(),
             }
@@ -338,8 +356,12 @@ impl Constraint {
 
             for (span, arch) in archs.iter() {
                 if !arch.satisfies(abs) {
-                    return Err(TyErr::Arch(*span, *arch, abs));
+                    return Err(TyErr::Arch(*span, **arch, abs));
                 }
+            }
+
+            if !field_constraints.is_empty() {
+                panic!("accessor on a primitive");
             }
 
             Ok(FullTy::Ty(abs))
@@ -347,6 +369,42 @@ impl Constraint {
             for (_span, _arch) in archs.iter() {
                 panic!("type err");
                 //return Err(TyErr::Arch(*span, *arch, abs));
+            }
+
+            let mut struct_def = ctx.structs.expect_struct_ident(strukt);
+            for (path, constraints) in field_constraints.iter() {
+                for (i, field) in path.iter().enumerate() {
+                    if let Some(ty) = struct_def.get_field_ty(*field) {
+                        match ty {
+                            FullTy::Ty(ty) => {
+                                if path.len() - 1 == i {
+                                    let mut constraints = constraints
+                                        .iter()
+                                        .map(|c| c.as_ref().clone())
+                                        .collect::<Vec<_>>();
+                                    constraints.push(Constraint {
+                                        span: struct_def.span,
+                                        kind: ConstraintKind::Abs(ty),
+                                    });
+
+                                    Constraint::unify(
+                                        ty_ctx,
+                                        ctx,
+                                        TyVar(usize::MAX),
+                                        &constraints,
+                                    )?;
+                                } else {
+                                    todo!("invalid field path: {:#?}", path);
+                                }
+                            }
+                            FullTy::Struct(s) => {
+                                struct_def = ctx.structs.expect_struct_ident(s);
+                            }
+                        }
+                    } else {
+                        todo!("invalid field path: {:#?}", path);
+                    }
+                }
             }
 
             Ok(FullTy::Struct(strukt))
@@ -370,18 +428,24 @@ impl Constraint {
 
         *constraints = constraints
             .iter()
-            .copied()
+            .cloned()
             .flat_map(|c| match c.kind {
                 ConstraintKind::Equate(other) => {
                     if !resolved.contains(&other) {
                         resolved.push(other);
-                        new_constraints.extend(ty_ctx.consts[other.0].iter().filter(|c| {
-                            if let ConstraintKind::Equate(other) = c.kind {
-                                !resolved.contains(&other)
-                            } else {
-                                true
-                            }
-                        }))
+                        new_constraints.extend(
+                            ty_ctx.consts[other.0]
+                                .iter()
+                                .cloned()
+                                .filter(|c| {
+                                    if let ConstraintKind::Equate(other) = c.kind {
+                                        !resolved.contains(&other)
+                                    } else {
+                                        true
+                                    }
+                                })
+                                .clone(),
+                        )
                     }
 
                     None
@@ -417,12 +481,15 @@ impl Arch {
 }
 
 pub struct TypeKey {
-    key: HashMap<IdentId, FullTy>,
+    key: HashMap<VarHash, FullTy>,
 }
 
 impl TypeKey {
     #[track_caller]
-    pub fn ty(&self, ident: IdentId) -> FullTy {
-        *self.key.get(&ident).expect("invalid type var")
+    pub fn ty(&self, ident: IdentId, func: FuncHash) -> FullTy {
+        *self
+            .key
+            .get(&VarHash { ident, func })
+            .expect("invalid type var")
     }
 }

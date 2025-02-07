@@ -35,6 +35,7 @@ where
             | TokenKind::Hyphen
             | TokenKind::Greater
             | TokenKind::Comma
+            | TokenKind::Dot
             | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
             TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
             TokenKind::Ident => format!("expected {}", kind.as_str()),
@@ -135,3 +136,4 @@ impl_tkt!(CloseParen, TokenKind::CloseParen);
 impl_tkt!(Hyphen, TokenKind::Hyphen);
 impl_tkt!(Greater, TokenKind::Greater);
 impl_tkt!(Comma, TokenKind::Comma);
+impl_tkt!(Dot, TokenKind::Dot);
