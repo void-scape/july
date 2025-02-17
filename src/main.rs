@@ -2,8 +2,10 @@ use self::unit::comp::CompUnit;
 use std::process::Command;
 
 mod codegen;
+mod interp;
 mod diagnostic;
 mod ir;
+mod air;
 mod lex;
 mod parse;
 mod unit;
@@ -11,9 +13,10 @@ mod unit;
 fn main() {
     let file = std::env::args().nth(1).expect("no input file given");
     let unit = CompUnit::new(file).unwrap();
-    if unit.compile().is_ok() {
-        run();
-    }
+    unit.compile().unwrap();
+    //if unit.compile().is_ok() {
+    //    //run();
+    //}
 }
 
 fn run() {

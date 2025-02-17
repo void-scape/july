@@ -1,6 +1,7 @@
 use super::ctx::Ctx;
 use super::ident::IdentId;
-use super::strukt::Layout;
+use super::mem::Layout;
+use super::strukt::StructId;
 use super::FuncHash;
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
@@ -13,6 +14,10 @@ pub enum Ty {
 }
 
 impl Ty {
+    pub fn pointer() -> Self {
+        Self::Int(IntKind::I64)
+    }
+
     pub fn is_unit(&self) -> bool {
         matches!(self, Ty::Unit)
     }
@@ -89,7 +94,7 @@ impl IntKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FullTy {
     Ty(Ty),
-    Struct(IdentId),
+    Struct(StructId),
 }
 
 impl FullTy {
@@ -101,17 +106,21 @@ impl FullTy {
         self.is_ty_and(|ty| ty.is_int())
     }
 
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, FullTy::Ty(_))
+    }
+
     pub fn is_ty_and(&self, f: impl FnOnce(&Ty) -> bool) -> bool {
         match self {
             Self::Ty(ty) => f(ty),
-            Self::Struct(_) => false,
+            _ => false,
         }
     }
 
-    pub fn is_struct_and(&self, f: impl FnOnce(&IdentId) -> bool) -> bool {
+    pub fn is_struct_and(&self, f: impl FnOnce(&StructId) -> bool) -> bool {
         match self {
             Self::Struct(strukt) => f(strukt),
-            Self::Ty(_) => false,
+            _ => false,
         }
     }
 
@@ -119,22 +128,22 @@ impl FullTy {
     pub fn expect_ty(&self) -> Ty {
         match self {
             Self::Ty(ty) => *ty,
-            Self::Struct(_) => panic!("expected ty"),
+            _ => panic!("expected ty"),
         }
     }
 
     #[track_caller]
-    pub fn expect_struct(&self) -> IdentId {
+    pub fn expect_struct(&self) -> StructId {
         match self {
             Self::Struct(s) => *s,
-            Self::Ty(_) => panic!("expected struct"),
+            _ => panic!("expected struct"),
         }
     }
 
     pub fn as_str<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
         match self {
             Self::Ty(ty) => ty.as_str(),
-            Self::Struct(s) => ctx.expect_ident(*s),
+            Self::Struct(s) => ctx.expect_ident(ctx.structs.strukt(*s).name.id),
         }
     }
 }
@@ -264,7 +273,8 @@ pub enum ConstraintKind {
     Arch(Arch),
     Equate(TyVar),
     Abs(Ty),
-    Struct(IdentId),
+    Struct(StructId),
+    EnumVariant(IdentId, IdentId),
     // TODO: this makes me want to throw up
     Field(Vec<IdentId>, Box<Constraint>),
 }
@@ -282,6 +292,7 @@ impl ConstraintKind {
             Self::Arch(arch) => Some(ty.is_ty_and(|ty| arch.satisfies(*ty))),
             Self::Abs(abs) => Some(ty.is_ty_and(|ty| abs == ty)),
             Self::Struct(strukt) => Some(ty.is_struct_and(|s| s == strukt)),
+            Self::EnumVariant(_, _) => todo!(),
             Self::Field(_, _) => None,
             Self::Equate(_) => None,
         }
@@ -292,6 +303,7 @@ impl ConstraintKind {
             Self::Arch(arch) => Some(matches!(arch, Arch::Int)),
             Self::Abs(abs) => Some(abs.is_int()),
             Self::Struct(_) => Some(false),
+            Self::EnumVariant(_, _) => Some(false),
             Self::Field(_, _) => None,
             Self::Equate(_) => None,
         }
@@ -303,7 +315,7 @@ pub enum TyErr {
     NotEnoughInfo(Span, TyVar),
     Arch(Span, Arch, Ty),
     Abs(Span),
-    Struct(IdentId),
+    Struct(StructId),
 }
 
 impl Constraint {
@@ -313,9 +325,10 @@ impl Constraint {
         var: TyVar,
         constraints: &[Constraint],
     ) -> Result<FullTy, TyErr> {
-        println!("{:#?}", ty_ctx);
+        //println!("{:#?}", ty_ctx);
         let mut archs = Vec::with_capacity(constraints.len());
         let mut abs = None;
+        let mut enom = None;
         let mut strukt = None;
         let mut field_constraints = HashMap::<&[IdentId], Vec<Box<Constraint>>>::new();
 
@@ -339,6 +352,15 @@ impl Constraint {
 
                     strukt = Some(*s);
                 }
+                ConstraintKind::EnumVariant(eno, variant) => {
+                    if enom.is_some_and(|(other_e, other_v)| *eno != other_e || *variant != other_v)
+                    {
+                        todo!();
+                        //return Err(TyErr::Struct(*s));
+                    }
+
+                    enom = Some((*eno, *variant));
+                }
                 ConstraintKind::Field(path, constraint) => {
                     field_constraints
                         .entry(&path)
@@ -354,6 +376,10 @@ impl Constraint {
                 return Err(TyErr::Struct(strukt.unwrap()));
             }
 
+            if enom.is_some() {
+                todo!()
+            }
+
             for (span, arch) in archs.iter() {
                 if !arch.satisfies(abs) {
                     return Err(TyErr::Arch(*span, **arch, abs));
@@ -365,13 +391,20 @@ impl Constraint {
             }
 
             Ok(FullTy::Ty(abs))
+        } else if let Some((enom, _)) = enom {
+            todo!()
+            //if strukt.is_some() {
+            //    return Err(TyErr::Struct(strukt.unwrap()));
+            //}
+            //
+            //Ok(FullTy::Struct(enom))
         } else if let Some(strukt) = strukt {
             for (_span, _arch) in archs.iter() {
                 panic!("type err");
                 //return Err(TyErr::Arch(*span, *arch, abs));
             }
 
-            let mut struct_def = ctx.structs.expect_struct_ident(strukt);
+            let mut struct_def = ctx.structs.strukt(strukt);
             for (path, constraints) in field_constraints.iter() {
                 for (i, field) in path.iter().enumerate() {
                     if let Some(ty) = struct_def.get_field_ty(*field) {
@@ -398,7 +431,7 @@ impl Constraint {
                                 }
                             }
                             FullTy::Struct(s) => {
-                                struct_def = ctx.structs.expect_struct_ident(s);
+                                struct_def = ctx.structs.strukt(s);
                             }
                         }
                     } else {

@@ -40,7 +40,7 @@ impl<'a> ParserRule<'a> for BlockRules {
                 Ok(Block { span, stmts })
             }
             Err(e) => {
-                stream.eat_until_consume(CloseCurly);
+                stream.eat_until_consume::<CloseCurly>();
                 Err(e)
             }
         }

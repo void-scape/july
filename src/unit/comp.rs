@@ -4,7 +4,7 @@ use crate::lex::buffer::TokenBuffer;
 use crate::lex::Lexer;
 use crate::parse::Parser;
 use crate::unit::io;
-use crate::{codegen, diagnostic, ir};
+use crate::{air, codegen, diagnostic, interp, ir};
 use std::path::Path;
 
 pub struct CompUnit {
@@ -21,9 +21,17 @@ impl CompUnit {
     pub fn compile<'a>(&'a self) -> Result<(), ()> {
         fn compile<'a>(buf: &'a TokenBuffer<'a>) -> Result<(), Vec<Diag<'a>>> {
             let items = Parser::parse(&buf)?;
-            let ctx = ir::lower(&buf, &items);
+            let ctx = ir::lower(&buf, &items).map_err(|_| Vec::new())?;
             let key = ir::resolve_types(&ctx)?;
-            io::write("out.o", &codegen::codegen(&ctx, &key)).unwrap();
+            let air_funcs = ctx
+                .funcs
+                .iter()
+                .map(|func| air::lower_func(&ctx, &key, func))
+                .collect::<Vec<_>>();
+            let exit = interp::run(&ctx, &air_funcs).unwrap();
+            println!("exit: {exit}");
+
+            //io::write("out.o", &codegen::codegen(&ctx, &key, &air_funcs)).unwrap();
             Ok(())
         }
 

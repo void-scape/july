@@ -1,3 +1,6 @@
+use super::enom::Enum;
+use super::enom::EnumId;
+use super::enom::EnumStore;
 use super::ident::*;
 use super::lit::Lit;
 use super::lit::LitId;
@@ -24,6 +27,7 @@ pub struct Ctx<'a> {
     pub tokens: &'a TokenBuffer<'a>,
     pub idents: IdentStore<'a>,
     pub structs: StructStore,
+    pub enums: EnumStore,
     pub funcs: Vec<Func>,
     lits: LitStore<'a>,
     ty: TyRegistry<'a>,
@@ -44,6 +48,7 @@ impl<'a> Ctx<'a> {
             lits: LitStore::default(),
             sigs: SigStore::default(),
             structs: StructStore::default(),
+            enums: EnumStore::default(),
             funcs: Vec::new(),
             tokens,
         }
@@ -65,14 +70,24 @@ impl<'a> Ctx<'a> {
         self.funcs.extend(funcs.into_iter());
     }
 
-    pub fn store_structs(&mut self, structs: Vec<Struct>) {
-        for strukt in structs.into_iter() {
-            self.structs.store(strukt);
-        }
-    }
+    //pub fn store_structs(&mut self, structs: Vec<Struct>) {
+    //    for strukt in structs.into_iter() {
+    //        println!("store: {strukt:#?}");
+    //        self.structs.store(strukt);
+    //    }
+    //}
 
     pub fn struct_id(&self, id: IdentId) -> Option<StructId> {
         self.structs.struct_id(id)
+    }
+
+    pub fn struct_name(&self, id: StructId) -> &str {
+        let strukt = self.structs.strukt(id);
+        self.expect_ident(strukt.name.id)
+    }
+
+    pub fn struct_def(&self, id: StructId) -> &Struct {
+        self.structs.strukt(id)
     }
 
     #[track_caller]
@@ -80,14 +95,30 @@ impl<'a> Ctx<'a> {
         self.structs.expect_struct_id(id)
     }
 
-    pub fn layout_structs(&mut self) {
+    pub fn store_enums(&mut self, enums: Vec<Enum>) {
+        for enom in enums.into_iter() {
+            self.enums.store(enom);
+        }
+    }
+
+    #[track_caller]
+    pub fn expect_enum_id(&self, id: IdentId) -> EnumId {
+        self.enums.expect_enum_id(id)
+    }
+
+    pub fn build_type_layouts(&mut self) {
         let (layouts, fields) = self.structs.build_layouts(self).unwrap();
         self.structs.layouts = layouts;
         self.structs.fields = fields;
+        let (layouts, variants) = self.enums.build_layouts(self).unwrap();
+        self.enums.layouts = layouts;
+        self.enums.variants = variants;
     }
 
-    pub fn store_sig(&mut self, sig: Sig) {
-        self.sigs.store(sig);
+    pub fn store_sigs(&mut self, sigs: Vec<Sig>) {
+        for sig in sigs.into_iter() {
+            self.sigs.store(sig);
+        }
     }
 
     pub fn get_sig(&self, ident: IdentId) -> Option<&Sig> {

@@ -1,8 +1,10 @@
+use super::enom::EnumDef;
 use super::strukt::StructDef;
 use super::{Next, ParserRule, RResult};
 use crate::ir::{AssignKind, BinOpKind};
 use crate::lex::{buffer::*, kind::*};
 use crate::parse::combinator::opt::Opt;
+use crate::parse::rules::enom::EnumDefRule;
 use crate::parse::rules::strukt::StructDefRule;
 use crate::parse::{matc::*, stream::TokenStream};
 
@@ -15,6 +17,7 @@ pub enum Expr {
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
     StructDef(StructDef),
+    EnumDef(EnumDef),
     Call { span: Span, func: TokenId },
 }
 
@@ -264,9 +267,12 @@ impl<'a> ParserRule<'a> for ExprRule {
                 *stream = str;
                 let def = StructDefRule::parse(buffer, stream, stack)?;
                 return Ok(Expr::StructDef(def));
+            } else if stream.match_peek::<Colon>() {
+                *stream = str;
+                let def = EnumDefRule::parse(buffer, stream, stack)?;
+                return Ok(Expr::EnumDef(def));
             }
         }
-
         *stream = str;
 
         #[derive(Debug)]

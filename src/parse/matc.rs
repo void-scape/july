@@ -18,6 +18,7 @@ where
         let kind = T::kind();
         match kind {
             TokenKind::Let
+            | TokenKind::Enum
             | TokenKind::Struct
             | TokenKind::Fn
             | TokenKind::Ret
@@ -118,6 +119,7 @@ macro_rules! impl_tkt {
     };
 }
 
+impl_tkt!(Enum, TokenKind::Enum);
 impl_tkt!(Fn, TokenKind::Fn);
 impl_tkt!(Struct, TokenKind::Struct);
 impl_tkt!(Ret, TokenKind::Ret);

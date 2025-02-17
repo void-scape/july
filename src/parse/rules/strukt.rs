@@ -1,5 +1,6 @@
 use super::expr::{Expr, ExprRule};
 use super::{Next, ParserRule, RResult};
+use crate::diagnostic::Msg;
 use crate::lex::buffer::*;
 use crate::parse::combinator::opt::Opt;
 use crate::parse::combinator::spanned::Spanned;
@@ -61,6 +62,7 @@ impl<'a> ParserRule<'a> for StructBlockRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
+        let start = buffer.span(stream.prev());
         match Spanned::<(Next<OpenCurly>, StructFieldDecl, Next<CloseCurly>)>::parse(
             buffer, stream, stack,
         ) {
@@ -70,8 +72,15 @@ impl<'a> ParserRule<'a> for StructBlockRule {
                 Ok((span, fields))
             }
             Err(e) => {
-                stream.eat_until_consume(CloseCurly);
-                Err(e)
+                stream.eat_until::<CloseCurly>();
+                if let Some(t) = stream.next() {
+                    Err(e.msg(Msg::note(
+                        Span::from_spans(start, buffer.span(t)),
+                        "while parsing this struct",
+                    )))
+                } else {
+                    Err(e)
+                }
             }
         }
     }
@@ -175,7 +184,7 @@ impl<'a> ParserRule<'a> for StructDefBlockRule {
                 Ok((span, fields))
             }
             Err(e) => {
-                stream.eat_until_consume(CloseCurly);
+                stream.eat_until_consume::<CloseCurly>();
                 Err(e)
             }
         }

@@ -3,6 +3,8 @@
 pub enum TokenKind {
     /// `struct`
     Struct,
+    /// `enum`
+    Enum,
     /// `let`
     Let,
     /// `fn`
@@ -50,6 +52,7 @@ pub enum TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Enum => "enum",
             Self::Struct => "struct",
             Self::Let => "let",
             Self::Fn => "fn",

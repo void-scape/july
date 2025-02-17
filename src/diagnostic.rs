@@ -74,6 +74,18 @@ pub struct DiagInner<'a> {
     origin: Cow<'a, str>,
     level: Level,
     msgs: Vec<Msg>,
+    reported: bool,
+}
+
+impl Drop for DiagInner<'_> {
+    fn drop(&mut self) {
+        if !self.reported {
+            //panic!("unreported error: {:#?}", self);
+        }
+
+        let _ = std::mem::take(&mut self.msgs);
+        let _ = std::mem::replace(&mut self.origin, Cow::Borrowed(""));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +185,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
             source: self.source.raw(),
             origin: self.source.origin().to_string_lossy(),
             level: Level::Error,
+            reported: false,
 
             msgs: vec![Msg::new(
                 self.inner.inner.level,
@@ -191,6 +204,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
             origin: self.source.origin().to_string_lossy(),
             level: Level::Error,
             msgs: vec![self.inner],
+            reported: false,
         }
     }
 }
@@ -203,12 +217,13 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
             origin: self.source.origin().to_string_lossy(),
             level: self.inner,
             msgs: Vec::new(),
+            reported: false,
         }
     }
 }
 
 pub fn report(diag: Diag) {
-    for diag in diag.into_inner() {
+    for mut diag in diag.into_inner() {
         let message = diag.level.title(diag.title).snippet(
             Snippet::source(&diag.source)
                 .origin(&diag.origin)
@@ -221,6 +236,7 @@ pub fn report(diag: Diag) {
         );
 
         let renderer = Renderer::styled();
-        anstream::println!("{}", renderer.render(message))
+        anstream::println!("{}", renderer.render(message));
+        diag.reported = true;
     }
 }

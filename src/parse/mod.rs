@@ -1,4 +1,5 @@
-use self::rules::prelude::{Func, Struct};
+use self::matc::{Any, Colon, Ident, MatchTokenKind};
+use self::rules::prelude::{Enum, Func, Struct};
 use self::rules::ParserRule;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
@@ -13,6 +14,7 @@ pub const PARSE_ERR: &'static str = "failed to parse";
 
 #[derive(Debug)]
 pub enum Item {
+    Enum(Enum),
     Struct(Struct),
     Func(Func),
 }
@@ -31,25 +33,50 @@ impl Parser {
         let mut stream = buffer.stream();
 
         while !stream.is_empty() {
-            if buffer.kind(stream.peek().unwrap()) == TokenKind::Ident
-                && buffer.kind(stream.peekn(1).unwrap()) == TokenKind::Colon
-                && buffer.kind(stream.peekn(2).unwrap()) == TokenKind::Struct
-            {
-                match rules::prelude::StructRule::parse(buffer, &mut stream, &mut stack) {
-                    Err(diag) => {
-                        diags.push(diag);
-                    }
-                    Ok(s) => {
-                        items.push(Item::Struct(s));
+            match (
+                stream.peek().map(|t| buffer.kind(t)),
+                stream.peekn(1).map(|t| buffer.kind(t)),
+                stream.peekn(2).map(|t| buffer.kind(t)),
+            ) {
+                (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Enum)) => {
+                    match rules::prelude::EnumRule::parse(buffer, &mut stream, &mut stack) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(e) => {
+                            items.push(Item::Enum(e));
+                        }
                     }
                 }
-            } else {
-                match rules::prelude::FnRule::parse(buffer, &mut stream, &mut stack) {
-                    Err(diag) => {
-                        diags.push(diag);
+                (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Struct)) => {
+                    match rules::prelude::StructRule::parse(buffer, &mut stream, &mut stack) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(s) => {
+                            items.push(Item::Struct(s));
+                        }
                     }
-                    Ok(f) => {
-                        items.push(Item::Func(f));
+                }
+                (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::OpenParen)) => {
+                    match rules::prelude::FnRule::parse(buffer, &mut stream, &mut stack) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(f) => {
+                            items.push(Item::Func(f));
+                        }
+                    }
+                }
+                _ => {
+                    diags.push(stream.error("expected a `struct`, `enum`, or `function`"));
+                    while !Ident::matches(stream.peek().map(|t| buffer.kind(t)))
+                        || !Colon::matches(stream.peekn(1).map(|t| buffer.kind(t)))
+                        || !Any::<(matc::Enum, matc::Struct, matc::OpenParen)>::matches(
+                            stream.peekn(2).map(|t| buffer.kind(t)),
+                        )
+                    {
+                        stream.eat();
                     }
                 }
             }

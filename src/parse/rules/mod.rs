@@ -9,6 +9,7 @@ use crate::{
 use std::marker::PhantomData;
 
 mod block;
+mod enom;
 mod expr;
 mod func;
 mod stmt;
@@ -16,6 +17,7 @@ mod strukt;
 
 #[allow(unused)]
 pub mod prelude {
+    pub use super::enom::*;
     pub use super::block::*;
     pub use super::expr::*;
     pub use super::func::*;

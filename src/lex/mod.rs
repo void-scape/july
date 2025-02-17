@@ -132,6 +132,7 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     let token = match result {
         "fn" => TokenKind::Fn,
         "struct" => TokenKind::Struct,
+        "enum" => TokenKind::Enum,
         "return" => TokenKind::Ret,
         "let" => TokenKind::Let,
         _ => TokenKind::Ident,

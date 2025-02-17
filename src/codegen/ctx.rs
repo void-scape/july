@@ -1,4 +1,5 @@
 use super::var::*;
+use crate::air;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::ir::ty::{FullTy, TypeKey, VarHash};
@@ -12,11 +13,11 @@ use std::ops::Deref;
 
 pub struct GenCtx<'a> {
     pub builder: FunctionBuilder<'a>,
+    pub module: &'a mut ObjectModule,
+    cached_vars: HashMap<air::Var, Var>,
     func: FuncHash,
-    alloc: VarAlloc,
     key: &'a TypeKey,
     ctx: &'a Ctx<'a>,
-    module: &'a mut ObjectModule,
     func_map: &'a HashMap<IdentId, FuncId>,
 }
 
@@ -38,7 +39,7 @@ impl<'a> GenCtx<'a> {
         func_map: &'a HashMap<IdentId, FuncId>,
     ) -> Self {
         Self {
-            alloc: VarAlloc::default(),
+            cached_vars: HashMap::default(),
             func,
             builder,
             ctx,
@@ -46,19 +47,6 @@ impl<'a> GenCtx<'a> {
             key,
             func_map,
         }
-    }
-
-    pub fn new_var(&mut self) -> Variable {
-        self.alloc.new_var()
-    }
-
-    pub fn register(&mut self, ident: IdentId, var: Var) {
-        self.alloc.register(ident, self.func, var);
-    }
-
-    #[track_caller]
-    pub fn var(&self, ident: IdentId) -> &Var {
-        self.alloc.var(ident, self.func)
     }
 
     #[track_caller]
@@ -69,6 +57,23 @@ impl<'a> GenCtx<'a> {
     pub fn declare_func(&mut self, ident: IdentId) -> FuncRef {
         let id = self.func_map.get(&ident).unwrap();
         self.module.declare_func_in_func(*id, self.builder.func)
+    }
+
+    pub fn register_var(&mut self, air_var: air::Var, var: Var) {
+        self.cached_vars.insert(air_var, var);
+    }
+
+    pub fn clvar(&self, air_var: air::Var) -> Variable {
+        Variable::from_u32(air_var.index() as u32)
+    }
+
+    pub fn get_var(&self, air_var: air::Var) -> Option<Var> {
+        self.cached_vars.get(&air_var).cloned()
+    }
+
+    #[track_caller]
+    pub fn expect_var(&self, air_var: air::Var) -> Var {
+        self.get_var(air_var).expect("invalid var")
     }
 
     //pub fn add(&mut self, dest: Variable, lhs: impl IntoValue, rhs: impl IntoValue) {
@@ -108,29 +113,3 @@ impl<'a> GenCtx<'a> {
 //        ctx.builder.use_var(self)
 //    }
 //}
-
-#[derive(Default)]
-struct VarAlloc {
-    index: u32,
-    vars: HashMap<VarHash, Var>,
-}
-
-impl VarAlloc {
-    pub fn new_var(&mut self) -> Variable {
-        let idx = self.index;
-        self.index += 1;
-
-        Variable::from_u32(idx)
-    }
-
-    pub fn register(&mut self, ident: IdentId, func: FuncHash, var: Var) {
-        self.vars.insert(VarHash { ident, func }, var);
-    }
-
-    #[track_caller]
-    pub fn var(&self, ident: IdentId, func: FuncHash) -> &Var {
-        self.vars
-            .get(&VarHash { ident, func })
-            .expect("invalid var")
-    }
-}

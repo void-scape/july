@@ -1,5 +1,6 @@
 use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
+use super::mem::Layout;
 use super::ty::FullTy;
 use super::LetExpr;
 use crate::diagnostic::Diag;
@@ -43,7 +44,7 @@ pub struct Field {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub span: Span,
-    pub name: Ident,
+    pub id: StructId,
     pub fields: Vec<FieldDef>,
 }
 
@@ -62,7 +63,7 @@ pub struct FieldMap {
 pub type ByteOffset = i32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StructId(usize);
+pub struct StructId(pub(super) usize);
 
 #[derive(Debug, Default)]
 pub struct StructStore {
@@ -78,6 +79,11 @@ impl StructStore {
         self.map.insert(strukt.name.id, StructId(idx));
         self.buf.push(strukt);
         StructId(idx)
+    }
+
+    pub fn set_storage(&mut self, map: HashMap<IdentId, StructId>, buf: Vec<Struct>) {
+        self.map = map;
+        self.buf = buf;
     }
 
     #[track_caller]
@@ -129,6 +135,8 @@ impl StructStore {
             }
         }
 
+        //println!("{:#?}", map);
+
         Ok((map, fields))
     }
 
@@ -138,7 +146,7 @@ impl StructStore {
         layouts: &mut HashMap<StructId, Layout>,
         offsets: &mut HashMap<StructId, FieldMap>,
         strukt: StructId,
-        prev: Option<IdentId>,
+        prev: Option<StructId>,
     ) -> Result<(), Diag<'a>> {
         let struct_id = strukt;
         let strukt = &self.buf[strukt.0];
@@ -160,16 +168,14 @@ impl StructStore {
         for field in strukt.fields.iter() {
             match field.ty {
                 FullTy::Struct(s) => {
-                    let id = self.expect_struct_id(s);
-                    unresolved_layouts.push(id);
+                    unresolved_layouts.push(s);
                 }
                 _ => {}
             }
         }
 
-        let name = strukt.name.id;
         for id in unresolved_layouts.iter() {
-            self.layout_struct(ctx, layouts, offsets, *id, Some(name))?
+            self.layout_struct(ctx, layouts, offsets, *id, Some(struct_id))?
         }
 
         let strukt = &self.buf[struct_id.0];
@@ -177,8 +183,7 @@ impl StructStore {
         for field in strukt.fields.iter() {
             match field.ty {
                 FullTy::Struct(s) => {
-                    let id = self.expect_struct_id(s);
-                    let layout = layouts.get(&id).unwrap();
+                    let layout = layouts.get(&s).unwrap();
                     struct_layouts.push(*layout);
                 }
                 FullTy::Ty(ty) => {
@@ -218,31 +223,5 @@ impl StructStore {
         );
 
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Layout {
-    pub size: usize,
-    pub alignment: usize,
-}
-
-impl Layout {
-    pub fn new(size: usize, alignment: usize) -> Self {
-        Self { size, alignment }
-    }
-
-    pub fn splat(n: usize) -> Self {
-        Self::new(n, n)
-    }
-
-    pub fn align_shift(&self) -> u8 {
-        match self.alignment {
-            1 => 0,
-            2 => 1,
-            4 => 2,
-            8 => 3,
-            _ => panic!("invalid alignment"),
-        }
     }
 }

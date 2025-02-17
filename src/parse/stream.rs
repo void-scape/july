@@ -101,7 +101,7 @@ impl<'a> TokenStream<'a> {
         }
     }
 
-    pub fn eat_until_consume<T: MatchTokenKind>(&mut self, _token: T) {
+    pub fn eat_until_consume<T: MatchTokenKind>(&mut self) {
         while self
             .peek()
             .is_some_and(|t| !T::matches(Some(self.buffer.kind(t))))
