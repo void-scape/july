@@ -1,10 +1,10 @@
 use super::source::Source;
+use crate::air::ctx::AirCtx;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::TokenBuffer;
 use crate::lex::Lexer;
 use crate::parse::Parser;
-use crate::unit::io;
-use crate::{air, codegen, diagnostic, interp, ir};
+use crate::{air, diagnostic, interp, ir};
 use std::path::Path;
 
 pub struct CompUnit {
@@ -23,10 +23,11 @@ impl CompUnit {
             let items = Parser::parse(&buf)?;
             let ctx = ir::lower(&buf, &items).map_err(|_| Vec::new())?;
             let key = ir::resolve_types(&ctx)?;
+            let mut air_ctx = AirCtx::new(&ctx, &key);
             let air_funcs = ctx
                 .funcs
                 .iter()
-                .map(|func| air::lower_func(&ctx, &key, func))
+                .map(|func| air::lower_func(&mut air_ctx, func))
                 .collect::<Vec<_>>();
             let exit = interp::run(&ctx, &air_funcs).unwrap();
             println!("exit: {exit}");

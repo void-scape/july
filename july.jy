@@ -1,27 +1,6 @@
-// Hello, Sailor!
-main: () -> i32 {
-    operations()
-}
-
-operations: () -> i32 {
-    // Here is an exciting variable binding!
-    let x = num() + ((10 + 2) * 2); // x = 25
-    x += 1 + 2; // 28
-
-    // let z = 10; // ---> Compiler error!
-    let y = 4; // y = 4
-    y = y - 2; // y = 2
-
-    // 28 + 2 = 30
-    x + y // or `return x + y;`
-}
-
-num: () -> i32 {
-    1
-}
+// ------------ Structs ------------
 
 // size: 24, alignment: 8
-// #[derive(Copy)]
 Sandwich: struct {
     /*
     * Structs have C style representation, with
@@ -32,39 +11,6 @@ Sandwich: struct {
     // lettuce: Lettuce,
                       // padding: 6
 }
-
-// where `DeriveMacro` = (ty: T) -> TokenStream
-// impl_copy: DeriveMacro {
-//     let stream = TokenStream::new();
-//
-//     let name = T::name();
-//     let fields: Vec<String> = ty.fields.iter().map(|field| {
-//         let name = field.name;
-//         stream! { #name: self.#name.copy(), }
-//     }).collect();
-//
-//     stream.append(stream! {
-//         impl Copy for #name {
-//             copy: (&self) -> Self {
-//                 Self {
-//                     #(#fields)*,
-//                 }
-//             }
-//         }
-//     });
-//
-//     stream
-// }
-//
-// impl_copy: (ty: T) -> Impl(T) {
-//     match ty.info() {
-//         TyInfo::Struct(data) => {
-//             let t_impl = Impl::new(Copy).for(T);
-//             t_impl.func(Func::new(Body::new(FuncDef::new(ty, fields))))
-//         }
-//         ty => diag!("Cannot impl copy for `{}`", ty),
-//     }
-// }
 
 // size: 16, alignment: 8
 Bread: struct {
@@ -79,22 +25,132 @@ Lettuce: enum {
     Soggy, // 1
 }
 
-// make: () -> Sandwich {
-//     let sandwich = Sandwich {
-//         butter: 69,
-//         bread: Bread {
-//             grain: 72,
-//             seed: 2,
-//         }
-//     };
+// ------------ Return Statements ------------
 //
-//     // sandwich.butter = 42;
-//     // sandwich.bread = Bread {
-//     //     grain: 27,
-//     //     seed: 5,
-//     // };
+// ```
+// return [<expr>];
+// ```
 //
-//     sandwich
+// ```
+// some_block: i32 {
+//     <expr: i32>
 // }
+// ```
+
+return_statement: () -> i64 {
+    return 42;
+}
+
+int_lit: () -> i32 {
+    12
+}
+
+bin_op: () -> i32 {
+    int_lit() + 4
+}
+
+struct_definition: () -> Bread {
+    Bread {
+        grain: 12,
+        seed: 4,
+    }
+}
+
+strukt_field: () -> i64 {
+    let bread = struct_definition();
+
+    bread.seed
+}
+
+variable: () -> Bread {
+    let bread = struct_definition();
+
+    bread
+}
+
+procedure: () -> Bread {
+    struct_definition()
+}
+
+// ------------ Assignment Statements ------------
+//
+// ```
+// <var> [+]= <expr>;
+// ```
+//
+
+assign: () -> i32 {
+    let x = 10;
+
+    x = 4;
+
+    x
+}
+
+var_2_var: () -> i32 {
+    let x = assign();
+    let y: i32 = x;
+
+    let bread = Bread {
+        // grain: assign(),
+        grain: 12,
+        seed: 4,
+    };
+    let other: Bread = bread;
+    // other.grain = y;
+
+    // let s = Sandwich {
+    //     butter: 98,
+    //     bread: struct_definition(),
+    // };
+
+    // other.grain = s.bread.grain;
+
+    // s.bread.grain
 
 
+    // y + other.grain + 4 + assign() // 24
+    // other.grain + assign() // 16
+    other.grain + y // 16
+}
+
+struct_field: () -> i64 {
+    let bread = Bread {
+        grain: 12,
+        seed: 4,
+    };
+
+    bread.seed = 29;
+
+    bread.seed
+}
+
+conjugate: () -> i32 {
+    let x = 68;
+
+    // x = x + 1
+    x += 1;
+
+    x
+}
+
+// ------------ Demo ------------
+
+main: () -> i32 {
+    var_2_var()
+    // operations()
+}
+
+operations: () -> i32 {
+    let x = num() + ((10 + 2) * 2); // x = 25
+    x += 1 + 2; // 28
+
+    let y = 4; // y = 4
+    y = y - 2; // y = 2
+
+    x + y // 28 + 2 = 30
+}
+
+num: () -> i32 {
+    return 1;
+}

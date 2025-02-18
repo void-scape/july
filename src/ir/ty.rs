@@ -18,6 +18,14 @@ impl Ty {
         Self::Int(IntKind::I64)
     }
 
+    #[track_caller]
+    pub fn expect_int(&self) -> IntKind {
+        match self {
+            Self::Int(kind) => *kind,
+            other => panic!("expected int, got `{other:?}`"),
+        }
+    }
+
     pub fn is_unit(&self) -> bool {
         matches!(self, Ty::Unit)
     }

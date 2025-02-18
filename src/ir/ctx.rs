@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::enom::Enum;
 use super::enom::EnumId;
 use super::enom::EnumStore;
@@ -115,10 +117,22 @@ impl<'a> Ctx<'a> {
         self.enums.variants = variants;
     }
 
-    pub fn store_sigs(&mut self, sigs: Vec<Sig>) {
+    pub fn store_sigs(&mut self, sigs: Vec<Sig>) -> Result<(), Diag<'a>> {
+        let mut set = HashSet::<&Sig>::default();
+        for sig in sigs.iter() {
+            if !set.insert(sig) {
+                return Err(self.errors(
+                    "duplicate function names",
+                    [Msg::error(sig.span, "Function is already defined")],
+                ));
+            }
+        }
+
         for sig in sigs.into_iter() {
             self.sigs.store(sig);
         }
+
+        Ok(())
     }
 
     pub fn get_sig(&self, ident: IdentId) -> Option<&Sig> {

@@ -308,16 +308,20 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
     Ok(match stmt {
         rules::Stmt::Let { name, ty, assign } => {
             let ty = if let Some(ty) = ty {
-                Some((
-                    ctx.span(*ty),
-                    ctx.ty(*ty).ok_or_else(|| {
-                        ctx.error(
-                            SYM_DEF,
-                            ctx.span(*ty),
-                            format!("`{}` is not a type, expected a type", ctx.ident(*ty)),
-                        )
-                    })?,
-                ))
+                let ident = ctx.store_ident(*ty).id;
+                match ctx.ty(*ty) {
+                    Some(prim_ty) => Some((ctx.span(*ty), FullTy::Ty(prim_ty))),
+                    None => match ctx.structs.struct_id(ident) {
+                        Some(id) => Some((ctx.span(*ty), FullTy::Struct(id))),
+                        None => {
+                            return Err(ctx.error(
+                                SYM_DEF,
+                                ctx.span(*ty),
+                                format!("`{}` is not a type, expected a type", ctx.ident(*ty)),
+                            ));
+                        }
+                    },
+                }
             } else {
                 None
             };
@@ -334,11 +338,14 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
                 span: assign.assign_span,
                 kind: assign.kind,
                 lhs: assign_target(ctx, &assign.lhs)?,
-                rhs: assign_expr(ctx, &assign.rhs)?,
+                rhs: let_expr(ctx, &assign.rhs)?,
             })),
             rules::Expr::Ret(span, expr) => Stmt::Semi(SemiStmt::Ret(Return {
                 span: *span,
-                expr: ret_expr(ctx, expr.as_deref()).unwrap(),
+                expr: match expr {
+                    Some(expr) => Some(open_stmt(ctx, &expr)?),
+                    None => None,
+                },
             })),
             rules::Expr::Bin(_, _, _) => Stmt::Semi(SemiStmt::Bin(bin_op(ctx, expr)?)),
             rules::Expr::Call { span, func } => {
@@ -346,23 +353,25 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
             }
             expr => todo!("{expr:#?}"),
         },
-        rules::Stmt::Open(expr) => match expr {
-            rules::Expr::Ident(ident) => Stmt::Open(OpenStmt::Ident(ctx.store_ident(*ident))),
-            rules::Expr::Lit(lit) => Stmt::Open(OpenStmt::Lit(ctx.store_int(*lit))),
-            rules::Expr::Bin(_, _, _) => Stmt::Open(OpenStmt::Bin(bin_op(ctx, expr)?)),
-            rules::Expr::Call { span, func } => {
-                Stmt::Open(OpenStmt::Call(call(ctx, *span, *func)?))
-            }
-            rules::Expr::StructDef(def) => Stmt::Open(OpenStmt::Struct(struct_def(ctx, def)?)),
-            _ => todo!(),
-        },
+        rules::Stmt::Open(expr) => Stmt::Open(open_stmt(ctx, &expr)?),
+    })
+}
+
+fn open_stmt<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<OpenStmt, Diag<'a>> {
+    Ok(match expr {
+        rules::Expr::Ident(ident) => OpenStmt::Ident(ctx.store_ident(*ident)),
+        rules::Expr::Lit(lit) => OpenStmt::Lit(ctx.store_int(*lit)),
+        rules::Expr::Bin(_, _, _) => OpenStmt::Bin(bin_op(ctx, expr)?),
+        rules::Expr::Call { span, func } => OpenStmt::Call(call(ctx, *span, *func)?),
+        rules::Expr::StructDef(def) => OpenStmt::Struct(struct_def(ctx, def)?),
+        _ => todo!(),
     })
 }
 
 #[derive(Debug, Clone)]
 pub struct Let {
     pub span: Span,
-    pub ty: Option<(Span, Ty)>,
+    pub ty: Option<(Span, FullTy)>,
     pub lhs: LetTarget,
     pub rhs: LetExpr,
 }
@@ -454,6 +463,10 @@ impl BinOpKind {
             Self::Field => false,
         }
     }
+
+    pub fn is_field(&self) -> bool {
+        matches!(self, Self::Field)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -491,9 +504,10 @@ pub struct Assign {
     pub span: Span,
     pub kind: AssignKind,
     pub lhs: AssignTarget,
-    pub rhs: AssignExpr,
+    pub rhs: LetExpr,
 }
 
+// TODO: more assignment kinds
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignKind {
     Equals,
@@ -504,14 +518,6 @@ pub enum AssignKind {
 pub enum AssignTarget {
     Ident(Ident),
     Field(BinOp),
-}
-
-#[derive(Debug, Clone)]
-pub enum AssignExpr {
-    Ident(Ident),
-    Lit(Lit),
-    Bin(BinOp),
-    Struct(StructDef),
 }
 
 fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarget, Diag<'a>> {
@@ -528,41 +534,10 @@ fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarg
     })
 }
 
-fn assign_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignExpr, Diag<'a>> {
-    Ok(match expr {
-        rules::Expr::Ident(ident) => AssignExpr::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Lit(lit) => AssignExpr::Lit(ctx.store_int(*lit)),
-        rules::Expr::Bin(_, _, _) => AssignExpr::Bin(bin_op(ctx, expr)?),
-        rules::Expr::StructDef(def) => AssignExpr::Struct(struct_def(ctx, def)?),
-        _ => todo!(),
-    })
-}
-
 #[derive(Debug, Clone)]
 pub struct Return {
     pub span: Span,
-    pub expr: RetExpr,
-}
-
-#[derive(Debug, Clone)]
-pub enum RetExpr {
-    Unit,
-    Ident(Ident),
-    Lit(Lit),
-    Bin(BinOp),
-}
-
-fn ret_expr<'a>(ctx: &mut Ctx<'a>, expr: Option<&rules::Expr>) -> Result<RetExpr, Diag<'a>> {
-    if let Some(expr) = expr {
-        Ok(match expr {
-            rules::Expr::Ident(ident) => RetExpr::Ident(ctx.store_ident(*ident)),
-            rules::Expr::Lit(lit) => RetExpr::Lit(ctx.store_int(*lit)),
-            rules::Expr::Bin(_, _, _) => RetExpr::Bin(bin_op(ctx, expr)?),
-            _ => todo!(),
-        })
-    } else {
-        Ok(RetExpr::Unit)
-    }
+    pub expr: Option<OpenStmt>,
 }
 
 #[derive(Debug, Clone)]
@@ -604,7 +579,7 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                                 ty_ctx.constrain(
                                     var,
                                     Constraint {
-                                        kind: ConstraintKind::Abs(ty),
+                                        kind: ConstraintKind::full(ty),
                                         span,
                                     },
                                 );
@@ -614,7 +589,7 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                     SemiStmt::Assign(assign) => match &assign.lhs {
                         AssignTarget::Ident(ident) => {
                             let var = ty_ctx.get_var(ident.id, hash);
-                            assign_expr_constrain(ctx, &mut ty_ctx, var, &assign.rhs, hash);
+                            let_expr_constrain(ctx, &mut ty_ctx, var, &assign.rhs, hash);
                         }
                         AssignTarget::Field(field) => match field.lhs {
                             BinOpExpr::Ident(ident) => {
@@ -645,13 +620,10 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                     },
                     SemiStmt::Bin(bin) => bin_op_constrain_unkown(ctx, &mut ty_ctx, bin, hash),
                     SemiStmt::Ret(ret) => match &ret.expr {
-                        RetExpr::Unit => {
-                            assert!(func.sig.ty.is_ty_and(|ty| ty.is_unit()));
-                        }
-                        RetExpr::Lit(_) => {
+                        Some(OpenStmt::Lit(_)) => {
                             assert!(func.sig.ty.is_ty_and(|ty| ty.is_int()));
                         }
-                        RetExpr::Bin(bin) => {
+                        Some(OpenStmt::Bin(bin)) => {
                             let constraint = Constraint {
                                 span: func.sig.span,
                                 kind: ConstraintKind::full(func.sig.ty),
@@ -660,7 +632,7 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                             bin_op_constrain_to(ctx, &mut ty_ctx, constraint, bin, hash)
                                 .map_err(|d| vec![d])?
                         }
-                        RetExpr::Ident(ident) => {
+                        Some(OpenStmt::Ident(ident)) => {
                             let var = ty_ctx.get_var(ident.id, hash);
                             ty_ctx.constrain(
                                 var,
@@ -670,6 +642,18 @@ pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
                                 },
                             );
                         }
+                        Some(OpenStmt::Call(Call { sig, .. })) => {
+                            if sig.ty != func.sig.ty {
+                                todo!("error")
+                            }
+                        }
+                        Some(OpenStmt::Struct(def)) => match func.sig.ty {
+                            FullTy::Struct(sig_id) => {
+                                assert_eq!(def.id, sig_id);
+                            }
+                            _ => todo!("error"),
+                        },
+                        None => {}
                     },
                     SemiStmt::Call(_) => {}
                 },
@@ -807,63 +791,7 @@ fn let_expr_constrain<'a>(
                 },
             );
         }
-        LetExpr::Ident(_) => todo!(),
-    }
-}
-
-fn assign_expr_constrain<'a>(
-    ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    var: TyVar,
-    expr: &AssignExpr,
-    hash: FuncHash,
-) {
-    match expr {
-        AssignExpr::Lit(lit) => {
-            lit_constrain(ctx, ty_ctx, var, lit);
-        }
-        AssignExpr::Bin(bin) => {
-            bin_op_constrain(ctx, ty_ctx, var, bin, hash);
-        }
-        AssignExpr::Struct(def) => {
-            ty_ctx.constrain(
-                var,
-                Constraint {
-                    span: def.span,
-                    kind: ConstraintKind::full(FullTy::Struct(def.id)),
-                },
-            );
-        }
-        AssignExpr::Ident(_) => todo!(),
-    }
-}
-
-fn assign_expr_constrain_to<'a>(
-    ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    constraint: Constraint,
-    expr: &AssignExpr,
-    hash: FuncHash,
-) {
-    match expr {
-        AssignExpr::Lit(_) => {
-            if constraint.kind.is_int().is_some_and(|i| !i) {
-                todo!();
-            }
-        }
-        AssignExpr::Struct(def) => {
-            if constraint
-                .kind
-                .hint_satisfies(FullTy::Struct(def.id))
-                .is_some_and(|i| !i)
-            {
-                todo!();
-            }
-        }
-        AssignExpr::Bin(bin) => {
-            bin_op_constrain_to(ctx, ty_ctx, constraint, bin, hash);
-        }
-        AssignExpr::Ident(_) => todo!(),
+        LetExpr::Ident(_) => {}
     }
 }
 
