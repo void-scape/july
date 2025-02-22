@@ -57,11 +57,12 @@ impl<'a> Ctx<'a> {
     }
 
     #[track_caller]
-    pub fn error(&self, title: &'static str, span: Span, msg: impl Into<String>) -> Diag<'a> {
-        Diag::sourced(title, self.tokens.source(), Msg::error(span, msg))
+    pub fn error(&self, title: impl Into<String>, span: Span, msg: impl Into<String>) -> Diag<'a> {
+        Diag::sourced(title.into(), self.tokens.source(), Msg::error(span, msg))
             .with_loc(std::panic::Location::caller())
     }
 
+    #[track_caller]
     pub fn mismatch<E: DebugTyId, G: DebugTyId>(
         &self,
         span: Span,
@@ -77,9 +78,25 @@ impl<'a> Ctx<'a> {
                 got.debug_ty_id(self)
             ),
         )
+        .with_loc(std::panic::Location::caller())
     }
 
-    pub fn errors(&self, title: &'static str, msgs: impl IntoIterator<Item = Msg>) -> Diag<'a> {
+    #[track_caller]
+    pub fn undeclared(&self, ident: &Ident) -> Diag<'a> {
+        self.error(
+            "undeclared variable",
+            ident.span,
+            format!("`{}` is not declared", self.expect_ident(ident.id),),
+        )
+        .with_loc(std::panic::Location::caller())
+    }
+
+    #[track_caller]
+    pub fn errors(
+        &self,
+        title: impl Into<String>,
+        msgs: impl IntoIterator<Item = Msg>,
+    ) -> Diag<'a> {
         let mut diag = Diag::new(title, Sourced::new(self.tokens.source(), Level::Error));
         for msg in msgs {
             diag = diag.msg(msg);

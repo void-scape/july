@@ -202,11 +202,12 @@ fn air_bin_semi(ctx: &mut AirCtx, bin: &BinOp) {
     }
 }
 
-fn air_bin_semi_expr(ctx: &mut AirCtx, expr: &BinOpExpr) {
+fn air_bin_semi_expr(ctx: &mut AirCtx, expr: &Expr) {
     match &expr {
-        BinOpExpr::Bin(bin) => air_bin_semi(ctx, bin),
-        BinOpExpr::Call(Call { sig, .. }) => ctx.call(sig),
-        BinOpExpr::Lit(_) | BinOpExpr::Ident(_) => {}
+        Expr::Bin(bin) => air_bin_semi(ctx, bin),
+        Expr::Call(Call { sig, .. }) => ctx.call(sig),
+        Expr::Lit(_) | Expr::Ident(_) => {}
+        _ => todo!(),
     }
 }
 
@@ -215,23 +216,23 @@ fn air_let_stmt(ctx: &mut AirCtx, stmt: &Let) {
         LetTarget::Ident(ident) => {
             let ty = ctx.var_ty(ident.id);
             let dst = ctx.new_var_registered(ident.id, ty);
-            assign_let_expr(ctx, OffsetVar::zero(dst), ty, &stmt.rhs);
+            assign_expr(ctx, OffsetVar::zero(dst), ty, &stmt.rhs);
         }
     }
 }
 
-fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &LetExpr) {
+fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &Expr) {
     match &expr {
-        LetExpr::Lit(lit) => {
+        Expr::Lit(lit) => {
             assign_lit(ctx, lit, dst, ty);
         }
-        LetExpr::Bin(bin) => {
+        Expr::Bin(bin) => {
             assign_bin_op(ctx, dst, ty, bin);
         }
-        LetExpr::Struct(def) => {
+        Expr::Struct(def) => {
             define_struct(ctx, def, dst);
         }
-        LetExpr::Call(Call { sig, .. }) => {
+        Expr::Call(Call { sig, .. }) => {
             ctx.ins(Air::Call(*sig));
             match ctx.tys.ty(sig.ty) {
                 Ty::Int(ty) => {
@@ -259,7 +260,7 @@ fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &LetExpr) {
                 Ty::Unit => todo!(),
             }
         }
-        LetExpr::Ident(ident) => {
+        Expr::Ident(ident) => {
             let other = OffsetVar::zero(ctx.expect_var(ident.id));
 
             match ctx.tys.ty(ty) {
@@ -285,7 +286,7 @@ fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &LetExpr) {
                 Ty::Unit => todo!(),
             }
         }
-        LetExpr::Enum(_) => {
+        Expr::Enum(_) => {
             todo!()
         }
     }
@@ -297,7 +298,7 @@ fn define_struct(ctx: &mut AirCtx, def: &StructDef, dst: OffsetVar) {
         let field_offset = strukt.field_offset(ctx, field.name.id);
         let ty = strukt.field_ty(field.name.id);
 
-        assign_let_expr(
+        assign_expr(
             ctx,
             OffsetVar::new(dst.var, dst.offset + field_offset as usize),
             ty,
@@ -317,7 +318,7 @@ fn air_assign_stmt(ctx: &mut AirCtx, stmt: &Assign) {
 
     match stmt.kind {
         AssignKind::Equals => {
-            assign_let_expr(ctx, var, ty, &stmt.rhs);
+            assign_expr(ctx, var, ty, &stmt.rhs);
         }
         AssignKind::Add => {
             let tmp = OffsetVar::zero(ctx.anon_var(ty));
@@ -327,7 +328,7 @@ fn air_assign_stmt(ctx: &mut AirCtx, stmt: &Assign) {
                 kind,
                 src: var,
             });
-            assign_let_expr(ctx, var, ty, &stmt.rhs);
+            assign_expr(ctx, var, ty, &stmt.rhs);
             add!(ctx, kind, var, tmp, var);
         }
     }

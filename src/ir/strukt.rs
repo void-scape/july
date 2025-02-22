@@ -1,8 +1,7 @@
 use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
 use super::ty::store::TyId;
-use super::ty::Ty;
-use super::LetExpr;
+use super::Expr;
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
 
@@ -51,7 +50,7 @@ pub struct StructDef {
 pub struct FieldDef {
     pub span: Span,
     pub name: Ident,
-    pub expr: LetExpr,
+    pub expr: Expr,
 }
 
 #[derive(Debug, Clone)]

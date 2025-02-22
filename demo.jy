@@ -12,12 +12,25 @@ Sandwich: struct {
                       // padding: 6
 }
 
+
 // size: 16, alignment: 8
 Bread: struct {
     grain: i32, // size:     4, alignment: 4
                 // padding:  4
     seed: i64,  // size:     8, alignment: 8
 }
+
+// Recursive structs have infinite size!
+/*
+* Cheese: struct {
+*     tomato: Tomato,
+* }
+*
+* Tomato: struct {
+*     girth: i32,
+*     cheese: Cheese,
+* }
+*/
 
 // size: 1, alignment: 1
 Lettuce: enum {
@@ -96,22 +109,8 @@ var_2_var: () -> i32 {
         grain: 12,
         seed: 4,
     };
-    let other: Bread = bread;
-    // other.grain = y;
+    let other = bread;
 
-    // let s = Sandwich {
-    //     butter: 98,
-    //     bread: struct_definition(),
-    // };
-
-    // other.grain = s.bread.grain;
-
-    // s.bread.grain
-
-    2 + 4;
-
-    // y + other.grain + 4 + assign() // 24
-    // other.grain + assign() // 16
     other.grain + y // 16
 }
 

@@ -12,7 +12,7 @@ mod unit;
 
 fn main() {
     let file = std::env::args().nth(1).expect("no input file given");
-    let unit = CompUnit::new(file).unwrap();
+    let unit = CompUnit::new(file).expect("invalid file path");
     unit.compile();
     //if unit.compile().is_ok() {
     //    //run();

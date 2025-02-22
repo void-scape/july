@@ -1,8 +1,6 @@
 use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
 use super::mem::Layout;
-use super::ty::Ty;
-use super::LetExpr;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::Span;
 use std::collections::HashMap;

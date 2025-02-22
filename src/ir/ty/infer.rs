@@ -1,19 +1,11 @@
-use super::store::{TyId, TyStore};
-use super::{Ty, TyVar, TypeKey, VarHash};
-use crate::diagnostic::{self, Diag};
+use super::store::TyId;
+use super::{TyVar, TypeKey, VarHash};
+use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
-use crate::ir::strukt::StructId;
 use crate::ir::{Func, FuncHash};
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, Copy)]
-pub struct FnSpans {
-    pub name: Span,
-    pub sig: Span,
-    pub block: Span,
-}
 
 #[derive(Debug, Default)]
 pub struct InferCtx {
@@ -21,7 +13,6 @@ pub struct InferCtx {
     vars: HashMap<VarHash, (TyVar, Span)>,
     constraints: HashMap<TyVar, (VarHash, Vec<Cnst>)>,
     var_index: usize,
-    spans: Option<FnSpans>,
     hash: Option<FuncHash>,
 }
 
@@ -41,11 +32,6 @@ pub enum CnstKind {
 
 impl InferCtx {
     pub fn for_func(&mut self, func: &Func) {
-        self.spans = Some(FnSpans {
-            name: func.name_span,
-            sig: func.sig.span,
-            block: func.block.span,
-        });
         self.hash = Some(func.hash());
     }
 
@@ -133,27 +119,6 @@ impl InferCtx {
             .expect("called `InferCtx::fn_hash` without first calling `InferCtx::for_func`")
     }
 
-    #[track_caller]
-    pub fn fn_spans(&self) -> FnSpans {
-        self.spans
-            .expect("called `InferCtx::fn_spans` without first calling `InferCtx::for_func`")
-    }
-
-    #[track_caller]
-    pub fn fn_name(&self) -> Span {
-        self.fn_spans().name
-    }
-
-    #[track_caller]
-    pub fn fn_sig(&self) -> Span {
-        self.fn_spans().sig
-    }
-
-    #[track_caller]
-    pub fn fn_block(&self) -> Span {
-        self.fn_spans().block
-    }
-
     fn unify<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Vec<Diag<'a>>> {
         let mut errors = Vec::new();
 
@@ -191,7 +156,7 @@ impl InferCtx {
         var: TyVar,
         constraints: &[Cnst],
     ) -> Result<TyId, Diag<'a>> {
-        let mut integral = false;
+        let mut integral = None;
         let mut abs = None;
 
         let mut constraints = constraints.to_vec();
@@ -208,15 +173,19 @@ impl InferCtx {
                     abs = Some(*ty);
                 }
                 CnstKind::Integral => {
-                    integral = true;
+                    integral = Some(c.src);
                 }
                 CnstKind::Equate(_) => unreachable!(),
             }
         }
 
         if let Some(abs) = abs {
-            if integral && !ctx.tys.ty(abs).is_int() {
-                panic!("expected integral");
+            if let Some(span) = integral {
+                if !ctx.tys.ty(abs).is_int() {
+                    return Err(ctx
+                        .mismatch(self.var_span(var), "an integer", abs)
+                        .msg(Msg::note(span, "due to this binding")));
+                }
             }
 
             Ok(abs)

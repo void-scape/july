@@ -2,7 +2,6 @@ use super::ctx::AirCtx;
 use super::{IntKind, OffsetVar};
 use crate::air::ctx::RET_REG;
 use crate::air::{Air, Reg};
-use crate::ir::ident::IdentId;
 use crate::ir::lit::LitKind;
 use crate::ir::ty::store::TyId;
 use crate::ir::ty::Ty;
@@ -131,16 +130,17 @@ where
     Self: AllBinOpLeaves,
 {
     fn visit(&self, ctx: &mut AirCtx, kind: IntKind, dst: OffsetVar, bin: &BinOp) {
+        assert!(bin.kind.is_primitive());
         match &bin.lhs {
-            BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
                 LitKind::Int(lhs_lit) => match &bin.rhs {
-                    BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                    Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
                         LitKind::Int(rhs_lit) => {
                             self.visit_leaf(ctx, dst, lhs_lit, rhs_lit);
                         }
                         _ => unreachable!(),
                     },
-                    BinOpExpr::Bin(inner_bin) => {
+                    Expr::Bin(inner_bin) => {
                         if inner_bin.kind.is_field() {
                             let (field_var, field_ty) = aquire_bin_field_offset(ctx, inner_bin);
                             let field_ty = ctx.tys.ty(field_ty);
@@ -156,29 +156,30 @@ where
                             self.visit_leaf(ctx, dst, lhs_lit, dst);
                         }
                     }
-                    BinOpExpr::Call(Call { sig, .. }) => {
+                    Expr::Call(Call { sig, .. }) => {
                         let sig_ty = ctx.tys.ty(sig.ty);
                         assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                         ctx.ins(Air::Call(*sig));
                         self.visit_leaf(ctx, dst, lhs_lit, Reg::A);
                     }
-                    BinOpExpr::Ident(ident) => {
+                    Expr::Ident(ident) => {
                         let rhs = ctx.expect_var(ident.id);
                         self.visit_leaf(ctx, dst, lhs_lit, OffsetVar::zero(rhs));
                     }
+                    Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
                 },
                 _ => unreachable!(),
             },
-            BinOpExpr::Ident(ident) => {
+            Expr::Ident(ident) => {
                 let var = OffsetVar::zero(ctx.expect_var(ident.id));
                 match &bin.rhs {
-                    BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                    Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
                         LitKind::Int(lit) => {
                             self.visit_leaf(ctx, dst, var, lit);
                         }
                         _ => unreachable!(),
                     },
-                    BinOpExpr::Bin(inner_bin) => {
+                    Expr::Bin(inner_bin) => {
                         if inner_bin.kind.is_field() {
                             let (field_var, field_ty) = aquire_bin_field_offset(ctx, inner_bin);
                             let field_ty = ctx.tys.ty(field_ty);
@@ -194,29 +195,30 @@ where
                             self.visit_leaf(ctx, dst, var, dst);
                         }
                     }
-                    BinOpExpr::Ident(ident) => {
+                    Expr::Ident(ident) => {
                         self.visit_leaf(ctx, dst, var, OffsetVar::zero(ctx.expect_var(ident.id)));
                     }
-                    BinOpExpr::Call(Call { sig, .. }) => {
+                    Expr::Call(Call { sig, .. }) => {
                         let sig_ty = ctx.tys.ty(sig.ty);
                         assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                         ctx.ins(Air::Call(*sig));
                         self.visit_leaf(ctx, dst, var, Reg::A);
                     }
+                    Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
                 }
             }
-            BinOpExpr::Call(Call { sig, .. }) => {
+            Expr::Call(Call { sig, .. }) => {
                 let sig_ty = ctx.tys.ty(sig.ty);
                 assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                 match &bin.rhs {
-                    BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                    Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
                         LitKind::Int(lit) => {
                             ctx.ins(Air::Call(*sig));
                             self.visit_leaf(ctx, dst, Reg::A, lit);
                         }
                         _ => unreachable!(),
                     },
-                    BinOpExpr::Bin(inner_bin) => {
+                    Expr::Bin(inner_bin) => {
                         if inner_bin.kind.is_field() {
                             let (field_var, field_ty) = aquire_bin_field_offset(ctx, inner_bin);
                             ctx.ins(Air::Call(*sig));
@@ -236,7 +238,7 @@ where
                             self.visit_leaf(ctx, dst, Reg::A, dst);
                         }
                     }
-                    BinOpExpr::Ident(ident) => {
+                    Expr::Ident(ident) => {
                         ctx.ins(Air::Call(*sig));
                         self.visit_leaf(
                             ctx,
@@ -245,7 +247,7 @@ where
                             OffsetVar::zero(ctx.expect_var(ident.id)),
                         );
                     }
-                    BinOpExpr::Call(Call { sig: other_sig, .. }) => {
+                    Expr::Call(Call { sig: other_sig, .. }) => {
                         let sig_ty = sig.ty;
                         let tmp = OffsetVar::zero(ctx.anon_var(sig_ty));
 
@@ -266,9 +268,11 @@ where
                         ]);
                         self.visit_leaf(ctx, dst, Reg::B, Reg::A);
                     }
+                    Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
                 }
             }
-            BinOpExpr::Bin(_) => unreachable!(),
+            Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
+            Expr::Bin(_) => unreachable!(),
         }
     }
 }

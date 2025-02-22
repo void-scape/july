@@ -16,15 +16,17 @@ pub enum DiagInnerPtr<'a> {
 }
 
 impl<'a> Diag<'a> {
-    pub fn new(title: &'static str, diag: impl Diagnostic<'a>) -> Self {
+    pub fn new(title: impl Into<String>, diag: impl Diagnostic<'a>) -> Self {
         Self {
-            inner: DiagInnerPtr::One(Box::new(diag.into_diagnostic(title))),
+            inner: DiagInnerPtr::One(Box::new(diag.into_diagnostic(title.into()))),
         }
     }
 
-    pub fn sourced(title: &'static str, source: &'a Source, msg: Msg) -> Self {
+    pub fn sourced(title: impl Into<String>, source: &'a Source, msg: Msg) -> Self {
         Self {
-            inner: DiagInnerPtr::One(Box::new(Sourced::new(source, msg).into_diagnostic(title))),
+            inner: DiagInnerPtr::One(Box::new(
+                Sourced::new(source, msg).into_diagnostic(title.into()),
+            )),
         }
     }
 
@@ -84,7 +86,7 @@ impl<'a> Diag<'a> {
 
 #[derive(Debug, Clone)]
 pub struct DiagInner<'a> {
-    title: &'static str,
+    title: String,
     source: &'a str,
     origin: Cow<'a, str>,
     level: Level,
@@ -134,7 +136,7 @@ impl Msg {
 }
 
 pub trait Diagnostic<'a> {
-    fn into_diagnostic(self, title: &'static str) -> DiagInner<'a>;
+    fn into_diagnostic(self, title: String) -> DiagInner<'a>;
 }
 
 pub struct Label<'a> {
@@ -195,7 +197,7 @@ impl<'a, T> Sourced<'a, T> {
 }
 
 impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
-    fn into_diagnostic(self, title: &'static str) -> DiagInner<'a> {
+    fn into_diagnostic(self, title: String) -> DiagInner<'a> {
         DiagInner {
             title,
             source: self.source.raw(),
@@ -214,7 +216,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
 }
 
 impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
-    fn into_diagnostic(self, title: &'static str) -> DiagInner<'a> {
+    fn into_diagnostic(self, title: String) -> DiagInner<'a> {
         DiagInner {
             title,
             source: self.source.raw(),
@@ -228,7 +230,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
 }
 
 impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
-    fn into_diagnostic(self, title: &'static str) -> DiagInner<'a> {
+    fn into_diagnostic(self, title: String) -> DiagInner<'a> {
         DiagInner {
             title,
             source: self.source.raw(),
@@ -243,7 +245,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
 
 pub fn report(diag: Diag) {
     for mut diag in diag.into_inner() {
-        let message = diag.level.title(diag.title).snippet(
+        let message = diag.level.title(&diag.title).snippet(
             Snippet::source(&diag.source)
                 .origin(&diag.origin)
                 .fold(true)
@@ -256,7 +258,7 @@ pub fn report(diag: Diag) {
 
         let renderer = Renderer::styled();
         anstream::println!("{}", renderer.render(message));
-        println!("emitted: {}", diag.compiler_loc);
+        println!("generated: {}", diag.compiler_loc);
         diag.reported = true;
     }
 }
