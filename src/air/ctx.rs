@@ -1,8 +1,9 @@
-use super::{Air, OffsetVar, Reg, Var};
+use super::{Air, IntKind, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::ir::sig::Sig;
-use crate::ir::ty::{FullTy, IntKind, TypeKey};
+use crate::ir::ty::store::TyId;
+use crate::ir::ty::{Ty, TypeKey};
 use crate::ir::{self, *};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -17,7 +18,7 @@ pub struct AirCtx<'a> {
     instrs: Vec<Air>,
     var_index: usize,
     var_map: HashMap<(FuncHash, IdentId), Var>,
-    ty_map: HashMap<Var, FullTy>,
+    ty_map: HashMap<Var, TyId>,
     func: Option<FuncHash>,
 }
 
@@ -45,7 +46,7 @@ impl<'a> AirCtx<'a> {
         self.instrs.drain(..).collect()
     }
 
-    pub fn new_var_registered(&mut self, ident: IdentId, ty: FullTy) -> Var {
+    pub fn new_var_registered(&mut self, ident: IdentId, ty: TyId) -> Var {
         let var = self.anon_var(ty);
         self.var_map.insert(
             (
@@ -57,19 +58,20 @@ impl<'a> AirCtx<'a> {
         var
     }
 
-    pub fn anon_var(&mut self, ty: FullTy) -> Var {
+    pub fn anon_var(&mut self, ty: TyId) -> Var {
         let idx = self.var_index;
         self.var_index += 1;
         self.ty_map.insert(Var(idx), ty);
 
-        match ty {
-            FullTy::Ty(ty) => {
+        match self.tys.ty(ty) {
+            Ty::Int(ty) => {
                 self.ins(Air::SAlloc(Var(idx), ty.size()));
             }
-            FullTy::Struct(id) => {
-                let size = self.structs.layout(id).size;
+            Ty::Struct(id) => {
+                let size = self.tys.struct_layout(*id).size;
                 self.ins(Air::SAlloc(Var(idx), size));
             }
+            Ty::Unit => panic!("unit can have no value"),
         }
 
         Var(idx)
@@ -87,12 +89,12 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    pub fn expect_var_ty(&self, var: Var) -> FullTy {
+    pub fn expect_var_ty(&self, var: Var) -> TyId {
         *self.ty_map.get(&var).expect("invalid var")
     }
 
     #[track_caller]
-    pub fn ty(&self, ident: IdentId) -> FullTy {
+    pub fn var_ty(&self, ident: IdentId) -> TyId {
         self.key.ty(
             ident,
             self.func.expect("AirCtx func hash not set in `lower_func`"),

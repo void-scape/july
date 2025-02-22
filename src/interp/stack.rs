@@ -1,5 +1,4 @@
-use crate::air::{OffsetVar, Var};
-use crate::ir::ty::IntKind;
+use crate::air::{IntKind, OffsetVar, Var};
 
 #[derive(Debug, Default)]
 pub struct Stack {

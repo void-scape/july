@@ -3,7 +3,7 @@ use crate::ir::enom::{EnumDef, EnumId};
 use crate::ir::ident::IdentId;
 use crate::ir::lit::LitKind;
 use crate::ir::strukt::{StructDef, StructId};
-use crate::ir::ty::{FullTy, Ty};
+use crate::ir::ty::{Ty, Ty};
 use crate::ir::LetExpr;
 use cranelift_codegen::ir::types::I64;
 use cranelift_codegen::ir::{InstBuilder, Type, Value};
@@ -13,33 +13,33 @@ use cranelift_module::Module;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Var {
-    pub ty: FullTy,
+    pub ty: Ty,
     pub kind: VarKind,
 }
 
 impl Var {
-    pub fn prim(ty: FullTy, prim: Prim) -> Self {
+    pub fn prim(ty: Ty, prim: Prim) -> Self {
         Self {
             kind: VarKind::Primitive(prim),
             ty,
         }
     }
 
-    pub fn slot(ty: FullTy, slot: StackSlot) -> Self {
+    pub fn slot(ty: Ty, slot: StackSlot) -> Self {
         Self {
             kind: VarKind::Slot(slot),
             ty,
         }
     }
 
-    //pub fn enom(ty: FullTy, enom: Enum) -> Self {
+    //pub fn enom(ty: Ty, enom: Enum) -> Self {
     //    Self {
     //        kind: VarKind::Enum(enom),
     //        ty,
     //    }
     //}
     //
-    //pub fn field(strukt: Struct, ty: FullTy, offset: i32) -> Self {
+    //pub fn field(strukt: Struct, ty: Ty, offset: i32) -> Self {
     //    Self {
     //        kind: VarKind::Offset(strukt, StackOffset { ty, offset }),
     //        ty,
@@ -84,7 +84,7 @@ pub struct Prim {
 
 impl Prim {
     #[track_caller]
-    pub fn new(ty: FullTy, clvar: Variable) -> Self {
+    pub fn new(ty: Ty, clvar: Variable) -> Self {
         Self {
             clty: ty.expect_ty().clty(),
             ty: ty.expect_ty(),
@@ -111,7 +111,7 @@ pub struct Struct {
 #[derive(Debug, Clone, Copy)]
 pub struct StackOffset {
     pub offset: i32,
-    pub ty: FullTy,
+    pub ty: Ty,
 }
 
 impl Struct {
@@ -203,7 +203,7 @@ pub fn copy_return_struct(ctx: &mut GenCtx, slot: StackSlot, strukt: StructId, a
 //    new_struct
 //}
 //
-//fn define_struct_field(ctx: &mut GenCtx, ty: FullTy, expr: &LetExpr, slot: StackSlot, offset: i32) {
+//fn define_struct_field(ctx: &mut GenCtx, ty: Ty, expr: &LetExpr, slot: StackSlot, offset: i32) {
 //    match expr {
 //        LetExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
 //            LitKind::Int(int) => {
@@ -221,7 +221,7 @@ pub fn copy_return_struct(ctx: &mut GenCtx, slot: StackSlot, strukt: StructId, a
 //            }
 //        }
 //        LetExpr::Call(call) => match call.sig.ty {
-//            FullTy::Struct(s) => {
+//            Ty::Struct(s) => {
 //                todo!()
 //                //let func = ctx.declare_func(call.sig.ident);
 //                //let call = ctx.builder.ins().call(func, &[]);

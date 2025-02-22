@@ -2,7 +2,7 @@ use super::var::*;
 use crate::air;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
-use crate::ir::ty::{FullTy, TypeKey, VarHash};
+use crate::ir::ty::{Ty, TypeKey, VarHash};
 use crate::ir::FuncHash;
 use cranelift_codegen::ir::FuncRef;
 use cranelift_frontend::{FunctionBuilder, Variable};
@@ -50,7 +50,7 @@ impl<'a> GenCtx<'a> {
     }
 
     #[track_caller]
-    pub fn ty(&self, ident: IdentId) -> FullTy {
+    pub fn ty(&self, ident: IdentId) -> Ty {
         self.key.ty(ident, self.func)
     }
 

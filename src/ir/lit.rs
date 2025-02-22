@@ -1,4 +1,3 @@
-use super::ty::Ty;
 use crate::lex::buffer::Span;
 
 #[derive(Debug, Clone, Copy)]
@@ -16,13 +15,6 @@ pub enum LitKind<'a> {
 impl LitKind<'_> {
     pub fn is_int(&self) -> bool {
         matches!(self, Self::Int(_))
-    }
-
-    pub fn satisfies(&self, ty: Ty) -> bool {
-        match self {
-            Self::Int(_) => ty.is_int(),
-            _ => todo!(),
-        }
     }
 }
 

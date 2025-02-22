@@ -108,6 +108,7 @@ var_2_var: () -> i32 {
 
     // s.bread.grain
 
+    2 + 4;
 
     // y + other.grain + 4 + assign() // 24
     // other.grain + assign() // 16

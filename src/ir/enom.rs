@@ -1,7 +1,7 @@
 use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
 use super::mem::Layout;
-use super::ty::FullTy;
+use super::ty::Ty;
 use super::LetExpr;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::Span;
@@ -15,7 +15,7 @@ pub struct Enum {
 }
 
 impl Enum {
-    //pub fn get_field_ty(&self, field: IdentId) -> Option<FullTy> {
+    //pub fn get_field_ty(&self, field: IdentId) -> Option<Ty> {
     //    self.fields
     //        .iter()
     //        .find(|f| f.name.id == field)
@@ -23,26 +23,26 @@ impl Enum {
     //}
     //
     //#[track_caller]
-    //pub fn field_ty(&self, field: IdentId) -> FullTy {
+    //pub fn field_ty(&self, field: IdentId) -> Ty {
     //    self.get_field_ty(field).expect("invalid field")
     //}
 
-    #[track_caller]
-    pub fn variant_val(&self, ctx: &Ctx, field: IdentId) -> usize {
-        let map = ctx
-            .enums
-            .variants
-            .get(&ctx.expect_enum_id(self.name.id))
-            .unwrap();
-        *map.get(&field).expect("invalid field")
-    }
+    //#[track_caller]
+    //pub fn variant_val(&self, ctx: &Ctx, field: IdentId) -> usize {
+    //    let map = ctx
+    //        .enums
+    //        .variants
+    //        .get(&ctx.expect_enum_id(self.name.id))
+    //        .unwrap();
+    //    *map.get(&field).expect("invalid field")
+    //}
 }
 
 #[derive(Debug, Clone)]
 pub struct Variant {
     pub span: Span,
     pub name: Ident,
-    // pub ty: FullTy,
+    // pub ty: Ty,
 }
 
 #[derive(Debug, Clone)]
@@ -137,7 +137,7 @@ impl EnumStore {
 
         //if prev.is_some_and(|id| {
         //    strukt.fields.iter().any(|f| match f.ty {
-        //        FullTy::Struct(s) => s == id,
+        //        Ty::Struct(s) => s == id,
         //        _ => false,
         //    })
         //}) {
@@ -151,7 +151,7 @@ impl EnumStore {
         //let mut unresolved_layouts = Vec::new();
         //for variant in enom.fields.iter() {
         //    match field.ty {
-        //        FullTy::Struct(s) => {
+        //        Ty::Struct(s) => {
         //            let id = self.expect_enum_id(s);
         //            unresolved_layouts.push(id);
         //        }
@@ -168,12 +168,12 @@ impl EnumStore {
         //let mut struct_layouts = Vec::with_capacity(strukt.fields.len());
         //for field in strukt.fields.iter() {
         //    match field.ty {
-        //        FullTy::Struct(s) => {
+        //        Ty::Struct(s) => {
         //            let id = self.expect_enum_id(s);
         //            let layout = layouts.get(&id).unwrap();
         //            struct_layouts.push(*layout);
         //        }
-        //        FullTy::Ty(ty) => {
+        //        Ty::Ty(ty) => {
         //            struct_layouts.push(ty.layout());
         //        }
         //    }

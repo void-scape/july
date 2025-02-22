@@ -1,6 +1,5 @@
 use crate::air::{Air, AirFunc, Reg};
 use crate::ir::ctx::Ctx;
-use crate::ir::ty::Ty;
 use anstream::println;
 use stack::*;
 
@@ -252,7 +251,7 @@ fn debug_instr(
         Air::MovIConst(_, _) => {}
         Air::MovIVar(reg, var, kind) => {
             let int = stack.read_some_int(*var, *kind);
-            println!(" | {reg:?} <- {int}{}", Ty::Int(*kind).as_str());
+            println!(" | {reg:?} <- {int}{}", kind.as_str());
         }
         Air::Ret => {
             match call_stack.stack.last() {

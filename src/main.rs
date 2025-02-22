@@ -13,7 +13,7 @@ mod unit;
 fn main() {
     let file = std::env::args().nth(1).expect("no input file given");
     let unit = CompUnit::new(file).unwrap();
-    unit.compile().unwrap();
+    unit.compile();
     //if unit.compile().is_ok() {
     //    //run();
     //}

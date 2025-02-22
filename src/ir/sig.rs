@@ -1,5 +1,5 @@
 use super::ident::IdentId;
-use super::ty::FullTy;
+use super::ty::store::TyId;
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
 
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 pub struct Sig {
     pub span: Span,
     pub ident: IdentId,
-    pub ty: FullTy,
+    pub ty: TyId,
 }
 
 #[derive(Debug, Default)]

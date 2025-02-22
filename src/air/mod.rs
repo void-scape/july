@@ -1,7 +1,8 @@
 use crate::ir::lit::{Lit, LitKind};
 use crate::ir::sig::Sig;
 use crate::ir::strukt::StructDef;
-use crate::ir::ty::{FullTy, IntKind, Ty};
+use crate::ir::ty::store::TyId;
+use crate::ir::ty::{IWidth, IntTy, Sign, Ty};
 use crate::ir::*;
 use bin::*;
 use ctx::*;
@@ -92,6 +93,73 @@ impl OffsetVar {
 pub type ByteOffset = usize;
 pub type Bytes = usize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntKind {
+    I8,
+    I16,
+    I32,
+    I64,
+
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl IntKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+        }
+    }
+}
+
+impl IntTy {
+    pub fn kind(&self) -> IntKind {
+        match self.sign {
+            Sign::I => match self.width {
+                IWidth::W8 => IntKind::I8,
+                IWidth::W16 => IntKind::I16,
+                IWidth::W32 => IntKind::I32,
+                IWidth::W64 => IntKind::I64,
+            },
+            Sign::U => match self.width {
+                IWidth::W8 => IntKind::U8,
+                IWidth::W16 => IntKind::U16,
+                IWidth::W32 => IntKind::U32,
+                IWidth::W64 => IntKind::U64,
+            },
+        }
+    }
+}
+
+//impl IntKind {
+//    //pub fn size(&self) -> usize {
+//    //    match self {
+//    //        Self::I8 | Self::U8 => 1,
+//    //        Self::I16 | Self::U16 => 2,
+//    //        Self::I32 | Self::U32 => 4,
+//    //        Self::I64 | Self::U64 => 8,
+//    //    }
+//    //}
+//    //
+//    //pub fn layout(&self) -> Layout {
+//    //    match self {
+//    //        Self::I8 | Self::U8 => Layout::splat(1),
+//    //        Self::I16 | Self::U16 => Layout::splat(2),
+//    //        Self::I32 | Self::U32 => Layout::splat(4),
+//    //        Self::I64 | Self::U64 => Layout::splat(8),
+//    //    }
+//    //}
+//}
+
 pub fn lower_func<'a>(ctx: &mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start(func);
     for stmt in func.block.stmts.iter() {
@@ -145,14 +213,14 @@ fn air_bin_semi_expr(ctx: &mut AirCtx, expr: &BinOpExpr) {
 fn air_let_stmt(ctx: &mut AirCtx, stmt: &Let) {
     match stmt.lhs {
         LetTarget::Ident(ident) => {
-            let dst = ctx.new_var_registered(ident.id, ctx.ty(ident.id));
-            let ty = ctx.ty(ident.id);
+            let ty = ctx.var_ty(ident.id);
+            let dst = ctx.new_var_registered(ident.id, ty);
             assign_let_expr(ctx, OffsetVar::zero(dst), ty, &stmt.rhs);
         }
     }
 }
 
-fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: FullTy, expr: &LetExpr) {
+fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &LetExpr) {
     match &expr {
         LetExpr::Lit(lit) => {
             assign_lit(ctx, lit, dst, ty);
@@ -165,17 +233,16 @@ fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: FullTy, expr: &LetExpr)
         }
         LetExpr::Call(Call { sig, .. }) => {
             ctx.ins(Air::Call(*sig));
-            match sig.ty {
-                FullTy::Ty(ty) => {
-                    let kind = ty.expect_int();
+            match ctx.tys.ty(sig.ty) {
+                Ty::Int(ty) => {
                     ctx.ins(Air::PushIReg {
                         dst,
-                        kind,
+                        kind: ty.kind(),
                         src: Reg::A,
                     });
                 }
-                FullTy::Struct(s) => {
-                    let bytes = ctx.structs.layout(s).size;
+                Ty::Struct(s) => {
+                    let bytes = ctx.tys.struct_layout(*s).size;
                     ctx.ins_set(&[
                         Air::Addr(Reg::B, dst),
                         Air::MemCpy {
@@ -189,24 +256,22 @@ fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: FullTy, expr: &LetExpr)
                         },
                     ]);
                 }
+                Ty::Unit => todo!(),
             }
         }
         LetExpr::Ident(ident) => {
             let other = OffsetVar::zero(ctx.expect_var(ident.id));
 
-            match ty {
-                FullTy::Ty(ty) => match ty {
-                    Ty::Int(kind) => {
-                        ctx.ins(Air::PushIVar {
-                            dst,
-                            kind,
-                            src: other,
-                        });
-                    }
-                    _ => unreachable!(),
-                },
-                FullTy::Struct(id) => {
-                    let bytes = ctx.structs.layout(id).size;
+            match ctx.tys.ty(ty) {
+                Ty::Int(ty) => {
+                    ctx.ins(Air::PushIVar {
+                        dst,
+                        kind: ty.kind(),
+                        src: other,
+                    });
+                }
+                Ty::Struct(id) => {
+                    let bytes = ctx.tys.struct_layout(*id).size;
                     ctx.ins_set(&[
                         Air::Addr(Reg::B, dst),
                         Air::Addr(Reg::A, other),
@@ -217,6 +282,7 @@ fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: FullTy, expr: &LetExpr)
                         },
                     ]);
                 }
+                Ty::Unit => todo!(),
             }
         }
         LetExpr::Enum(_) => {
@@ -227,7 +293,7 @@ fn assign_let_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: FullTy, expr: &LetExpr)
 
 fn define_struct(ctx: &mut AirCtx, def: &StructDef, dst: OffsetVar) {
     for field in def.fields.iter() {
-        let strukt = ctx.structs.strukt(def.id);
+        let strukt = ctx.tys.strukt(def.id);
         let field_offset = strukt.field_offset(ctx, field.name.id);
         let ty = strukt.field_ty(field.name.id);
 
@@ -242,7 +308,10 @@ fn define_struct(ctx: &mut AirCtx, def: &StructDef, dst: OffsetVar) {
 
 fn air_assign_stmt(ctx: &mut AirCtx, stmt: &Assign) {
     let (var, ty) = match &stmt.lhs {
-        AssignTarget::Ident(ident) => (OffsetVar::zero(ctx.expect_var(ident.id)), ctx.ty(ident.id)),
+        AssignTarget::Ident(ident) => (
+            OffsetVar::zero(ctx.expect_var(ident.id)),
+            ctx.var_ty(ident.id),
+        ),
         AssignTarget::Field(bin) => aquire_bin_field_offset(ctx, &bin),
     };
 
@@ -252,7 +321,7 @@ fn air_assign_stmt(ctx: &mut AirCtx, stmt: &Assign) {
         }
         AssignKind::Add => {
             let tmp = OffsetVar::zero(ctx.anon_var(ty));
-            let kind = ty.expect_ty().expect_int();
+            let kind = ctx.tys.ty(ty).expect_int().kind();
             ctx.ins(Air::PushIVar {
                 dst: tmp,
                 kind,
@@ -265,24 +334,20 @@ fn air_assign_stmt(ctx: &mut AirCtx, stmt: &Assign) {
 }
 
 #[track_caller]
-fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: FullTy) {
-    match ty {
-        FullTy::Ty(ty) => match ty {
-            Ty::Int(kind) => match ctx.expect_lit(lit.kind) {
-                LitKind::Int(int) => {
-                    ctx.ins(Air::PushIConst(var, kind, int));
-                }
-                other => panic!("cannot assign int to `{other:?}`"),
-            },
-            _ => unreachable!(),
+fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
+    match ctx.tys.ty(ty) {
+        Ty::Int(int_ty) => match ctx.expect_lit(lit.kind) {
+            LitKind::Int(int) => {
+                ctx.ins(Air::PushIConst(var, int_ty.kind(), int));
+            }
+            other => panic!("cannot assign int to `{other:?}`"),
         },
-        FullTy::Struct(_) => {
-            panic!("cannot assign lit to struct");
-        }
+        Ty::Unit => panic!("cannot assign lit to unit"),
+        Ty::Struct(_) => panic!("cannot assign lit to struct"),
     }
 }
 
-fn air_return(ctx: &mut AirCtx, ty: FullTy, end: &OpenStmt) {
+fn air_return(ctx: &mut AirCtx, ty: TyId, end: &OpenStmt) {
     match end {
         OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
             LitKind::Int(int) => {
@@ -295,35 +360,38 @@ fn air_return(ctx: &mut AirCtx, ty: FullTy, end: &OpenStmt) {
             let out_ty = ctx.expect_var_ty(var.var);
             assert_eq!(out_ty, ty);
 
-            match out_ty {
-                FullTy::Ty(ty) => {
-                    ctx.ret_ivar(var, ty.expect_int());
+            match ctx.tys.ty(out_ty) {
+                Ty::Int(int) => {
+                    ctx.ret_ivar(var, int.kind());
                 }
-                FullTy::Struct(_) => ctx.ret_ptr(var),
+                Ty::Struct(_) => ctx.ret_ptr(var),
+                Ty::Unit => todo!(),
             }
         }
         OpenStmt::Bin(bin) => {
             if bin.kind.is_primitive() {
-                match ty {
-                    FullTy::Ty(ty) => {
-                        let dst = OffsetVar::zero(ctx.anon_var(FullTy::Ty(ty)));
-                        assign_prim_bin_op(ctx, dst, ty.expect_int(), bin);
-                        ctx.ret_ivar(dst, ty.expect_int());
+                match ctx.tys.ty(ty) {
+                    Ty::Int(int) => {
+                        let kind = int.kind();
+                        let dst = OffsetVar::zero(ctx.anon_var(ty));
+                        assign_prim_bin_op(ctx, dst, kind, bin);
+                        ctx.ret_ivar(dst, kind);
                     }
-                    FullTy::Struct(_) => unreachable!(),
+                    Ty::Struct(_) | Ty::Unit => unreachable!(),
                 }
             } else {
                 match bin.kind {
                     BinOpKind::Field => {
                         let (field_var, field_ty) = aquire_bin_field_offset(ctx, bin);
                         assert_eq!(ty, field_ty);
-                        match field_ty {
-                            FullTy::Ty(kind) => {
-                                ctx.ret_ivar(field_var, kind.expect_int());
+                        match ctx.tys.ty(field_ty) {
+                            Ty::Int(int) => {
+                                ctx.ret_ivar(field_var, int.kind());
                             }
-                            FullTy::Struct(_) => {
+                            Ty::Struct(_) => {
                                 ctx.ret_ptr(field_var);
                             }
+                            Ty::Unit => unreachable!(),
                         }
                     }
                     k => unreachable!("{k:?}"),
@@ -336,7 +404,7 @@ fn air_return(ctx: &mut AirCtx, ty: FullTy, end: &OpenStmt) {
             ctx.ins(Air::Ret);
         }
         OpenStmt::Struct(def) => {
-            let dst = OffsetVar::zero(ctx.anon_var(FullTy::Struct(def.id)));
+            let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
             define_struct(ctx, def, dst);
             ctx.ret_ptr(dst);
         }

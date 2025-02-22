@@ -1,19 +1,23 @@
-use self::enom::{Enum, EnumDef, Variant};
-use self::ident::IdentId;
-use self::sig::Sig;
-use self::strukt::{Field, FieldDef, Struct, StructDef, StructId};
-use self::ty::{FullTy, TyErr};
 use crate::diagnostic::{self, Diag, Msg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::Ident;
 use crate::ir::lit::Lit;
-use crate::ir::ty::{Arch, Constraint, ConstraintKind, Ty, TyCtx, TyVar, TypeKey};
-use crate::lex::buffer::{Span, TokenQuery};
+use crate::lex::buffer::{Buffer, Span, TokenQuery};
 use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::parse::rules::prelude as rules;
 use crate::parse::Item;
-use std::collections::HashMap;
+use enom::{Enum, EnumDef, Variant};
+use sig::Sig;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use strukt::{Field, FieldDef, Struct, StructDef};
+use ty::Ty;
+
+use self::ident::IdentId;
+use self::lit::LitKind;
+use self::ty::infer::InferCtx;
+use self::ty::store::{TyId, TyStore};
+use self::ty::{TyVar, TypeKey};
 
 pub mod ctx;
 pub mod enom;
@@ -26,39 +30,21 @@ pub mod ty;
 
 pub const SYM_DEF: &str = "undefined symbol";
 
-pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &[Item]) -> Result<Ctx<'a>, ()> {
+pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &'a [Item]) -> Result<(Ctx<'a>, TypeKey), ()> {
     let mut ctx = Ctx::new(tokens);
+    ctx.tys.register_builtins(&mut ctx.idents);
 
-    let enoms = lower_set(
-        items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Enum(enom) => Some(enom),
-                _ => None,
-            })
-            .map(|e| enom(&mut ctx, e)),
-    )?;
-    ctx.store_enums(enoms);
-
-    let struct_ids = items
+    let structs = items
         .iter()
         .filter_map(|i| match i {
             Item::Struct(strukt) => Some(strukt),
             _ => None,
         })
-        .enumerate()
-        .map(|(i, strukt)| (ctx.store_ident(strukt.name).id, StructId(i)))
+        .map(|s| (ctx.store_ident(s.name).id, s))
         .collect();
-    let structs = lower_set(
-        items
-            .iter()
-            .filter_map(|i| match i {
-                Item::Struct(strukt) => Some(strukt),
-                _ => None,
-            })
-            .map(|s| strukt(&mut ctx, &struct_ids, s)),
-    )?;
-    ctx.structs.set_storage(struct_ids, structs);
+    if let Err(e) = add_structs(&mut ctx, &structs) {
+        diagnostic::report(e);
+    }
     ctx.build_type_layouts();
 
     let sigs = lower_set(
@@ -70,7 +56,9 @@ pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &[Item]) -> Result<Ctx<'a>,
             })
             .map(|f| func_sig(&mut ctx, f)),
     )?;
-    ctx.store_sigs(sigs);
+    if let Err(e) = ctx.store_sigs(sigs) {
+        diagnostic::report(e);
+    }
 
     let funcs = lower_set(
         items
@@ -83,10 +71,75 @@ pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &[Item]) -> Result<Ctx<'a>,
     )?;
     ctx.store_funcs(funcs);
 
-    Ok(ctx)
+    match resolve_types(&mut ctx) {
+        Ok(key) => Ok((ctx, key)),
+        Err(diags) => {
+            for diag in diags.into_iter() {
+                diagnostic::report(diag);
+            }
+            Err(())
+        }
+    }
 }
 
-pub fn lower_set<'a, O>(items: impl Iterator<Item = Result<O, Diag<'a>>>) -> Result<Vec<O>, ()> {
+fn add_structs<'a>(
+    ctx: &mut Ctx<'a>,
+    structs: &HashMap<IdentId, &'a rules::Struct>,
+) -> Result<(), Diag<'a>> {
+    let mut defined = HashSet::with_capacity(structs.len());
+    for strukt in structs.values() {
+        add_structs_recur(ctx, &structs, &mut defined, strukt)?;
+    }
+
+    Ok(())
+}
+
+fn add_structs_recur<'a>(
+    ctx: &mut Ctx<'a>,
+    structs: &HashMap<IdentId, &'a rules::Struct>,
+    defined: &mut HashSet<IdentId>,
+    rules_strukt: &'a rules::Struct,
+) -> Result<(), Diag<'a>> {
+    let name = ctx.store_ident(rules_strukt.name).id;
+    if defined.contains(&name) {
+        return Ok(());
+    }
+
+    defined.insert(name);
+    for field in rules_strukt.fields.iter() {
+        let ty = ctx.store_ident(field.ty).id;
+        if !ctx.tys.builtin(ctx.ident(field.ty)) {
+            add_structs_recur(ctx, structs, defined, structs.get(&ty).unwrap())?;
+        }
+    }
+
+    let strukt = strukt(ctx, rules_strukt)?;
+    ctx.tys.store_struct(strukt);
+    Ok(())
+}
+
+//#[derive(Default)]
+//struct DepGraph<'a> {
+//    structs: HashMap<TokenId, &'a rules::Struct>,
+//    deps: HashMap<TokenId, HashSet<TokenId>>,
+//}
+//
+//impl<'a> DepGraph<'a> {
+//    pub fn add_struct(&mut self, ctx: &Ctx<'a>, strukt: &'a rules::Struct) {
+//        self.structs.insert(strukt.name, strukt);
+//        let mut deps = HashSet::default();
+//        for field in strukt.fields.iter() {
+//            if !ctx.tys.builtin(ctx.ident(field.ty)) {
+//                deps.insert(field.name);
+//            }
+//        }
+//        self.deps.insert(strukt.name, deps);
+//    }
+//
+//    pub fn post_order(&self) -> Vec<>
+//}
+
+fn lower_set<'a, O>(items: impl Iterator<Item = Result<O, Diag<'a>>>) -> Result<Vec<O>, ()> {
     let mut error = false;
     let mut set = Vec::new();
     for item in items {
@@ -135,16 +188,12 @@ fn variant<'a>(ctx: &mut Ctx<'a>, variant: &rules::Variant) -> Variant {
         name: ctx.store_ident(variant.name),
         //ty: ctx
         //    .ty(field.ty)
-        //    .map(|t| FullTy::Ty(t))
-        //    .unwrap_or_else(|| FullTy::Struct(ctx.store_ident(field.ty).id)),
+        //    .map(|t| Ty::Ty(t))
+        //    .unwrap_or_else(|| Ty::Struct(ctx.store_ident(field.ty).id)),
     }
 }
 
-fn strukt<'a>(
-    ctx: &mut Ctx<'a>,
-    struct_ids: &HashMap<IdentId, StructId>,
-    strukt: &rules::Struct,
-) -> Result<Struct, Diag<'a>> {
+fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag<'a>> {
     let mut field_names = Vec::with_capacity(strukt.fields.len());
 
     for field in strukt.fields.iter() {
@@ -166,36 +215,26 @@ fn strukt<'a>(
     Ok(Struct {
         span: strukt.span,
         name: ctx.store_ident(strukt.name),
-        fields: strukt
-            .fields
-            .iter()
-            .map(|f| field(ctx, struct_ids, f))
-            .collect(),
+        fields: strukt.fields.iter().map(|f| field(ctx, f)).collect(),
     })
 }
 
-fn field<'a>(
-    ctx: &mut Ctx<'a>,
-    struct_ids: &HashMap<IdentId, StructId>,
-    field: &rules::Field,
-) -> Field {
+fn field<'a>(ctx: &mut Ctx<'a>, field: &rules::Field) -> Field {
     let name = ctx.store_ident(field.ty).id;
 
     Field {
         span: field.span,
         name: ctx.store_ident(field.name),
-        ty: ctx.ty(field.ty).map(|t| FullTy::Ty(t)).unwrap_or_else(|| {
-            FullTy::Struct(
-                *struct_ids
-                    .get(&name)
-                    .unwrap_or_else(|| panic!("invalid struct: `{}`", ctx.expect_ident(name),)),
-            )
-        }),
+        ty: ctx
+            .tys
+            .ty_id(name)
+            .unwrap_or_else(|| panic!("invalid field type: {}", ctx.expect_ident(name))),
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Func {
+    pub name_span: Span,
     pub sig: Sig,
     pub block: Block,
 }
@@ -212,36 +251,32 @@ impl Func {
 pub struct FuncHash(u64);
 
 fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig, Diag<'a>> {
-    let ty = if let Some(ty) = func.ty {
-        if let Some(ty) = ctx.ty(ty) {
-            FullTy::Ty(ty)
-        } else {
-            let ident = ctx.store_ident(ty).id;
-            if ctx.struct_id(ident).is_none() {
-                return Err(ctx.error(
-                    SYM_DEF,
-                    ctx.span(ty),
-                    format!("expected type, got `{}`", ctx.ident(ty)),
-                ));
-            }
-
-            FullTy::Struct(ctx.expect_struct_id(ident))
-        }
-    } else {
-        FullTy::Ty(Ty::Unit)
-    };
-
     Ok(Sig {
         span: func.span,
         ident: ctx.store_ident(func.name).id,
-        ty,
+        ty: if let Some(ty) = func.ty {
+            let ident = ctx.store_ident(ty).id;
+            match ctx.tys.ty_id(ident) {
+                Some(ty) => ty,
+                None => {
+                    return Err(ctx.error(
+                        SYM_DEF,
+                        ctx.span(ty),
+                        format!("expected type, got `{}`", ctx.ident(ty)),
+                    ))
+                }
+            }
+        } else {
+            ctx.tys.unit()
+        },
     })
 }
 
 fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func, Diag<'a>> {
     Ok(Func {
-        block: block(ctx, &func.block)
-            .map_err(|err| err.msg(Msg::note(func.block.span, "while parsing this function")))?,
+        name_span: ctx.span(func.name),
+        block: block(ctx, &func.block)?,
+        //.map_err(|err| err.msg(Msg::note(func.block.span, "while parsing this function")))?,
         sig: func_sig(ctx, func)?,
     })
 }
@@ -309,18 +344,15 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
         rules::Stmt::Let { name, ty, assign } => {
             let ty = if let Some(ty) = ty {
                 let ident = ctx.store_ident(*ty).id;
-                match ctx.ty(*ty) {
-                    Some(prim_ty) => Some((ctx.span(*ty), FullTy::Ty(prim_ty))),
-                    None => match ctx.structs.struct_id(ident) {
-                        Some(id) => Some((ctx.span(*ty), FullTy::Struct(id))),
-                        None => {
-                            return Err(ctx.error(
-                                SYM_DEF,
-                                ctx.span(*ty),
-                                format!("`{}` is not a type, expected a type", ctx.ident(*ty)),
-                            ));
-                        }
-                    },
+                match ctx.tys.ty_id(ident) {
+                    Some(ty_id) => Some((ctx.span(*ty), ty_id)),
+                    None => {
+                        return Err(ctx.error(
+                            SYM_DEF,
+                            ctx.span(*ty),
+                            format!("`{}` is not a type, expected a type", ctx.ident(*ty)),
+                        ));
+                    }
                 }
             } else {
                 None
@@ -371,7 +403,7 @@ fn open_stmt<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<OpenStmt, Diag
 #[derive(Debug, Clone)]
 pub struct Let {
     pub span: Span,
-    pub ty: Option<(Span, FullTy)>,
+    pub ty: Option<(Span, TyId)>,
     pub lhs: LetTarget,
     pub rhs: LetExpr,
 }
@@ -448,6 +480,28 @@ pub struct BinOp {
     pub rhs: BinOpExpr,
 }
 
+/// Descend into `bin` and recover the full accessor path.
+pub fn descend_bin_op_field(ctx: &Ctx, bin: &BinOp, accesses: &mut Vec<Ident>) {
+    if bin.kind == BinOpKind::Field {
+        match bin.lhs {
+            BinOpExpr::Ident(ident) => {
+                if let BinOpExpr::Bin(bin) = &bin.rhs {
+                    accesses.push(ident);
+                    descend_bin_op_field(ctx, bin, accesses);
+                } else {
+                    let BinOpExpr::Ident(other) = bin.rhs else {
+                        unreachable!()
+                    };
+
+                    accesses.push(other);
+                    accesses.push(ident);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpKind {
     Add,
@@ -458,10 +512,7 @@ pub enum BinOpKind {
 
 impl BinOpKind {
     pub fn is_primitive(&self) -> bool {
-        match self {
-            Self::Add | Self::Sub | Self::Mul => true,
-            Self::Field => false,
-        }
+        !self.is_field()
     }
 
     pub fn is_field(&self) -> bool {
@@ -475,6 +526,17 @@ pub enum BinOpExpr {
     Lit(Lit),
     Call(Call),
     Bin(Box<BinOp>),
+}
+
+impl BinOpExpr {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Ident(ident) => ident.span,
+            Self::Lit(lit) => lit.span,
+            Self::Call(call) => call.span,
+            Self::Bin(bin) => bin.span,
+        }
+    }
 }
 
 fn bin_op<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<BinOp, Diag<'a>> {
@@ -556,373 +618,418 @@ fn call<'a>(ctx: &mut Ctx<'a>, span: Span, name: TokenId) -> Result<Call, Diag<'
     })
 }
 
-// TODO:
-//
-// garauntee:
-//  - idents are declared before use
-//  - no ident shadowing
-//
-// error reporting is terrible right now, sometimes the errors are actively bad
-pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
-    let mut ty_ctx = TyCtx::default();
+pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
+    let mut errors = Vec::new();
+    let mut infer = InferCtx::default();
+
     for func in ctx.funcs.iter() {
-        let hash = func.hash();
+        infer.for_func(func);
         for stmt in func.block.stmts.iter() {
             match stmt {
-                Stmt::Semi(semi) => match semi {
-                    SemiStmt::Let(let_) => match let_.lhs {
-                        LetTarget::Ident(ident) => {
-                            let var = ty_ctx.var(ident.id, hash);
-                            let_expr_constrain(ctx, &mut ty_ctx, var, &let_.rhs, hash);
+                Stmt::Semi(semi) => {
+                    if let Err(diag) = constrain_semi_stmt(ctx, &mut infer, semi, &func.sig) {
+                        errors.push(diag);
+                    }
+                }
+                Stmt::Open(open) => {
+                    todo!();
+                    //let unit = ctx.tys.unit();
+                    //if let Err(diag) = constrain_open_stmt(ctx, &mut infer, open, unit) {
+                    //    errors.push(diag);
+                    //}
+                }
+            }
+        }
 
-                            if let Some((span, ty)) = let_.ty {
-                                ty_ctx.constrain(
-                                    var,
-                                    Constraint {
-                                        kind: ConstraintKind::full(ty),
-                                        span,
-                                    },
-                                );
+        if let Some(end) = &func.block.end {
+            if let Err(diag) = constrain_open_stmt(ctx, &mut infer, end, &func.sig) {
+                errors.push(diag);
+            }
+        }
+
+        match infer.finish(ctx) {
+            Ok(_) => {}
+            Err(diags) => errors.extend(diags),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(infer.into_key())
+    } else {
+        Err(errors)
+    }
+}
+
+fn constrain_semi_stmt<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    stmt: &SemiStmt,
+    sig: &Sig,
+) -> Result<(), Diag<'a>> {
+    match stmt {
+        SemiStmt::Let(let_) => match let_.lhs {
+            LetTarget::Ident(ident) => {
+                let var = infer.new_var(ident);
+
+                if let Some((span, ty)) = let_.ty {
+                    infer.eq(var, ty, span);
+                } else {
+                    match &let_.rhs {
+                        LetExpr::Struct(def) => {
+                            infer.eq(var, ctx.tys.struct_ty_id(def.id), def.span);
+                        }
+                        LetExpr::Call(Call { sig, span }) => {
+                            infer.eq(var, sig.ty, *span);
+                        }
+                        LetExpr::Ident(other) => {
+                            let Some(other_ty) = infer.get_var(other.id) else {
+                                return Err(ctx.error(
+                                    "unknown identifier",
+                                    other.span,
+                                    "undeclared variable",
+                                ));
+                            };
+
+                            todo!();
+                            //infer.register_ty(ident.id, other_ty);
+                        }
+                        LetExpr::Bin(bin) => {
+                            if bin.kind.is_field() {
+                                let (span, ty) = aquire_bin_field_ty(ctx, infer, &bin)?;
+                                infer.eq(var, ty, bin.span);
+                            } else {
+                                constrain_bin_op(ctx, infer, bin, var)?;
                             }
                         }
-                    },
-                    SemiStmt::Assign(assign) => match &assign.lhs {
-                        AssignTarget::Ident(ident) => {
-                            let var = ty_ctx.get_var(ident.id, hash);
-                            let_expr_constrain(ctx, &mut ty_ctx, var, &assign.rhs, hash);
-                        }
-                        AssignTarget::Field(field) => match field.lhs {
-                            BinOpExpr::Ident(ident) => {
-                                //let var = ty_ctx.get_var(ident.id, hash);
-                                //let mut accesses = Vec::new();
-                                //descend_bin_op_field(ctx, &mut ty_ctx, &field, &mut accesses);
-                                //ty_ctx.constrain(
-                                //    var,
-                                //    Constraint {
-                                //        span: ident.span,
-                                //        kind: ConstraintKind::Field(
-                                //            accesses.split_off(1),
-                                //            Box::new(Con),
-                                //        ),
-                                //    },
-                                //);
-                                //
-                                //assign_expr_constrain_to(
-                                //    ctx,
-                                //    &mut ty_ctx,
-                                //    constraint,
-                                //    &assign.rhs,
-                                //    hash,
-                                //);
+                        LetExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                            LitKind::Int(_) => {
+                                infer.integral(var, lit.span);
                             }
                             _ => todo!(),
                         },
-                    },
-                    SemiStmt::Bin(bin) => bin_op_constrain_unkown(ctx, &mut ty_ctx, bin, hash),
-                    SemiStmt::Ret(ret) => match &ret.expr {
-                        Some(OpenStmt::Lit(_)) => {
-                            assert!(func.sig.ty.is_ty_and(|ty| ty.is_int()));
-                        }
-                        Some(OpenStmt::Bin(bin)) => {
-                            let constraint = Constraint {
-                                span: func.sig.span,
-                                kind: ConstraintKind::full(func.sig.ty),
-                            };
-
-                            bin_op_constrain_to(ctx, &mut ty_ctx, constraint, bin, hash)
-                                .map_err(|d| vec![d])?
-                        }
-                        Some(OpenStmt::Ident(ident)) => {
-                            let var = ty_ctx.get_var(ident.id, hash);
-                            ty_ctx.constrain(
-                                var,
-                                Constraint {
-                                    span: func.sig.span,
-                                    kind: ConstraintKind::full(func.sig.ty),
-                                },
-                            );
-                        }
-                        Some(OpenStmt::Call(Call { sig, .. })) => {
-                            if sig.ty != func.sig.ty {
-                                todo!("error")
-                            }
-                        }
-                        Some(OpenStmt::Struct(def)) => match func.sig.ty {
-                            FullTy::Struct(sig_id) => {
-                                assert_eq!(def.id, sig_id);
-                            }
-                            _ => todo!("error"),
-                        },
-                        None => {}
-                    },
-                    SemiStmt::Call(_) => {}
-                },
-                Stmt::Open(_) => {
-                    todo!();
-                }
-            }
-        }
-
-        if let Some(open) = &func.block.end {
-            match open {
-                OpenStmt::Ident(ident) => {
-                    let var = ty_ctx.get_var(ident.id, hash);
-                    ty_ctx.constrain(
-                        var,
-                        Constraint {
-                            span: func.sig.span,
-                            kind: ConstraintKind::full(func.sig.ty),
-                        },
-                    );
-                }
-                OpenStmt::Lit(lit) => {
-                    if !func.sig.ty.is_ty_and(|ty| ty.is_int()) {
-                        return Err(vec![ctx.errors(
-                            "mismatched return type",
-                            [
-                                Msg::error(
-                                    lit.span,
-                                    format!("expected `{}`, got `int`", func.sig.ty.as_str(ctx)),
-                                ),
-                                Msg::note(func.block.span, "because of the signature"),
-                            ],
-                        )]);
-                    }
-                }
-                OpenStmt::Bin(bin) => {
-                    let constraint = Constraint {
-                        span: func.sig.span,
-                        kind: ConstraintKind::full(func.sig.ty),
-                    };
-
-                    bin_op_constrain_to(ctx, &mut ty_ctx, constraint, bin, hash)
-                        .map_err(|d| vec![d])?
-                }
-                OpenStmt::Call(call) => {
-                    if call.sig.ty != func.sig.ty {
-                        return Err(vec![ctx.errors(
-                            "invalid return type",
-                            [Msg::error(
-                                call.span,
-                                format!(
-                                    "expected `{}`, got `{}`",
-                                    func.sig.ty.as_str(ctx),
-                                    call.sig.ty.as_str(ctx)
-                                ),
-                            )],
-                        )]);
-                    }
-                }
-                OpenStmt::Struct(def) => {
-                    if FullTy::Struct(def.id) != func.sig.ty {
-                        return Err(vec![ctx.errors(
-                            "invalid return type",
-                            [Msg::error(
-                                def.span,
-                                format!(
-                                    "expected `{}`, got `{}`",
-                                    func.sig.ty.as_str(ctx),
-                                    ctx.struct_name(def.id)
-                                ),
-                            )],
-                        )]);
+                        LetExpr::Enum(_) => todo!(),
                     }
                 }
             }
+        },
+        SemiStmt::Ret(r) => {
+            if let Some(expr) = &r.expr {
+                constrain_open_stmt(ctx, infer, expr, sig)
+                    .map_err(|err| err.msg(Msg::note(infer.fn_sig(), "from fn signature")))?;
+            } else {
+                if !ctx.tys.is_unit(sig.ty) {
+                    return Err(ctx.errors(
+                        "mismatched type",
+                        [
+                            Msg::error(
+                                r.span,
+                                format!("expected `{}`, got `()`", ctx.ty_str(sig.ty)),
+                            ),
+                            Msg::note(infer.fn_sig(), "from fn signature"),
+                        ],
+                    ));
+                }
+            }
         }
+        SemiStmt::Assign(assign) => match &assign.lhs {
+            AssignTarget::Ident(ident) => match infer.get_var(ident.id) {
+                Some(var) => {
+                    constrain_let_expr(ctx, infer, &assign.rhs, var)?;
+                }
+                None => {
+                    return Err(ctx.error("unknown identifier", ident.span, "undeclared variable"));
+                }
+            },
+            AssignTarget::Field(field_bin) => {
+                let (span, ty) = aquire_bin_field_ty(ctx, infer, field_bin)?;
+                constrain_let_expr_to(ctx, infer, &assign.rhs, ty, span)?;
+            }
+        },
+        SemiStmt::Bin(bin) => {
+            todo!();
+            //constrain_bin_op(ctx, infer, bin)?;
+        }
+        SemiStmt::Call(_) => {}
     }
 
-    match ty_ctx.resolve(ctx) {
-        Ok(key) => Ok(key),
-        Err(errs) => Err(errs
-            .into_iter()
-            .map(|err| match err {
-                TyErr::Arch(span, arch, ty) => ctx.error(
-                    "mismatched types",
-                    span,
-                    format!("expected `{}`, got `{}`", ty.as_str(), arch.as_str()),
-                ),
-                TyErr::Abs(span) => ctx.error("mismatched types", span, format!("invalid type")),
-                //TyErr::Struct(name) => ctx.error("mismatched types", span, msg)
-                _ => todo!(),
-            })
-            .collect()),
-    }
+    Ok(())
 }
 
-fn let_expr_constrain<'a>(
+fn constrain_open_stmt<'a>(
     ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    var: TyVar,
-    expr: &LetExpr,
-    hash: FuncHash,
-) {
-    match expr {
-        LetExpr::Lit(lit) => {
-            lit_constrain(ctx, ty_ctx, var, lit);
-        }
-        LetExpr::Bin(bin) => {
-            bin_op_constrain(ctx, ty_ctx, var, bin, hash);
-        }
-        LetExpr::Struct(def) => {
-            ty_ctx.constrain(
-                var,
-                Constraint {
-                    span: ctx.structs.strukt(def.id).name.span,
-                    kind: ConstraintKind::Struct(def.id),
-                },
-            );
-        }
-        LetExpr::Enum(def) => {
-            ty_ctx.constrain(
-                var,
-                Constraint {
-                    span: def.name.span,
-                    kind: ConstraintKind::EnumVariant(def.name.id, def.variant.name.id),
-                },
-            );
-        }
-        LetExpr::Call(call) => {
-            ty_ctx.constrain(
-                var,
-                Constraint {
-                    span: call.span,
-                    kind: ConstraintKind::full(call.sig.ty),
-                },
-            );
-        }
-        LetExpr::Ident(_) => {}
-    }
-}
-
-fn bin_op_constrain<'a>(
-    ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    var: TyVar,
-    bin: &BinOp,
-    hash: FuncHash,
-) {
-    if bin.kind != BinOpKind::Field {
-        bin_op_expr_constrain(ctx, ty_ctx, var, &bin.lhs, hash);
-        bin_op_expr_constrain(ctx, ty_ctx, var, &bin.rhs, hash);
-    }
-}
-
-fn bin_op_expr_constrain<'a>(
-    ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    var: TyVar,
-    bin: &BinOpExpr,
-    hash: FuncHash,
-) {
-    match bin {
-        BinOpExpr::Lit(lit) => {
-            lit_constrain(ctx, ty_ctx, var, lit);
-        }
-        BinOpExpr::Bin(bin) => {
-            bin_op_constrain(ctx, ty_ctx, var, bin, hash);
-        }
-        BinOpExpr::Ident(ident) => ident_constrain(ctx, ty_ctx, var, ident, hash),
-        BinOpExpr::Call(call) => {
-            ty_ctx.constrain(
-                var,
-                Constraint {
-                    span: call.span,
-                    kind: ConstraintKind::full(call.sig.ty),
-                },
-            );
-        }
-    }
-}
-
-fn bin_op_constrain_to<'a>(
-    ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    constraint: Constraint,
-    bin: &BinOp,
-    hash: FuncHash,
+    infer: &mut InferCtx,
+    stmt: &OpenStmt,
+    sig: &Sig,
 ) -> Result<(), Diag<'a>> {
-    match bin.kind {
-        BinOpKind::Field => {
-            let mut accesses = Vec::new();
-            descend_bin_op_field(ctx, ty_ctx, bin, &mut accesses);
-            let ident = accesses.first().unwrap();
-            let var = ty_ctx.get_var(*ident, hash);
-            let span = match bin.lhs {
-                BinOpExpr::Ident(ident) => ident.span,
-                _ => unreachable!(),
+    match stmt {
+        OpenStmt::Ident(ident) => match infer.get_var(ident.id) {
+            Some(var) => {
+                infer.eq(var, sig.ty, sig.span);
+            }
+            None => {
+                return Err(ctx.error("unknown identifier", ident.span, "undeclared variable"));
+            }
+        },
+        OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            LitKind::Int(_) => {
+                if !ctx.tys.ty(sig.ty).is_int() {
+                    return Err(ctx.mismatch(lit.span, sig.ty, "an integer"));
+                }
+            }
+            _ => todo!(),
+        },
+        OpenStmt::Bin(bin) => {
+            constrain_bin_op_to(ctx, infer, bin, sig.ty, sig.span)?;
+        }
+        OpenStmt::Call(call) => {
+            if call.sig.ty != sig.ty {
+                return Err(ctx.error(
+                    "invalid type",
+                    call.span,
+                    format!(
+                        "expected `{}`, got `{}`",
+                        ctx.ty_str(sig.ty),
+                        ctx.ty_str(call.sig.ty)
+                    ),
+                ));
+            }
+        }
+        OpenStmt::Struct(def) => {
+            if ctx.tys.struct_ty_id(def.id) != sig.ty {
+                return Err(ctx.error(
+                    "invalid type",
+                    def.span,
+                    format!(
+                        "expected `{}`, got `{}`",
+                        ctx.ty_str(sig.ty),
+                        ctx.struct_name(def.id)
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn constrain_let_expr<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    expr: &LetExpr,
+    var: TyVar,
+) -> Result<(), Diag<'a>> {
+    match &expr {
+        LetExpr::Struct(def) => {
+            infer.eq(var, ctx.tys.struct_ty_id(def.id), def.span);
+        }
+        LetExpr::Call(Call { sig, span }) => {
+            infer.eq(var, sig.ty, *span);
+        }
+        LetExpr::Ident(other) => {
+            let Some(other_ty) = infer.get_var(other.id) else {
+                return Err(ctx.error("unknown identifier", other.span, "undeclared variable"));
             };
 
-            ty_ctx.constrain(
-                var,
-                Constraint {
-                    kind: ConstraintKind::Field(accesses.split_off(1), Box::new(constraint)),
-                    span,
-                },
-            );
+            infer.var_eq(ctx, var, other_ty);
         }
-        _ => {
-            bin_op_expr_constrain_to(ctx, ty_ctx, constraint.clone(), &bin.lhs, hash)?;
-            bin_op_expr_constrain_to(ctx, ty_ctx, constraint, &bin.rhs, hash)?;
+        LetExpr::Bin(bin) => {
+            constrain_bin_op(ctx, infer, bin, var)?;
         }
+        LetExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            LitKind::Int(_) => {
+                infer.integral(var, lit.span);
+            }
+            _ => todo!(),
+        },
+        LetExpr::Enum(_) => todo!(),
     }
 
     Ok(())
 }
 
-fn descend_bin_op_field<'a>(
-    ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    bin: &BinOp,
-    accesses: &mut Vec<IdentId>,
-) {
-    if bin.kind == BinOpKind::Field {
-        match bin.lhs {
-            BinOpExpr::Ident(ident) => {
-                if let BinOpExpr::Bin(bin) = &bin.rhs {
-                    accesses.push(ident.id);
-                    descend_bin_op_field(ctx, ty_ctx, bin, accesses);
-                } else {
-                    let BinOpExpr::Ident(other) = bin.rhs else {
-                        panic!()
-                    };
+//    BinOpExpr::Bin(bin) => {
+//        constrain_bin_op_to(ctx, infer, bin, ty, source)?;
+//    }
+//    BinOpExpr::Ident(ident) => {
+//        let var = infer.get_var(ident.id).ok_or_else(|| {
+//            ctx.error(
+//                "undeclared variable",
+//                ident.span,
+//                format!("`{}` is undeclared", ctx.expect_ident(ident.id)),
+//            )
+//        })?;
+//        infer.eq(var, ty, source);
+//    }
+//    BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+//        LitKind::Int(_) => {
+//            if !ctx.tys.ty(ty).is_int() {
+//                return Err(ctx.error(
+//                    "type mismatch",
+//                    lit.span,
+//                    format!("expected `{}`, got integer", ctx.ty_str(ty)),
+//                ));
+//            }
+//        }
+//        _ => unreachable!(),
+//    },
+//    BinOpExpr::Call(Call { sig, span }) => {
+//        if sig.ty != ty {
+//            return Err(ctx.error(
+//                "type mismatch",
+//                *span,
+//                format!(
+//                    "expected `{}`, got `{}`",
+//                    ctx.ty_str(ty),
+//                    ctx.ty_str(sig.ty)
+//                ),
+//            ));
+//        }
+//    }
+//}
 
-                    accesses.push(other.id);
-                    accesses.push(ident.id);
+fn constrain_let_expr_to<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    expr: &LetExpr,
+    ty: TyId,
+    source: Span,
+) -> Result<(), Diag<'a>> {
+    match &expr {
+        LetExpr::Struct(def) => {
+            let struct_ty = ctx.tys.struct_ty_id(def.id);
+            if ty != struct_ty {
+                return Err(ctx.mismatch(def.span, ty, struct_ty));
+            }
+        }
+        LetExpr::Call(Call { sig, span }) => {
+            if sig.ty != ty {
+                return Err(ctx.mismatch(*span, ty, sig.ty));
+            }
+        }
+        LetExpr::Ident(other) => {
+            let Some(var) = infer.get_var(other.id) else {
+                return Err(ctx.error("unknown identifier", other.span, "undeclared variable"));
+            };
+
+            infer.eq(var, ty, source);
+        }
+        LetExpr::Bin(bin) => {
+            constrain_bin_op_to(ctx, infer, bin, ty, source)?;
+        }
+        LetExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            LitKind::Int(_) => {
+                if !ctx.tys.ty(ty).is_int() {
+                    return Err(ctx.mismatch(lit.span, ty, "an integer"));
                 }
             }
-            _ => {}
-        }
+            _ => todo!(),
+        },
+        LetExpr::Enum(_) => todo!(),
     }
+
+    Ok(())
 }
 
-/// DO NOT CALL
-///
-/// Use [`bin_op_constrain_to`] instead.
-fn bin_op_expr_constrain_to<'a>(
+fn constrain_bin_op<'a>(
     ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    constraint: Constraint,
-    bin: &BinOpExpr,
-    hash: FuncHash,
+    infer: &mut InferCtx,
+    bin: &BinOp,
+    var: TyVar,
 ) -> Result<(), Diag<'a>> {
-    match bin {
-        BinOpExpr::Lit(lit) => {
-            if constraint.kind.is_int().is_some_and(|i| !i) {
-                return Err(ctx.error("invalid expression", lit.span, "mismatched types"));
-            }
-        }
+    if bin.kind.is_field() {
+        let (span, field_ty) = aquire_bin_field_ty(ctx, infer, &bin)?;
+        infer.eq(var, field_ty, span);
+    } else {
+        constrain_bin_expr(ctx, infer, &bin.lhs, var)?;
+        constrain_bin_expr(ctx, infer, &bin.rhs, var)?;
+    }
+
+    Ok(())
+}
+
+fn constrain_bin_expr<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    expr: &BinOpExpr,
+    var: TyVar,
+) -> Result<(), Diag<'a>> {
+    match expr {
         BinOpExpr::Bin(bin) => {
-            bin_op_constrain_to(ctx, ty_ctx, constraint, bin, hash)?;
+            constrain_bin_op(ctx, infer, bin, var)?;
         }
-        BinOpExpr::Ident(ident) => ident_constrain_to(ctx, ty_ctx, constraint, ident, hash),
-        BinOpExpr::Call(call) => {
-            if constraint
-                .kind
-                .hint_satisfies(call.sig.ty)
-                .is_some_and(|s| !s)
-            {
-                return Err(ctx.error("invalid expression", call.span, "mismatched types"));
+        BinOpExpr::Ident(ident) => {
+            let other_ty = infer.get_var(ident.id).ok_or_else(|| {
+                ctx.error(
+                    "undeclared variable",
+                    ident.span,
+                    format!("`{}` is undeclared", ctx.expect_ident(ident.id)),
+                )
+            })?;
+            infer.var_eq(ctx, var, other_ty);
+        }
+        BinOpExpr::Lit(lit) => {
+            infer.integral(var, lit.span);
+        }
+        BinOpExpr::Call(Call { sig, .. }) => {
+            infer.eq(var, sig.ty, sig.span);
+        }
+    }
+
+    Ok(())
+}
+
+fn constrain_bin_op_to<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    bin: &BinOp,
+    ty: TyId,
+    source: Span,
+) -> Result<(), Diag<'a>> {
+    if bin.kind.is_field() {
+        let (span, field_ty) = aquire_bin_field_ty(ctx, infer, bin)?;
+        if ty != field_ty {
+            return Err(ctx.mismatch(span, ty, field_ty));
+        }
+    } else {
+        constrain_bin_expr_to(ctx, infer, &bin.lhs, ty, source)?;
+        constrain_bin_expr_to(ctx, infer, &bin.rhs, ty, source)?;
+    }
+
+    Ok(())
+}
+
+fn constrain_bin_expr_to<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    expr: &BinOpExpr,
+    ty: TyId,
+    source: Span,
+) -> Result<(), Diag<'a>> {
+    match expr {
+        BinOpExpr::Bin(bin) => {
+            constrain_bin_op_to(ctx, infer, bin, ty, source)?;
+        }
+        BinOpExpr::Ident(ident) => {
+            let var = infer.get_var(ident.id).ok_or_else(|| {
+                ctx.error(
+                    "undeclared variable",
+                    ident.span,
+                    format!("`{}` is undeclared", ctx.expect_ident(ident.id)),
+                )
+            })?;
+            infer.eq(var, ty, source);
+        }
+        BinOpExpr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            LitKind::Int(_) => {
+                if !ctx.tys.ty(ty).is_int() {
+                    return Err(ctx.mismatch(lit.span, ty, "an integer"));
+                }
+            }
+            _ => unreachable!(),
+        },
+        BinOpExpr::Call(Call { sig, span }) => {
+            if sig.ty != ty {
+                return Err(ctx.mismatch(*span, ty, sig.ty));
             }
         }
     }
@@ -930,64 +1037,517 @@ fn bin_op_expr_constrain_to<'a>(
     Ok(())
 }
 
-/// Recursively descend binary op tree to find constraint targets.
-fn bin_op_constrain_unkown<'a>(ctx: &Ctx<'a>, ty_ctx: &mut TyCtx, bin: &BinOp, hash: FuncHash) {
-    if let Some(target) = bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.lhs, hash)
-        .or_else(|| bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.rhs, hash))
-    {
-        // finding one constraint target is fine, it will equate with other variables
-        bin_op_constrain(ctx, ty_ctx, target, bin, hash);
-    }
-}
-
-fn bin_op_expr_find_constrain_target<'a>(
+#[track_caller]
+pub fn aquire_bin_field_ty<'a>(
     ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    bin: &BinOpExpr,
-    hash: FuncHash,
-) -> Option<TyVar> {
-    match bin {
-        BinOpExpr::Bin(bin) => bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.lhs, hash)
-            .or_else(|| bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.rhs, hash)),
-        BinOpExpr::Ident(ident) => Some(ty_ctx.get_var(ident.id, hash)),
-        BinOpExpr::Lit(_) => None,
-        BinOpExpr::Call(_) => None,
+    infer: &InferCtx,
+    bin: &BinOp,
+) -> Result<(Span, TyId), Diag<'a>> {
+    assert_eq!(bin.kind, BinOpKind::Field);
+
+    let mut accesses = Vec::new();
+    descend_bin_op_field(ctx, bin, &mut accesses);
+
+    //println!(
+    //    "{:#?}",
+    //    accesses
+    //        .iter()
+    //        .map(|i| ctx.expect_ident(i.id))
+    //        .collect::<Vec<_>>()
+    //);
+
+    let var = accesses.first().unwrap();
+    let ty_var = infer.get_var(var.id).ok_or_else(|| {
+        ctx.error(
+            "undeclared variable",
+            var.span,
+            format!("`{}` is undeclared", ctx.expect_ident(var.id)),
+        )
+    })?;
+    let Some(ty) = infer.guess_var_ty(ctx, ty_var) else {
+        return Err(ctx.error(
+            "type inference error",
+            bin.span,
+            format!("failed to infer type of `{}`", infer.var_ident(ctx, ty_var)),
+        ));
+    };
+    let ty = ctx.tys.ty(ty);
+
+    let id = match ty {
+        Ty::Struct(id) => *id,
+        Ty::Int(_) | Ty::Unit => {
+            return Err(ctx.error(
+                "invalid access",
+                bin.span,
+                format!(
+                    "`{}` is of type `{}`, which has no fields",
+                    ctx.expect_ident(var.id),
+                    ty.as_str(ctx),
+                ),
+            ))
+        }
+    };
+    let mut strukt = ctx.tys.strukt(id);
+
+    for (i, access) in accesses.iter().skip(1).enumerate() {
+        let ty = strukt.field_ty(access.id);
+        if i == accesses.len() - 2 {
+            return Ok((access.span, ty));
+        }
+
+        match ctx.tys.ty(ty) {
+            Ty::Struct(id) => {
+                strukt = ctx.tys.strukt(*id);
+            }
+            ty @ Ty::Int(_) => {
+                return Err(ctx.error(
+                    "invalid field access",
+                    access.span,
+                    format!(
+                        "`{}` is of type `{}`, which has no fields",
+                        ctx.expect_ident(access.id),
+                        ty.as_str(ctx)
+                    ),
+                ))
+            }
+            Ty::Unit => unreachable!(),
+        }
     }
+    unreachable!()
 }
 
-fn ident_constrain<'a>(
-    _ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    var: TyVar,
-    ident: &Ident,
-    hash: FuncHash,
-) {
-    ty_ctx.constrain(
-        var,
-        Constraint {
-            span: ident.span,
-            kind: ConstraintKind::Equate(ty_ctx.get_var(ident.id, hash)),
-        },
-    );
-}
-
-fn ident_constrain_to<'a>(
-    _ctx: &Ctx<'a>,
-    ty_ctx: &mut TyCtx,
-    constraint: Constraint,
-    ident: &Ident,
-    hash: FuncHash,
-) {
-    let var = ty_ctx.get_var(ident.id, hash);
-    ty_ctx.constrain(var, constraint);
-}
-
-fn lit_constrain<'a>(_ctx: &Ctx<'a>, ty_ctx: &mut TyCtx, var: TyVar, lit: &Lit) {
-    ty_ctx.constrain(
-        var,
-        Constraint {
-            span: lit.span,
-            kind: ConstraintKind::Arch(Arch::Int),
-        },
-    );
-}
+//// TODO:
+////
+//// garauntee:
+////  - idents are declared before use
+////  - no ident shadowing
+////
+//// error reporting is terrible right now, sometimes the errors are actively bad
+//pub fn resolve_types<'a>(ctx: &Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
+//    let mut ty_ctx = TyCtx::default();
+//    for func in ctx.funcs.iter() {
+//        let hash = func.hash();
+//        for stmt in func.block.stmts.iter() {
+//            match stmt {
+//                Stmt::Semi(semi) => match semi {
+//                    SemiStmt::Let(let_) => match let_.lhs {
+//                        LetTarget::Ident(ident) => {
+//                            let var = ty_ctx.var(ident.id, hash);
+//                            let_expr_constrain(ctx, &mut ty_ctx, var, &let_.rhs, hash);
+//
+//                            if let Some((span, ty)) = let_.ty {
+//                                ty_ctx.constrain(
+//                                    var,
+//                                    Constraint {
+//                                        kind: ConstraintKind::full(ty),
+//                                        span,
+//                                    },
+//                                );
+//                            }
+//                        }
+//                    },
+//                    SemiStmt::Assign(assign) => match &assign.lhs {
+//                        AssignTarget::Ident(ident) => {
+//                            let var = ty_ctx.get_var(ident.id, hash);
+//                            let_expr_constrain(ctx, &mut ty_ctx, var, &assign.rhs, hash);
+//                        }
+//                        AssignTarget::Field(field) => match field.lhs {
+//                            BinOpExpr::Ident(ident) => {
+//                                //let var = ty_ctx.get_var(ident.id, hash);
+//                                //let mut accesses = Vec::new();
+//                                //descend_bin_op_field(ctx, &mut ty_ctx, &field, &mut accesses);
+//                                //ty_ctx.constrain(
+//                                //    var,
+//                                //    Constraint {
+//                                //        span: ident.span,
+//                                //        kind: ConstraintKind::Field(
+//                                //            accesses.split_off(1),
+//                                //            Box::new(Con),
+//                                //        ),
+//                                //    },
+//                                //);
+//                                //
+//                                //assign_expr_constrain_to(
+//                                //    ctx,
+//                                //    &mut ty_ctx,
+//                                //    constraint,
+//                                //    &assign.rhs,
+//                                //    hash,
+//                                //);
+//                            }
+//                            _ => todo!(),
+//                        },
+//                    },
+//                    SemiStmt::Bin(bin) => bin_op_constrain_unkown(ctx, &mut ty_ctx, bin, hash),
+//                    SemiStmt::Ret(ret) => match &ret.expr {
+//                        Some(OpenStmt::Lit(_)) => {
+//                            assert!(func.sig.ty.is_ty_and(|ty| ty.is_int()));
+//                        }
+//                        Some(OpenStmt::Bin(bin)) => {
+//                            let constraint = Constraint {
+//                                span: func.sig.span,
+//                                kind: ConstraintKind::full(func.sig.ty),
+//                            };
+//
+//                            bin_op_constrain_to(ctx, &mut ty_ctx, constraint, bin, hash)
+//                                .map_err(|d| vec![d])?
+//                        }
+//                        Some(OpenStmt::Ident(ident)) => {
+//                            let var = ty_ctx.get_var(ident.id, hash);
+//                            ty_ctx.constrain(
+//                                var,
+//                                Constraint {
+//                                    span: func.sig.span,
+//                                    kind: ConstraintKind::full(func.sig.ty),
+//                                },
+//                            );
+//                        }
+//                        Some(OpenStmt::Call(Call { sig, .. })) => {
+//                            if sig.ty != func.sig.ty {
+//                                todo!("error")
+//                            }
+//                        }
+//                        Some(OpenStmt::Struct(def)) => match func.sig.ty {
+//                            Ty::Struct(sig_id) => {
+//                                assert_eq!(def.id, sig_id);
+//                            }
+//                            _ => todo!("error"),
+//                        },
+//                        None => {}
+//                    },
+//                    SemiStmt::Call(_) => {}
+//                },
+//                Stmt::Open(_) => {
+//                    todo!();
+//                }
+//            }
+//        }
+//
+//        if let Some(open) = &func.block.end {
+//            match open {
+//                OpenStmt::Ident(ident) => {
+//                    let var = ty_ctx.get_var(ident.id, hash);
+//                    ty_ctx.constrain(
+//                        var,
+//                        Constraint {
+//                            span: func.sig.span,
+//                            kind: ConstraintKind::full(func.sig.ty),
+//                        },
+//                    );
+//                }
+//                OpenStmt::Lit(lit) => {
+//                    if !func.sig.ty.is_ty_and(|ty| ty.is_int()) {
+//                        return Err(vec![ctx.errors(
+//                            "mismatched return type",
+//                            [
+//                                Msg::error(
+//                                    lit.span,
+//                                    format!("expected `{}`, got `int`", func.sig.ty.as_str(ctx)),
+//                                ),
+//                                Msg::note(func.block.span, "because of the signature"),
+//                            ],
+//                        )]);
+//                    }
+//                }
+//                OpenStmt::Bin(bin) => {
+//                    let constraint = Constraint {
+//                        span: func.sig.span,
+//                        kind: ConstraintKind::full(func.sig.ty),
+//                    };
+//
+//                    bin_op_constrain_to(ctx, &mut ty_ctx, constraint, bin, hash)
+//                        .map_err(|d| vec![d])?
+//                }
+//                OpenStmt::Call(call) => {
+//                    if call.sig.ty != func.sig.ty {
+//                        return Err(vec![ctx.errors(
+//                            "invalid return type",
+//                            [Msg::error(
+//                                call.span,
+//                                format!(
+//                                    "expected `{}`, got `{}`",
+//                                    func.sig.ty.as_str(ctx),
+//                                    call.sig.ty.as_str(ctx)
+//                                ),
+//                            )],
+//                        )]);
+//                    }
+//                }
+//                OpenStmt::Struct(def) => {
+//                    if Ty::Struct(def.id) != func.sig.ty {
+//                        return Err(vec![ctx.errors(
+//                            "invalid return type",
+//                            [Msg::error(
+//                                def.span,
+//                                format!(
+//                                    "expected `{}`, got `{}`",
+//                                    func.sig.ty.as_str(ctx),
+//                                    ctx.struct_name(def.id)
+//                                ),
+//                            )],
+//                        )]);
+//                    }
+//                }
+//            }
+//        }
+//    }
+//
+//    match ty_ctx.resolve(ctx) {
+//        Ok(key) => Ok(key),
+//        Err(errs) => Err(errs
+//            .into_iter()
+//            .map(|err| match err {
+//                TyErr::Arch(span, arch, ty) => ctx.error(
+//                    "mismatched types",
+//                    span,
+//                    format!("expected `{}`, got `{}`", ty.as_str(), arch.as_str()),
+//                ),
+//                TyErr::Abs(span) => ctx.error("mismatched types", span, format!("invalid type")),
+//                //TyErr::Struct(name) => ctx.error("mismatched types", span, msg)
+//                _ => todo!(),
+//            })
+//            .collect()),
+//    }
+//}
+//
+//fn let_expr_constrain<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    var: TyVar,
+//    expr: &LetExpr,
+//    hash: FuncHash,
+//) {
+//    match expr {
+//        LetExpr::Lit(lit) => {
+//            lit_constrain(ctx, ty_ctx, var, lit);
+//        }
+//        LetExpr::Bin(bin) => {
+//            bin_op_constrain(ctx, ty_ctx, var, bin, hash);
+//        }
+//        LetExpr::Struct(def) => {
+//            ty_ctx.constrain(
+//                var,
+//                Constraint {
+//                    span: ctx.structs.strukt(def.id).name.span,
+//                    kind: ConstraintKind::Struct(def.id),
+//                },
+//            );
+//        }
+//        LetExpr::Enum(def) => {
+//            ty_ctx.constrain(
+//                var,
+//                Constraint {
+//                    span: def.name.span,
+//                    kind: ConstraintKind::EnumVariant(def.name.id, def.variant.name.id),
+//                },
+//            );
+//        }
+//        LetExpr::Call(call) => {
+//            ty_ctx.constrain(
+//                var,
+//                Constraint {
+//                    span: call.span,
+//                    kind: ConstraintKind::full(call.sig.ty),
+//                },
+//            );
+//        }
+//        LetExpr::Ident(_) => {}
+//    }
+//}
+//
+//fn bin_op_constrain<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    var: TyVar,
+//    bin: &BinOp,
+//    hash: FuncHash,
+//) {
+//    if bin.kind != BinOpKind::Field {
+//        bin_op_expr_constrain(ctx, ty_ctx, var, &bin.lhs, hash);
+//        bin_op_expr_constrain(ctx, ty_ctx, var, &bin.rhs, hash);
+//    }
+//}
+//
+//fn bin_op_expr_constrain<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    var: TyVar,
+//    bin: &BinOpExpr,
+//    hash: FuncHash,
+//) {
+//    match bin {
+//        BinOpExpr::Lit(lit) => {
+//            lit_constrain(ctx, ty_ctx, var, lit);
+//        }
+//        BinOpExpr::Bin(bin) => {
+//            bin_op_constrain(ctx, ty_ctx, var, bin, hash);
+//        }
+//        BinOpExpr::Ident(ident) => ident_constrain(ctx, ty_ctx, var, ident, hash),
+//        BinOpExpr::Call(call) => {
+//            ty_ctx.constrain(
+//                var,
+//                Constraint {
+//                    span: call.span,
+//                    kind: ConstraintKind::full(call.sig.ty),
+//                },
+//            );
+//        }
+//    }
+//}
+//
+//fn bin_op_constrain_to<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    constraint: Constraint,
+//    bin: &BinOp,
+//    hash: FuncHash,
+//) -> Result<(), Diag<'a>> {
+//    match bin.kind {
+//        BinOpKind::Field => {
+//            let mut accesses = Vec::new();
+//            descend_bin_op_field(ctx, ty_ctx, bin, &mut accesses);
+//            let ident = accesses.first().unwrap();
+//            let var = ty_ctx.get_var(*ident, hash);
+//            let span = match bin.lhs {
+//                BinOpExpr::Ident(ident) => ident.span,
+//                _ => unreachable!(),
+//            };
+//
+//            ty_ctx.constrain(
+//                var,
+//                Constraint {
+//                    kind: ConstraintKind::Field(accesses.split_off(1), Box::new(constraint)),
+//                    span,
+//                },
+//            );
+//        }
+//        _ => {
+//            bin_op_expr_constrain_to(ctx, ty_ctx, constraint.clone(), &bin.lhs, hash)?;
+//            bin_op_expr_constrain_to(ctx, ty_ctx, constraint, &bin.rhs, hash)?;
+//        }
+//    }
+//
+//    Ok(())
+//}
+//
+//fn descend_bin_op_field<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    bin: &BinOp,
+//    accesses: &mut Vec<IdentId>,
+//) {
+//    if bin.kind == BinOpKind::Field {
+//        match bin.lhs {
+//            BinOpExpr::Ident(ident) => {
+//                if let BinOpExpr::Bin(bin) = &bin.rhs {
+//                    accesses.push(ident.id);
+//                    descend_bin_op_field(ctx, ty_ctx, bin, accesses);
+//                } else {
+//                    let BinOpExpr::Ident(other) = bin.rhs else {
+//                        panic!()
+//                    };
+//
+//                    accesses.push(other.id);
+//                    accesses.push(ident.id);
+//                }
+//            }
+//            _ => {}
+//        }
+//    }
+//}
+//
+///// DO NOT CALL
+/////
+///// Use [`bin_op_constrain_to`] instead.
+//fn bin_op_expr_constrain_to<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    constraint: Constraint,
+//    bin: &BinOpExpr,
+//    hash: FuncHash,
+//) -> Result<(), Diag<'a>> {
+//    match bin {
+//        BinOpExpr::Lit(lit) => {
+//            if constraint.kind.is_int().is_some_and(|i| !i) {
+//                return Err(ctx.error("invalid expression", lit.span, "mismatched types"));
+//            }
+//        }
+//        BinOpExpr::Bin(bin) => {
+//            bin_op_constrain_to(ctx, ty_ctx, constraint, bin, hash)?;
+//        }
+//        BinOpExpr::Ident(ident) => ident_constrain_to(ctx, ty_ctx, constraint, ident, hash),
+//        BinOpExpr::Call(call) => {
+//            if constraint
+//                .kind
+//                .hint_satisfies(call.sig.ty)
+//                .is_some_and(|s| !s)
+//            {
+//                return Err(ctx.error("invalid expression", call.span, "mismatched types"));
+//            }
+//        }
+//    }
+//
+//    Ok(())
+//}
+//
+///// Recursively descend binary op tree to find constraint targets.
+//fn bin_op_constrain_unkown<'a>(ctx: &Ctx<'a>, ty_ctx: &mut TyCtx, bin: &BinOp, hash: FuncHash) {
+//    if let Some(target) = bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.lhs, hash)
+//        .or_else(|| bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.rhs, hash))
+//    {
+//        // finding one constraint target is fine, it will equate with other variables
+//        bin_op_constrain(ctx, ty_ctx, target, bin, hash);
+//    }
+//}
+//
+//fn bin_op_expr_find_constrain_target<'a>(
+//    ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    bin: &BinOpExpr,
+//    hash: FuncHash,
+//) -> Option<TyVar> {
+//    match bin {
+//        BinOpExpr::Bin(bin) => bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.lhs, hash)
+//            .or_else(|| bin_op_expr_find_constrain_target(ctx, ty_ctx, &bin.rhs, hash)),
+//        BinOpExpr::Ident(ident) => Some(ty_ctx.get_var(ident.id, hash)),
+//        BinOpExpr::Lit(_) => None,
+//        BinOpExpr::Call(_) => None,
+//    }
+//}
+//
+//fn ident_constrain<'a>(
+//    _ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    var: TyVar,
+//    ident: &Ident,
+//    hash: FuncHash,
+//) {
+//    ty_ctx.constrain(
+//        var,
+//        Constraint {
+//            span: ident.span,
+//            kind: ConstraintKind::Equate(ty_ctx.get_var(ident.id, hash)),
+//        },
+//    );
+//}
+//
+//fn ident_constrain_to<'a>(
+//    _ctx: &Ctx<'a>,
+//    ty_ctx: &mut TyCtx,
+//    constraint: Constraint,
+//    ident: &Ident,
+//    hash: FuncHash,
+//) {
+//    let var = ty_ctx.get_var(ident.id, hash);
+//    ty_ctx.constrain(var, constraint);
+//}
+//
+//fn lit_constrain<'a>(_ctx: &Ctx<'a>, ty_ctx: &mut TyCtx, var: TyVar, lit: &Lit) {
+//    ty_ctx.constrain(
+//        var,
+//        Constraint {
+//            span: lit.span,
+//            kind: ConstraintKind::Arch(Arch::Int),
+//        },
+//    );
+//}

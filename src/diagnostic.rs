@@ -2,6 +2,7 @@ use crate::lex::buffer::Span;
 use crate::unit::source::Source;
 use annotate_snippets::{Level, Renderer, Snippet};
 use std::borrow::Cow;
+use std::panic::Location;
 
 #[derive(Debug)]
 pub struct Diag<'a> {
@@ -59,6 +60,20 @@ impl<'a> Diag<'a> {
         self
     }
 
+    pub fn with_loc(mut self, loc: &Location) -> Self {
+        match &mut self.inner {
+            DiagInnerPtr::One(diag) => {
+                diag.compiler_loc = loc.to_string();
+            }
+            DiagInnerPtr::Many(diags) => {
+                diags
+                    .last_mut()
+                    .map(|diag| diag.compiler_loc = loc.to_string());
+            }
+        }
+        self
+    }
+
     fn into_inner(self) -> Vec<DiagInner<'a>> {
         match self.inner {
             DiagInnerPtr::One(diag) => vec![*diag],
@@ -74,6 +89,7 @@ pub struct DiagInner<'a> {
     origin: Cow<'a, str>,
     level: Level,
     msgs: Vec<Msg>,
+    compiler_loc: String,
     reported: bool,
 }
 
@@ -186,6 +202,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
             origin: self.source.origin().to_string_lossy(),
             level: Level::Error,
             reported: false,
+            compiler_loc: String::new(),
 
             msgs: vec![Msg::new(
                 self.inner.inner.level,
@@ -204,6 +221,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
             origin: self.source.origin().to_string_lossy(),
             level: Level::Error,
             msgs: vec![self.inner],
+            compiler_loc: String::new(),
             reported: false,
         }
     }
@@ -217,6 +235,7 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
             origin: self.source.origin().to_string_lossy(),
             level: self.inner,
             msgs: Vec::new(),
+            compiler_loc: String::new(),
             reported: false,
         }
     }
@@ -237,6 +256,7 @@ pub fn report(diag: Diag) {
 
         let renderer = Renderer::styled();
         anstream::println!("{}", renderer.render(message));
+        println!("emitted: {}", diag.compiler_loc);
         diag.reported = true;
     }
 }

@@ -2,7 +2,7 @@
 //use crate::ir::ctx::Ctx;
 //use crate::ir::ident::IdentId;
 //use crate::ir::lit::{Lit, LitKind};
-//use crate::ir::ty::{FullTy, IntKind, Ty, TypeKey};
+//use crate::ir::ty::{Ty, IntKind, Ty, TypeKey};
 //use crate::ir::*;
 //use anstream::println;
 //use cranelift_codegen::ir::types::*;
@@ -129,12 +129,12 @@
 //    //}
 //
 //    match func.sig.ty {
-//        FullTy::Ty(ty) => {
+//        Ty::Ty(ty) => {
 //            if !ty.is_unit() {
 //                sig.returns.push(AbiParam::new(ty.clty()));
 //            }
 //        }
-//        FullTy::Struct(_) => {
+//        Ty::Struct(_) => {
 //            // address to struct
 //            sig.returns.push(AbiParam::new(I64));
 //        }
@@ -179,7 +179,7 @@
 //                                ctx.builder.ins().return_(&[addr]);
 //                            }
 //                            VarKind::Primitive(prim) => {
-//                                assert_eq!(FullTy::Ty(prim.ty), func.func.sig.ty);
+//                                assert_eq!(Ty::Ty(prim.ty), func.func.sig.ty);
 //                                let val = ctx.builder.use_var(prim.clvar);
 //                                ctx.builder.ins().return_(&[val]);
 //                            }
@@ -191,11 +191,11 @@
 //                }
 //            },
 //            Air::Alloc(var, ty) => match ty {
-//                FullTy::Struct(id) => {
-//                    let strukt = Var::slot(FullTy::Struct(*id), var::allocate_struct(ctx, *id));
+//                Ty::Struct(id) => {
+//                    let strukt = Var::slot(Ty::Struct(*id), var::allocate_struct(ctx, *id));
 //                    ctx.register_var(*var, strukt);
 //                }
-//                FullTy::Ty(prim_ty) => {
+//                Ty::Ty(prim_ty) => {
 //                    let clvar = ctx.clvar(*var);
 //                    ctx.builder.declare_var(clvar, prim_ty.clty());
 //                    let prim = Var::prim(*ty, Prim::new(*ty, clvar));
@@ -223,10 +223,10 @@
 //            Air::CallAssign(var, sig) => {
 //                let func_ref = ctx.declare_func(sig.ident);
 //                match sig.ty {
-//                    FullTy::Ty(ty) => {
+//                    Ty::Ty(ty) => {
 //                        todo!()
 //                    }
-//                    FullTy::Struct(id) => {
+//                    Ty::Struct(id) => {
 //                        let slot = match ctx.get_var(*var) {
 //                            Some(strukt) => match strukt.kind {
 //                                VarKind::Slot(slot) => slot,
@@ -357,7 +357,7 @@
 ////            }
 ////        }
 ////        AssignExpr::Struct(other) => {
-////            debug_assert_eq!(FullTy::Struct(other.name.id), var.ty);
+////            debug_assert_eq!(Ty::Struct(other.name.id), var.ty);
 ////            // TODO: define and insert in same step
 ////            let other = define_struct(ctx, other);
 ////            match &var.kind {
@@ -391,13 +391,13 @@
 ////    Prim { clvar, clty, ty }
 ////}
 ////
-////fn eval_let_expr(ctx: &mut GenCtx, ty: FullTy, expr: &LetExpr) -> Var {
+////fn eval_let_expr(ctx: &mut GenCtx, ty: Ty, expr: &LetExpr) -> Var {
 ////    match expr {
 ////        LetExpr::Lit(lit) => Var::prim(ty, define_lit(ctx, ty.expect_ty(), lit)),
 ////        LetExpr::Struct(def) => Var::strukt(ty, define_struct(ctx, def)),
 ////        LetExpr::Enum(def) => Var::enom(ty, define_enum(ctx, def)),
 ////        LetExpr::Call(call) => match call.sig.ty {
-////            FullTy::Struct(s) => {
+////            Ty::Struct(s) => {
 ////                let func = ctx.declare_func(call.sig.ident);
 ////                let call = ctx.builder.ins().call(func, &[]);
 ////                let addr = ctx.builder.inst_results(call)[0];
@@ -411,7 +411,7 @@
 ////    }
 ////}
 ////
-////fn eval_bin_op(ctx: &mut GenCtx, ty: FullTy, bin: &BinOp) -> Var {
+////fn eval_bin_op(ctx: &mut GenCtx, ty: Ty, bin: &BinOp) -> Var {
 ////    if bin.kind.is_primitive() {
 ////        let clvar = ctx.new_var();
 ////        ctx.builder.declare_var(clvar, ty.expect_ty().clty());
@@ -449,7 +449,7 @@
 ////    }
 ////}
 ////
-////fn eval_bin_op_expr(ctx: &mut GenCtx, ty: FullTy, expr: &BinOpExpr) -> Var {
+////fn eval_bin_op_expr(ctx: &mut GenCtx, ty: Ty, expr: &BinOpExpr) -> Var {
 ////    match expr {
 ////        BinOpExpr::Ident(ident) => ctx.var(ident.id).clone(),
 ////        BinOpExpr::Lit(lit) => Var::prim(ty, define_lit(ctx, ty.expect_ty(), lit)),
@@ -491,7 +491,7 @@
 ////    ctx.builder.ins().call(func, &[]);
 ////}
 ////
-////fn return_open(ctx: &mut GenCtx, ty: FullTy, stmt: &OpenStmt) {
+////fn return_open(ctx: &mut GenCtx, ty: Ty, stmt: &OpenStmt) {
 ////    match stmt {
 ////        OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
 ////            LitKind::Int(int) => {
@@ -544,17 +544,17 @@
 ////
 ////    for (i, ident) in path.iter().enumerate().skip(1) {
 ////        match strukt.field_ty(*ident) {
-////            FullTy::Ty(ty) => {
+////            Ty::Ty(ty) => {
 ////                debug_assert!(i == path.len() - 1);
 ////                return Var::field(
 ////                    *var,
-////                    FullTy::Ty(ty),
+////                    Ty::Ty(ty),
 ////                    strukt.field_offset(ctx, *ident) + offset,
 ////                );
 ////            }
-////            FullTy::Struct(s) => {
+////            Ty::Struct(s) => {
 ////                if i == path.len() - 1 {
-////                    return Var::field(*var, FullTy::Struct(s), strukt.field_offset(ctx, *ident));
+////                    return Var::field(*var, Ty::Struct(s), strukt.field_offset(ctx, *ident));
 ////                } else {
 ////                    offset += strukt.field_offset(ctx, *ident);
 ////                    strukt = ctx.structs.expect_struct_ident(s);
@@ -587,7 +587,7 @@
 ////    }
 ////}
 ////
-////fn return_var(ctx: &mut GenCtx, ty: FullTy, var: &Var) {
+////fn return_var(ctx: &mut GenCtx, ty: Ty, var: &Var) {
 ////    match &var.kind {
 ////        VarKind::Primitive(prim) => {
 ////            let val = ctx.builder.use_var(prim.clvar);
@@ -603,13 +603,13 @@
 ////            ctx.builder.ins().return_(&[val]);
 ////        }
 ////        VarKind::Offset(s, o) => match ty {
-////            FullTy::Ty(out) => {
+////            Ty::Ty(out) => {
 ////                let ty = o.ty.expect_ty();
 ////                debug_assert_eq!(ty, out);
 ////                let val = ctx.builder.ins().stack_load(ty.clty(), s.slot, o.offset);
 ////                ctx.builder.ins().return_(&[val]);
 ////            }
-////            FullTy::Struct(strukt) => {
+////            Ty::Struct(strukt) => {
 ////                let ty = o.ty.expect_struct();
 ////                debug_assert_eq!(ty, strukt);
 ////                let val = ctx.builder.ins().stack_addr(I64, s.slot, o.offset);
