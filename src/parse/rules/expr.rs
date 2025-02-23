@@ -4,6 +4,7 @@ use super::{Next, ParserRule, RResult};
 use crate::ir::{AssignKind, BinOpKind};
 use crate::lex::{buffer::*, kind::*};
 use crate::parse::combinator::opt::Opt;
+use crate::parse::combinator::wile::{NextToken, While};
 use crate::parse::rules::enom::EnumDefRule;
 use crate::parse::rules::strukt::StructDefRule;
 use crate::parse::{matc::*, stream::TokenStream};
@@ -18,7 +19,11 @@ pub enum Expr {
     Assign(Assign),
     StructDef(StructDef),
     EnumDef(EnumDef),
-    Call { span: Span, func: TokenId },
+    Call {
+        span: Span,
+        func: TokenId,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,7 +148,11 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
 pub enum Term {
     Lit(TokenId),
     Ident(TokenId),
-    Call { span: Span, func: TokenId },
+    Call {
+        span: Span,
+        func: TokenId,
+        args: Vec<Expr>,
+    },
 }
 
 impl Term {
@@ -151,7 +160,7 @@ impl Term {
         match self {
             Self::Lit(id) => Expr::Lit(id),
             Self::Ident(id) => Expr::Ident(id),
-            Self::Call { span, func } => Expr::Call { span, func },
+            Self::Call { span, func, args } => Expr::Call { span, func, args },
         }
     }
 }
@@ -172,12 +181,63 @@ impl<'a> ParserRule<'a> for TermRule {
                 let ident = Next::<Ident>::parse(buffer, stream, stack)?;
                 match stream.peek_kind() {
                     Some(TokenKind::OpenParen) => {
-                        let (_, close) =
-                            <(Next<OpenParen>, Next<CloseParen>)>::parse(buffer, stream, stack)
-                                .unwrap();
-                        let span = Span::from_spans(buffer.span(ident), buffer.span(close));
+                        let str = *stream;
+                        match Next::<OpenParen>::parse(buffer, stream, stack) {
+                            Err(err) => {
+                                *stream = str;
+                                return Err(err);
+                            }
+                            Ok(_) => {}
+                        }
+                        if !stream.match_peek::<CloseParen>() {
+                            let offset = stream.find_matched_delim_offset::<Paren>();
+                            let mut slice = stream.slice(offset);
+                            let args = match While::<
+                                NextToken<Not<CloseParen>>,
+                                (ExprRule, Opt<Next<Comma>>),
+                            >::parse(
+                                buffer, &mut slice, stack
+                            ) {
+                                Err(err) => {
+                                    *stream = str;
+                                    return Err(err);
+                                }
+                                Ok(args) => args,
+                            };
 
-                        Ok(Term::Call { span, func: ident })
+                            stream.eat_n(offset);
+                            let close = match Next::<CloseParen>::parse(buffer, stream, stack) {
+                                Err(err) => {
+                                    *stream = str;
+                                    return Err(err);
+                                }
+                                Ok(close) => close,
+                            };
+
+                            let span = Span::from_spans(buffer.span(ident), buffer.span(close));
+
+                            Ok(Term::Call {
+                                span,
+                                func: ident,
+                                args: args.into_iter().map(|(arg, _)| arg).collect(),
+                            })
+                        } else {
+                            let close = match Next::<CloseParen>::parse(buffer, stream, stack) {
+                                Err(err) => {
+                                    *stream = str;
+                                    return Err(err);
+                                }
+                                Ok(close) => close,
+                            };
+
+                            let span = Span::from_spans(buffer.span(ident), buffer.span(close));
+
+                            Ok(Term::Call {
+                                span,
+                                func: ident,
+                                args: Vec::new(),
+                            })
+                        }
                     }
                     _ => Ok(Term::Ident(ident)),
                 }
@@ -361,7 +421,6 @@ impl<'a> ParserRule<'a> for ExprRule {
             }
         }
 
-        //let mut assigns = 0;
         let mut accum_op = None;
         let mut terms = Vec::with_capacity(expr_stack.len());
         while let Some(item) = expr_stack.pop() {

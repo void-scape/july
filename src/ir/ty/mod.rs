@@ -19,6 +19,14 @@ pub enum Ty {
 }
 
 impl Ty {
+    pub fn size(&self, ctx: &Ctx) -> usize {
+        match self {
+            Self::Unit => 0,
+            Self::Int(int) => int.size(),
+            Self::Struct(id) => ctx.tys.struct_layout(*id).size,
+        }
+    }
+
     pub fn is_int(&self) -> bool {
         matches!(self, Self::Int(_))
     }

@@ -32,11 +32,12 @@ Bread: struct {
 * }
 */
 
-// size: 1, alignment: 1
-Lettuce: enum {
-    Crisp, // 0
-    Soggy, // 1
-}
+// TODO:
+// // size: 1, alignment: 1
+// Lettuce: enum {
+//     Crisp, // 0
+//     Soggy, // 1
+// }
 
 // ------------ Return Statements ------------
 //
@@ -134,12 +135,43 @@ conjugate: () -> i32 {
     x
 }
 
-// ------------ Demo ------------
+// ------------ Function Parameters ------------
 
-main: () -> i32 {
-    var_2_var()
-    // operations()
+add: (x: i32, y: i32) -> i32 {
+    x + y
 }
+
+multiply: (x: i32, y: i32) -> i32 {
+    x * y
+}
+
+double: (x: i32) -> i32 {
+    multiply(add(1, 1), x)
+}
+
+extract_grain: (bread: Bread) -> i32 {
+    bread.grain
+}
+
+grain: () -> i32 {
+    extract_grain(Bread {
+        grain: double(5),
+        seed: 42,
+    })
+}
+
+extract_seed: (bread: Bread) -> i64 {
+    bread.seed
+}
+
+seed: () -> i64 {
+    extract_seed(Bread {
+        grain: double(5),
+        seed: 42,
+    })
+}
+
+// ------------ Demo ------------
 
 operations: () -> i32 {
     let x = num() + ((10 + 2) * 2); // x = 25
@@ -154,3 +186,11 @@ operations: () -> i32 {
 num: () -> i32 {
     return 1;
 }
+
+main: () -> i64 {
+    // var_2_var()
+    // operations()
+    // double(2);
+    seed()
+}
+

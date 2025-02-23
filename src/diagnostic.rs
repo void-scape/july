@@ -31,8 +31,8 @@ impl<'a> Diag<'a> {
     }
 
     pub fn wrap(self, other: Self) -> Self {
-        let mut new = other.into_inner();
-        new.extend(self.into_inner());
+        let mut new = self.into_inner();
+        new.extend(other.into_inner());
         Self {
             inner: DiagInnerPtr::Many(new),
         }
@@ -62,7 +62,7 @@ impl<'a> Diag<'a> {
         self
     }
 
-    pub fn with_loc(mut self, loc: &Location) -> Self {
+    pub fn loc(mut self, loc: &Location) -> Self {
         match &mut self.inner {
             DiagInnerPtr::One(diag) => {
                 diag.compiler_loc = loc.to_string();
@@ -122,12 +122,20 @@ impl Msg {
         }
     }
 
+    pub fn empty() -> Self {
+        Self::new(Level::Error, Span::empty(), "")
+    }
+
     pub fn error(span: Span, label: impl Into<String>) -> Self {
         Self::new(Level::Error, span, label)
     }
 
     pub fn note(span: Span, label: impl Into<String>) -> Self {
         Self::new(Level::Note, span, label)
+    }
+
+    pub fn info(span: Span, label: impl Into<String>) -> Self {
+        Self::new(Level::Info, span, label)
     }
 
     pub fn help(span: Span, label: impl Into<String>) -> Self {
@@ -260,5 +268,11 @@ pub fn report(diag: Diag) {
         anstream::println!("{}", renderer.render(message));
         println!("generated: {}", diag.compiler_loc);
         diag.reported = true;
+    }
+}
+
+pub fn report_set<'a>(set: impl IntoIterator<Item = Diag<'a>>) {
+    for diag in set.into_iter() {
+        report(diag);
     }
 }

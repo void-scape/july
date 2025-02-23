@@ -21,7 +21,8 @@ impl CompUnit {
     pub fn compile<'a>(&'a self) {
         fn compile<'a>(buf: &'a TokenBuffer<'a>, items: &'a [Item]) -> Result<(), Vec<Diag<'a>>> {
             let (ctx, key) = ir::lower(&buf, items).map_err(|_| Vec::new())?;
-            let mut air_ctx = AirCtx::new(&ctx, &key);
+            let mut air_buf = Vec::new();
+            let mut air_ctx = AirCtx::new(&ctx, &key, &mut air_buf);
             let air_funcs = ctx
                 .funcs
                 .iter()

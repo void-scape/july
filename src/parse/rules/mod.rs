@@ -6,7 +6,7 @@ use crate::{
     lex::buffer::{TokenBuffer, TokenId},
     parse::{stream::TokenStream, TokenQuery, PARSE_ERR},
 };
-use std::marker::PhantomData;
+use std::{marker::PhantomData, panic::Location};
 
 mod block;
 mod enom;
@@ -17,8 +17,8 @@ mod strukt;
 
 #[allow(unused)]
 pub mod prelude {
-    pub use super::enom::*;
     pub use super::block::*;
+    pub use super::enom::*;
     pub use super::expr::*;
     pub use super::func::*;
     pub use super::stmt::*;
@@ -63,6 +63,7 @@ where
 {
     type Output = TokenId;
 
+    #[track_caller]
     fn parse(
         buffer: &'a TokenBuffer<'a>,
         stream: &mut TokenStream<'a>,
@@ -73,23 +74,23 @@ where
                 if C::matches(Some(buffer.kind(c))) && N::matches(Some(buffer.kind(n))) {
                     Ok(c)
                 } else {
-                    Err(R::report(buffer, Some(c)))
+                    Err(R::report(buffer, Some(c), stream.prev()))
                 }
             }
             (Some(c), None) => {
                 if C::matches(Some(buffer.kind(c))) && N::matches(None) {
                     Ok(c)
                 } else {
-                    Err(R::report(buffer, Some(c)))
+                    Err(R::report(buffer, Some(c), stream.prev()))
                 }
             }
-            (None, _) => Err(R::report(buffer, None)),
+            (None, _) => Err(R::report(buffer, None, stream.prev())),
         }
     }
 }
 
 pub trait ReportDiag {
-    fn report<'a>(buffer: &'a TokenBuffer<'a>, token: Option<TokenId>) -> Diag<'a>;
+    fn report<'a>(buffer: &'a TokenBuffer<'a>, token: Option<TokenId>, prev: TokenId) -> Diag<'a>;
 }
 
 #[derive(Default)]
@@ -100,14 +101,15 @@ where
     C: MatchTokenKind,
     N: MatchTokenKind,
 {
-    fn report<'a>(buffer: &'a TokenBuffer<'a>, token: Option<TokenId>) -> Diag<'a> {
+    #[track_caller]
+    fn report<'a>(buffer: &'a TokenBuffer<'a>, token: Option<TokenId>, prev: TokenId) -> Diag<'a> {
         let (msg, span) = if let Some(token) = token {
             (C::expect(), buffer.span(token))
         } else {
-            panic!("not enough information");
+            (C::expect(), buffer.span(prev))
         };
 
-        Diag::sourced(PARSE_ERR, buffer.source(), Msg::error(span, msg))
+        Diag::sourced(PARSE_ERR, buffer.source(), Msg::error(span, msg)).loc(Location::caller())
     }
 }
 
@@ -119,6 +121,7 @@ macro_rules! impl_parser_rule {
         {
             type Output = ($(<$T as ParserRule<'a>>::Output,)*);
 
+            #[track_caller]
             fn parse(
                 buffer: &'a TokenBuffer<'a>,
                 stream: &mut TokenStream<'a>,

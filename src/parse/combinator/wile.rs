@@ -31,8 +31,8 @@ where
 /// Accumulates `T` results while `C` is true.
 #[derive(Debug, Default)]
 pub struct While<C, T> {
-    condition: C,
-    rules: T,
+    _condition: C,
+    _rules: T,
 }
 
 impl<'a, C, T> ParserRule<'a> for While<C, T>
@@ -42,13 +42,14 @@ where
 {
     type Output = Vec<<T as ParserRule<'a>>::Output>;
 
+    #[track_caller]
     fn parse(
         buffer: &'a TokenBuffer<'a>,
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
         let mut results = Vec::new();
-        while C::eval(buffer, stream, stack) {
+        while !stream.is_empty() && C::eval(buffer, stream, stack) {
             results.push(T::parse(buffer, stream, stack)?);
         }
         Ok(results)

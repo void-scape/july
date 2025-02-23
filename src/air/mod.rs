@@ -1,5 +1,5 @@
 use crate::ir::lit::{Lit, LitKind};
-use crate::ir::sig::Sig;
+use crate::ir::sig::{Param, Sig};
 use crate::ir::strukt::StructDef;
 use crate::ir::ty::store::TyId;
 use crate::ir::ty::{IWidth, IntTy, Sign, Ty};
@@ -11,10 +11,13 @@ mod bin;
 pub mod ctx;
 
 /// Analyzed Intermediate Representation.
-#[derive(Debug, Clone, Copy)]
-pub enum Air {
+///
+/// `Air` is a collection of low level instructions that are intended to be easily executable as
+/// byte-code and lowerable in a backend.
+#[derive(Debug, Clone)]
+pub enum Air<'a> {
     Ret,
-    Call(Sig),
+    Call(&'a Sig, Args),
 
     /// Swap the A and B registers.
     SwapReg,
@@ -52,11 +55,16 @@ pub enum Air {
     SubAB,
 }
 
-/// A collection of [`Air`] instructions for a [`crate::ir::Func`].
+/// Collection of [`Air`] instructions for a [`crate::ir::Func`].
 #[derive(Debug)]
 pub struct AirFunc<'a> {
     pub func: &'a Func,
-    pub instrs: Vec<Air>,
+    pub instrs: Vec<Air<'a>>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Args {
+    pub vars: Vec<OffsetVar>,
 }
 
 /// A value allocated on the stack. Created by [`Air::SAlloc`]. `Var`
@@ -140,34 +148,18 @@ impl IntTy {
     }
 }
 
-//impl IntKind {
-//    //pub fn size(&self) -> usize {
-//    //    match self {
-//    //        Self::I8 | Self::U8 => 1,
-//    //        Self::I16 | Self::U16 => 2,
-//    //        Self::I32 | Self::U32 => 4,
-//    //        Self::I64 | Self::U64 => 8,
-//    //    }
-//    //}
-//    //
-//    //pub fn layout(&self) -> Layout {
-//    //    match self {
-//    //        Self::I8 | Self::U8 => Layout::splat(1),
-//    //        Self::I16 | Self::U16 => Layout::splat(2),
-//    //        Self::I32 | Self::U32 => Layout::splat(4),
-//    //        Self::I64 | Self::U64 => Layout::splat(8),
-//    //    }
-//    //}
-//}
-
-pub fn lower_func<'a>(ctx: &mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
+pub fn lower_func<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start(func);
+    init_params(ctx, func);
     for stmt in func.block.stmts.iter() {
         match stmt {
             Stmt::Semi(stmt) => match stmt {
                 SemiStmt::Let(let_) => air_let_stmt(ctx, let_),
                 SemiStmt::Assign(assign) => air_assign_stmt(ctx, assign),
-                SemiStmt::Call(Call { sig, .. }) => ctx.call(sig),
+                SemiStmt::Call(call @ Call { sig, .. }) => {
+                    let args = generate_args(ctx, call);
+                    ctx.call(sig, args)
+                }
                 SemiStmt::Bin(bin) => air_bin_semi(ctx, bin),
                 SemiStmt::Ret(ret) => match &ret.expr {
                     Some(expr) => {
@@ -192,7 +184,15 @@ pub fn lower_func<'a>(ctx: &mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     }
 }
 
-fn air_bin_semi(ctx: &mut AirCtx, bin: &BinOp) {
+fn init_params(ctx: &mut AirCtx, func: &Func) {
+    for Param { ident, ty, .. } in func.sig.params.iter() {
+        if ctx.get_var(ident.id).is_none() {
+            ctx.new_var_registered_no_salloc(ident.id, *ty);
+        }
+    }
+}
+
+fn air_bin_semi<'a>(ctx: &mut AirCtx<'a>, bin: &'a BinOp) {
     match bin.kind {
         BinOpKind::Field => {}
         BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul => {
@@ -202,16 +202,19 @@ fn air_bin_semi(ctx: &mut AirCtx, bin: &BinOp) {
     }
 }
 
-fn air_bin_semi_expr(ctx: &mut AirCtx, expr: &Expr) {
+fn air_bin_semi_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
     match &expr {
         Expr::Bin(bin) => air_bin_semi(ctx, bin),
-        Expr::Call(Call { sig, .. }) => ctx.call(sig),
+        Expr::Call(call @ Call { sig, .. }) => {
+            let args = generate_args(ctx, call);
+            ctx.call(sig, args)
+        }
         Expr::Lit(_) | Expr::Ident(_) => {}
         _ => todo!(),
     }
 }
 
-fn air_let_stmt(ctx: &mut AirCtx, stmt: &Let) {
+fn air_let_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Let) {
     match stmt.lhs {
         LetTarget::Ident(ident) => {
             let ty = ctx.var_ty(ident.id);
@@ -221,7 +224,7 @@ fn air_let_stmt(ctx: &mut AirCtx, stmt: &Let) {
     }
 }
 
-fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &Expr) {
+fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Expr) {
     match &expr {
         Expr::Lit(lit) => {
             assign_lit(ctx, lit, dst, ty);
@@ -232,9 +235,10 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &Expr) {
         Expr::Struct(def) => {
             define_struct(ctx, def, dst);
         }
-        Expr::Call(Call { sig, .. }) => {
-            ctx.ins(Air::Call(*sig));
-            match ctx.tys.ty(sig.ty) {
+        Expr::Call(call) => {
+            let args = generate_args(ctx, call);
+            ctx.ins(Air::Call(&call.sig, args));
+            match ctx.tys.ty(call.sig.ty) {
                 Ty::Int(ty) => {
                     ctx.ins(Air::PushIReg {
                         dst,
@@ -292,7 +296,51 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, expr: &Expr) {
     }
 }
 
-fn define_struct(ctx: &mut AirCtx, def: &StructDef, dst: OffsetVar) {
+fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
+    assert_eq!(call.args.args.len(), call.sig.params.len());
+    if call.args.is_empty() {
+        return Args::default();
+    }
+
+    let mut args = Args {
+        vars: Vec::with_capacity(call.sig.params.len()),
+    };
+
+    for (expr, param) in call.args.args.iter().zip(call.sig.params.iter()) {
+        //let arg = OffsetVar::zero(ctx.new_var_registered(param.ident.id, param.ty));
+
+        let the_fn_param = match ctx.get_var_with_hash(param.ident.id, call.sig.hash()) {
+            Some(var) => {
+                ctx.ins(Air::SAlloc(var, ctx.tys.ty(param.ty).size(ctx)));
+                OffsetVar::zero(var)
+            }
+            None => OffsetVar::zero(ctx.new_var_registered_with_hash(
+                param.ident.id,
+                call.sig.hash(),
+                param.ty,
+            )),
+        };
+
+        assign_expr(ctx, the_fn_param, param.ty, expr);
+
+        //let bytes = ctx.tys.ty(param.ty).size(ctx);
+        //ctx.ins_set(&[
+        //    Air::Addr(Reg::B, the_fn_param),
+        //    Air::Addr(Reg::A, arg),
+        //    Air::MemCpy {
+        //        dst: Reg::B,
+        //        src: Reg::A,
+        //        bytes,
+        //    },
+        //]);
+
+        args.vars.push(the_fn_param);
+    }
+
+    args
+}
+
+fn define_struct<'a>(ctx: &mut AirCtx<'a>, def: &'a StructDef, dst: OffsetVar) {
     for field in def.fields.iter() {
         let strukt = ctx.tys.strukt(def.id);
         let field_offset = strukt.field_offset(ctx, field.name.id);
@@ -307,7 +355,7 @@ fn define_struct(ctx: &mut AirCtx, def: &StructDef, dst: OffsetVar) {
     }
 }
 
-fn air_assign_stmt(ctx: &mut AirCtx, stmt: &Assign) {
+fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Assign) {
     let (var, ty) = match &stmt.lhs {
         AssignTarget::Ident(ident) => (
             OffsetVar::zero(ctx.expect_var(ident.id)),
@@ -348,7 +396,7 @@ fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
     }
 }
 
-fn air_return(ctx: &mut AirCtx, ty: TyId, end: &OpenStmt) {
+fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a OpenStmt) {
     match end {
         OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
             LitKind::Int(int) => {
@@ -399,9 +447,10 @@ fn air_return(ctx: &mut AirCtx, ty: TyId, end: &OpenStmt) {
                 }
             }
         }
-        OpenStmt::Call(Call { sig, .. }) => {
-            assert_eq!(sig.ty, ty);
-            ctx.ins(Air::Call(*sig));
+        OpenStmt::Call(call) => {
+            assert_eq!(call.sig.ty, ty);
+            let args = generate_args(ctx, call);
+            ctx.ins(Air::Call(&call.sig, args));
             ctx.ins(Air::Ret);
         }
         OpenStmt::Struct(def) => {

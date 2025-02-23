@@ -101,6 +101,41 @@ macro_rules! impl_match_token {
 
 variadics_please::all_tuples!(impl_match_token, 1, 5, T);
 
+pub trait DelimPair {
+    fn matches_open(kind: Option<TokenKind>) -> bool;
+    fn matches_close(kind: Option<TokenKind>) -> bool;
+}
+
+pub struct Paren;
+
+impl DelimPair for Paren {
+    fn matches_open(kind: Option<TokenKind>) -> bool {
+        OpenParen::matches(kind)
+    }
+
+    fn matches_close(kind: Option<TokenKind>) -> bool {
+        CloseParen::matches(kind)
+    }
+}
+
+pub struct Curly;
+
+impl DelimPair for Curly {
+    fn matches_open(kind: Option<TokenKind>) -> bool {
+        OpenCurly::matches(kind)
+    }
+
+    fn matches_close(kind: Option<TokenKind>) -> bool {
+        CloseCurly::matches(kind)
+    }
+}
+
+//impl DelimPair for OpenBracket {
+//    fn closing_delim(&self) -> impl TokenKindType {
+//        CloseBracket
+//    }
+//}
+
 /// Associates a [`TokenKind`] with the implementer.
 pub trait TokenKindType {
     fn kind() -> TokenKind;

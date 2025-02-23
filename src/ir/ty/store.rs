@@ -194,11 +194,7 @@ impl TyStore {
                 _ => false,
             })
         }) {
-            return Err(ctx.error(
-                "cyclic struct definition",
-                strukt.name.span,
-                "a field references a type that references this type",
-            ));
+            unreachable!("checked during struct sizing");
         }
 
         let mut unresolved_layouts = Vec::new();

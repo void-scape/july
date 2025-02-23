@@ -1,4 +1,4 @@
-use super::matc::MatchTokenKind;
+use super::matc::{DelimPair, MatchTokenKind};
 use super::PARSE_ERR;
 use crate::diagnostic::{Diag, Msg};
 use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
@@ -36,6 +36,30 @@ impl<'a> TokenStream<'a> {
             index: self.index,
             buffer: self.buffer,
         }
+    }
+
+    pub fn find_matched_delim_offset<T: DelimPair>(&self) -> usize {
+        let index = self.index;
+        let mut other = self.clone();
+
+        let mut open = 1;
+        let mut closed = 0;
+
+        while let Some(t) = other.peek() {
+            if T::matches_open(Some(other.buffer.kind(t))) {
+                open += 1;
+            } else if T::matches_close(Some(other.buffer.kind(t))) {
+                closed += 1;
+
+                if open == closed {
+                    break;
+                }
+            }
+
+            other.eat();
+        }
+
+        other.index.saturating_sub(index)
     }
 
     pub fn find_offset<T: MatchTokenKind>(&self) -> usize {
@@ -90,6 +114,14 @@ impl<'a> TokenStream<'a> {
 
     pub fn eat(&mut self) {
         self.index += 1;
+    }
+
+    pub fn eat_n(&mut self, n: usize) {
+        self.index += n;
+    }
+
+    pub fn eat_to_index(&mut self, index: usize) {
+        self.index += index.saturating_sub(self.index);
     }
 
     pub fn eat_until<T: MatchTokenKind>(&mut self) {

@@ -13,8 +13,6 @@ pub enum InterpErr {
     DryStream,
 }
 
-pub type IResult = Result<(), InterpErr>;
-
 pub fn run(ctx: &Ctx, air_funcs: &[AirFunc]) -> Result<i32, InterpErr> {
     let main = air_funcs
         .iter()
@@ -64,6 +62,7 @@ fn entry(
     air_funcs: &[AirFunc],
     stack: &mut Stack,
 ) -> Result<i32, InterpErr> {
+
     let mut current_func = main;
     let mut instrs = main.instrs.iter();
     let mut call_stack = CallStack::default();
@@ -112,7 +111,8 @@ fn entry(
                     }
                 }
             },
-            Air::Call(sig) => {
+            // we don't do anything with the args because they are already registered in the stack
+            Air::Call(sig, _args) => {
                 call_stack.push_lr(LR {
                     func: current_func,
                     instr: instr_num + 1,
@@ -272,8 +272,12 @@ fn debug_instr(
             }
             println!(" | A = {:#x}", rega.r());
         }
-        Air::Call(sig) => {
-            println!(" | call proc [{}]", ctx.expect_ident(sig.ident));
+        Air::Call(sig, args) => {
+            println!(
+                " | call proc [{}({:?})]",
+                ctx.expect_ident(sig.ident),
+                &args.vars
+            );
         }
         Air::PushIVar { .. } => {}
         Air::PushIReg { .. } => {}

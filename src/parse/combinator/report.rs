@@ -27,7 +27,7 @@ where
 }
 
 #[macro_export]
-macro_rules! help {
+macro_rules! parse_help {
     ($ty:ident, $title:expr, $msg:expr) => {
         #[derive(Debug, Default)]
         pub struct $ty;
@@ -43,7 +43,7 @@ macro_rules! help {
                     buffer.source(),
                     crate::diagnostic::Msg::help(buffer.span(stream.prev()), $msg),
                 )
-                .level(Level::Help)
+                .level(annotate_snippets::Level::Help)
                 .wrap(err)
             }
         }

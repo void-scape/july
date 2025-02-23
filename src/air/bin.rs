@@ -1,7 +1,7 @@
 use super::ctx::AirCtx;
 use super::{IntKind, OffsetVar};
 use crate::air::ctx::RET_REG;
-use crate::air::{Air, Reg};
+use crate::air::{generate_args, Air, Reg};
 use crate::ir::lit::LitKind;
 use crate::ir::ty::store::TyId;
 use crate::ir::ty::Ty;
@@ -11,7 +11,7 @@ use crate::ir::*;
 ///
 /// Panics
 ///     `bin` does not evaluate to `ty`
-pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, bin: &BinOp) {
+pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'a BinOp) {
     let ty = ctx.tys.ty(ty);
 
     if bin.kind.is_primitive() {
@@ -56,7 +56,7 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: TyId, bin: &BinOp) {
 ///     `bin` is not primitive
 ///     `bin` does not evaluate to `kind`
 #[track_caller]
-pub fn assign_prim_bin_op(ctx: &mut AirCtx, dst: OffsetVar, kind: IntKind, bin: &BinOp) {
+pub fn assign_prim_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, kind: IntKind, bin: &'a BinOp) {
     assert!(bin.kind.is_primitive());
     match bin.kind {
         BinOpKind::Add => Add(kind).visit(ctx, kind, dst, bin),
@@ -129,7 +129,7 @@ trait BinOpVisitor
 where
     Self: AllBinOpLeaves,
 {
-    fn visit(&self, ctx: &mut AirCtx, kind: IntKind, dst: OffsetVar, bin: &BinOp) {
+    fn visit<'a>(&self, ctx: &mut AirCtx<'a>, kind: IntKind, dst: OffsetVar, bin: &'a BinOp) {
         assert!(bin.kind.is_primitive());
         match &bin.lhs {
             Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
@@ -156,10 +156,11 @@ where
                             self.visit_leaf(ctx, dst, lhs_lit, dst);
                         }
                     }
-                    Expr::Call(Call { sig, .. }) => {
+                    Expr::Call(call @ Call { sig, .. }) => {
                         let sig_ty = ctx.tys.ty(sig.ty);
                         assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
-                        ctx.ins(Air::Call(*sig));
+                        let args = generate_args(ctx, call);
+                        ctx.ins(Air::Call(sig, args));
                         self.visit_leaf(ctx, dst, lhs_lit, Reg::A);
                     }
                     Expr::Ident(ident) => {
@@ -198,22 +199,24 @@ where
                     Expr::Ident(ident) => {
                         self.visit_leaf(ctx, dst, var, OffsetVar::zero(ctx.expect_var(ident.id)));
                     }
-                    Expr::Call(Call { sig, .. }) => {
+                    Expr::Call(call @ Call { sig, .. }) => {
                         let sig_ty = ctx.tys.ty(sig.ty);
                         assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
-                        ctx.ins(Air::Call(*sig));
+                        let args = generate_args(ctx, call);
+                        ctx.ins(Air::Call(sig, args));
                         self.visit_leaf(ctx, dst, var, Reg::A);
                     }
                     Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
                 }
             }
-            Expr::Call(Call { sig, .. }) => {
+            Expr::Call(call @ Call { sig, .. }) => {
                 let sig_ty = ctx.tys.ty(sig.ty);
                 assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                 match &bin.rhs {
                     Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
                         LitKind::Int(lit) => {
-                            ctx.ins(Air::Call(*sig));
+                            let args = generate_args(ctx, call);
+                            ctx.ins(Air::Call(sig, args));
                             self.visit_leaf(ctx, dst, Reg::A, lit);
                         }
                         _ => unreachable!(),
@@ -221,7 +224,8 @@ where
                     Expr::Bin(inner_bin) => {
                         if inner_bin.kind.is_field() {
                             let (field_var, field_ty) = aquire_bin_field_offset(ctx, inner_bin);
-                            ctx.ins(Air::Call(*sig));
+                            let args = generate_args(ctx, call);
+                            ctx.ins(Air::Call(sig, args));
                             let field_ty = ctx.tys.ty(field_ty);
                             const _: () = assert!(matches!(RET_REG, Reg::A));
                             let kind = field_ty.expect_int().kind();
@@ -233,13 +237,15 @@ where
                             }
                         } else {
                             assign_prim_bin_op(ctx, dst, kind, inner_bin);
-                            ctx.ins(Air::Call(*sig));
+                            let args = generate_args(ctx, call);
+                            ctx.ins(Air::Call(sig, args));
                             const _: () = assert!(matches!(RET_REG, Reg::A));
                             self.visit_leaf(ctx, dst, Reg::A, dst);
                         }
                     }
                     Expr::Ident(ident) => {
-                        ctx.ins(Air::Call(*sig));
+                        let args = generate_args(ctx, call);
+                        ctx.ins(Air::Call(sig, args));
                         self.visit_leaf(
                             ctx,
                             dst,
@@ -247,23 +253,25 @@ where
                             OffsetVar::zero(ctx.expect_var(ident.id)),
                         );
                     }
-                    Expr::Call(Call { sig: other_sig, .. }) => {
+                    Expr::Call(other) => {
                         let sig_ty = sig.ty;
                         let tmp = OffsetVar::zero(ctx.anon_var(sig_ty));
 
                         let sig_ty = ctx.tys.ty(sig_ty);
                         assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                         const _: () = assert!(matches!(RET_REG, Reg::A));
-
                         let kind = sig_ty.expect_int().kind();
+
+                        let args = generate_args(ctx, call);
+                        let other_args = generate_args(ctx, other);
                         ctx.ins_set(&[
-                            Air::Call(*sig),
+                            Air::Call(sig, args),
                             Air::PushIReg {
                                 dst: tmp,
                                 kind,
                                 src: Reg::A,
                             },
-                            Air::Call(*other_sig),
+                            Air::Call(&other.sig, other_args),
                             Air::MovIVar(Reg::B, tmp, kind),
                         ]);
                         self.visit_leaf(ctx, dst, Reg::B, Reg::A);

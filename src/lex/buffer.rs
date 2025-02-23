@@ -87,6 +87,14 @@ impl<'a> TokenBuffer<'a> {
     pub fn next(&self, token: TokenId) -> Option<TokenId> {
         (self.len() > token.0 + 1).then_some(TokenId(token.0 + 1))
     }
+
+    pub fn last(&self) -> Option<TokenId> {
+        if !self.is_empty() {
+            Some(TokenId(self.len() - 1))
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
@@ -155,6 +163,10 @@ pub struct Span {
 }
 
 impl Span {
+    pub fn empty() -> Self {
+        Self { start: 0, end: 0 }
+    }
+
     pub fn from_range(range: Range<usize>) -> Self {
         Self {
             start: range.start as u32,

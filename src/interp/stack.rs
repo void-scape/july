@@ -17,7 +17,6 @@ impl Stack {
             }
         }
 
-        //println!("{:#?}", self.stack);
         self.vars.insert(var, self.sp);
         self.sp += bytes;
     }

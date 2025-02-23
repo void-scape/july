@@ -1,26 +1,12 @@
-use super::enom::Enum;
-use super::enom::EnumId;
 use super::enom::EnumStore;
 use super::ident::*;
-use super::lit::Lit;
-use super::lit::LitId;
-use super::lit::LitKind;
-use super::lit::LitStore;
-use super::sig::Sig;
-use super::sig::SigStore;
-use super::strukt::Struct;
+use super::lit::{Lit, LitId, LitKind, LitStore};
+use super::sig::{Sig, SigStore};
 use super::strukt::StructId;
-use super::ty::store::TyId;
-use super::ty::store::TyStore;
-use super::ty::*;
+use super::ty::{store::TyId, store::TyStore, *};
 use super::Func;
-use crate::diagnostic::Diag;
-use crate::diagnostic::Msg;
-use crate::diagnostic::Sourced;
-use crate::lex::buffer::Buffer;
-use crate::lex::buffer::Span;
-use crate::lex::buffer::TokenQuery;
-use crate::lex::buffer::{TokenBuffer, TokenId};
+use crate::diagnostic::{Diag, Msg, Sourced};
+use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use annotate_snippets::Level;
 use std::collections::HashSet;
 
@@ -32,21 +18,13 @@ pub struct Ctx<'a> {
     pub enums: EnumStore,
     pub funcs: Vec<Func>,
     lits: LitStore<'a>,
-    //ty: TyRegistry<'a>,
     sigs: SigStore,
-}
-
-impl<'a> Buffer<'a> for Ctx<'a> {
-    fn token_buffer(&'a self) -> &'a TokenBuffer<'a> {
-        self.tokens
-    }
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
         Self {
             idents: IdentStore::default(),
-            //ty: TyRegistry::default(),
             lits: LitStore::default(),
             sigs: SigStore::default(),
             tys: TyStore::default(),
@@ -57,38 +35,55 @@ impl<'a> Ctx<'a> {
     }
 
     #[track_caller]
-    pub fn error(&self, title: impl Into<String>, span: Span, msg: impl Into<String>) -> Diag<'a> {
-        Diag::sourced(title.into(), self.tokens.source(), Msg::error(span, msg))
-            .with_loc(std::panic::Location::caller())
+    pub fn report_error<S: SpannedCtx>(&self, s: S, err: impl Into<String>) -> Diag<'a> {
+        Diag::sourced(
+            err.into().as_str(),
+            self.tokens.source(),
+            Msg::error(s.ctx_span(self), ""),
+        )
+        .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
-    pub fn mismatch<E: DebugTyId, G: DebugTyId>(
-        &self,
-        span: Span,
-        expected: E,
-        got: G,
-    ) -> Diag<'a> {
-        self.error(
-            "mismatched types",
+    pub fn report_note(&self, span: Span, err: impl Into<String>) -> Diag<'a> {
+        Diag::sourced(
+            err.into().as_str(),
+            self.tokens.source(),
+            Msg::note(span, ""),
+        )
+        .level(Level::Note)
+        .loc(std::panic::Location::caller())
+    }
+
+    #[track_caller]
+    pub fn report_help<S: SpannedCtx>(&self, s: S, err: impl Into<String>) -> Diag<'a> {
+        Diag::sourced(
+            err.into().as_str(),
+            self.tokens.source(),
+            Msg::help(s.ctx_span(self), ""),
+        )
+        .level(Level::Help)
+        .loc(std::panic::Location::caller())
+    }
+
+    #[track_caller]
+    pub fn mismatch<E: CtxFmt, G: CtxFmt>(&self, span: Span, expected: E, got: G) -> Diag<'a> {
+        self.report_error(
             span,
             format!(
-                "expected `{}`, got `{}`",
-                expected.debug_ty_id(self),
-                got.debug_ty_id(self)
+                "mismatched types: expected `{}`, got `{}`",
+                expected.ctx_fmt(self),
+                got.ctx_fmt(self)
             ),
         )
-        .with_loc(std::panic::Location::caller())
+        .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
-    pub fn undeclared(&self, ident: &Ident) -> Diag<'a> {
-        self.error(
-            "undeclared variable",
-            ident.span,
-            format!("`{}` is not declared", self.expect_ident(ident.id),),
-        )
-        .with_loc(std::panic::Location::caller())
+    pub fn undeclared<U: SpannedCtxFmt>(&self, u: U) -> Diag<'a> {
+        let (span, str) = u.spanned_ctx_fmt(self);
+        self.report_error(span, format!("`{}` is not declared", str))
+            .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
@@ -101,7 +96,7 @@ impl<'a> Ctx<'a> {
         for msg in msgs {
             diag = diag.msg(msg);
         }
-        diag.with_loc(std::panic::Location::caller())
+        diag.loc(std::panic::Location::caller())
     }
 
     pub fn ty_str(&self, ty: TyId) -> &str {
@@ -112,24 +107,9 @@ impl<'a> Ctx<'a> {
         self.funcs.extend(funcs.into_iter());
     }
 
-    //pub fn store_structs(&mut self, structs: Vec<Struct>) {
-    //    for strukt in structs.into_iter() {
-    //        println!("store: {strukt:#?}");
-    //        self.structs.store(strukt);
-    //    }
-    //}
-
-    pub fn struct_id(&self, id: IdentId) -> Option<StructId> {
-        self.tys.struct_id(id)
-    }
-
     pub fn struct_name(&self, id: StructId) -> &str {
         let strukt = self.tys.strukt(id);
         self.expect_ident(strukt.name.id)
-    }
-
-    pub fn struct_def(&self, id: StructId) -> &Struct {
-        self.tys.strukt(id)
     }
 
     #[track_caller]
@@ -214,39 +194,161 @@ impl<'a> Ctx<'a> {
             kind: self.lits.store(LitKind::Int(self.int_lit(int))),
         }
     }
-
-    //pub fn ty(&self, ty: TokenId) -> Option<Ty> {
-    //    self.ty.ty_str(self.tokens.ident(ty))
-    //}
 }
 
-pub trait DebugTyId {
-    fn debug_ty_id<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str;
-}
-
-impl<T> DebugTyId for &T
-where
-    T: DebugTyId,
-{
-    fn debug_ty_id<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str {
-        <T as DebugTyId>::debug_ty_id(self, ctx)
+impl<'a> Buffer<'a> for Ctx<'a> {
+    fn token_buffer(&'a self) -> &'a TokenBuffer<'a> {
+        self.tokens
     }
 }
 
-impl DebugTyId for &'static str {
-    fn debug_ty_id<'a>(&self, _: &Ctx<'a>) -> &'a str {
+pub trait CtxFmt {
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str;
+}
+
+impl<T> CtxFmt for &T
+where
+    T: CtxFmt,
+{
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
+        <T as CtxFmt>::ctx_fmt(self, ctx)
+    }
+}
+
+impl CtxFmt for &'static str {
+    fn ctx_fmt<'a>(&self, _: &Ctx<'a>) -> &'a str {
         self
     }
 }
 
-impl DebugTyId for TyId {
-    fn debug_ty_id<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str {
+impl CtxFmt for String {
+    fn ctx_fmt<'a>(&'a self, _: &Ctx<'a>) -> &'a str {
+        &self
+    }
+}
+
+impl CtxFmt for Ty {
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
+        self.as_str(ctx)
+    }
+}
+
+impl CtxFmt for TyId {
+    fn ctx_fmt<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str {
         ctx.ty_str(*self)
     }
 }
 
-impl DebugTyId for Ty {
-    fn debug_ty_id<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str {
-        self.as_str(ctx)
+impl CtxFmt for Ident {
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
+        ctx.expect_ident(self.id)
     }
+}
+
+impl CtxFmt for IdentId {
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
+        ctx.expect_ident(*self)
+    }
+}
+
+pub trait SpannedCtx {
+    fn ctx_span(&self, ctx: &Ctx) -> Span;
+}
+
+impl<T> SpannedCtx for &T
+where
+    T: SpannedCtx,
+{
+    fn ctx_span(&self, ctx: &Ctx) -> Span {
+        <T as SpannedCtx>::ctx_span(self, ctx)
+    }
+}
+
+impl SpannedCtx for TokenId {
+    fn ctx_span(&self, ctx: &Ctx) -> Span {
+        ctx.span(*self)
+    }
+}
+
+impl SpannedCtx for Span {
+    fn ctx_span(&self, _: &Ctx) -> Span {
+        *self
+    }
+}
+
+impl SpannedCtx for Ident {
+    fn ctx_span(&self, _: &Ctx) -> Span {
+        self.span
+    }
+}
+
+pub trait SpannedCtxFmt: SpannedCtx + CtxFmt {
+    fn spanned_ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> (Span, &'a str);
+}
+
+impl<T> SpannedCtxFmt for T
+where
+    T: SpannedCtx + CtxFmt,
+{
+    fn spanned_ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> (Span, &'a str) {
+        (
+            <Self as SpannedCtx>::ctx_span(self, ctx),
+            <Self as CtxFmt>::ctx_fmt(self, ctx),
+        )
+    }
+}
+
+#[macro_export]
+macro_rules! err {
+    ($ctx:expr, $span:expr, $msg:expr) => {{
+        use crate::ir::ctx::SpannedCtx;
+        $ctx.report_error(
+            ($span).ctx_span($ctx),
+            $msg,
+        )
+    }};
+    ($ctx:expr, $span:expr, $fmt:expr, $($args:expr,)*) => {{
+        use crate::ir::ctx::{SpannedCtx, CtxFmt};
+        $ctx.report_error(
+            ($span).ctx_span($ctx),
+            format!($fmt, $($args.ctx_fmt($ctx)),*)
+        )
+    }};
+}
+
+#[macro_export]
+macro_rules! note {
+    ($ctx:expr, $span:expr, $msg:expr) => {{
+        use crate::ir::ctx::SpannedCtx;
+        $ctx.report_note(
+            ($span).ctx_span($ctx),
+            $msg,
+        )
+    }};
+    ($ctx:expr, $span:expr, $fmt:expr, $($args:expr,)*) => {{
+        use crate::ir::ctx::{SpannedCtx, CtxFmt};
+        $ctx.report_note(
+            ($span).ctx_span($ctx),
+            format!($fmt, $($args.ctx_fmt($ctx)),*)
+        )
+    }};
+}
+
+
+#[macro_export]
+macro_rules! help {
+    ($ctx:expr, $span:expr, $msg:expr) => {{
+        use crate::ir::ctx::SpannedCtx;
+        $ctx.report_help(
+            ($span).ctx_span($ctx),
+            $msg,
+        )
+    }};
+    ($ctx:expr, $span:expr, $fmt:expr, $($args:expr,)*) => {{
+        use crate::ir::ctx::{SpannedCtx, CtxFmt};
+        $ctx.report_help(
+            ($span).ctx_span($ctx),
+            format!($fmt, $($args.ctx_fmt($ctx)),*)
+        )
+    }};
 }

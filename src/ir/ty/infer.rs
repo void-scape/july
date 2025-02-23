@@ -149,7 +149,6 @@ impl InferCtx {
         }
     }
 
-    #[track_caller]
     fn unify_constraints<'a>(
         &self,
         ctx: &Ctx<'a>,
@@ -165,12 +164,27 @@ impl InferCtx {
         for c in constraints.iter() {
             match &c.kind {
                 CnstKind::Ty(ty) => {
-                    if abs.is_some_and(|abs| abs != *ty) {
-                        panic!("invalid abosulte types");
-                        //return Err(TyErr::Abs(c.span));
+                    if abs.is_some_and(|(abs, _)| abs != *ty) {
+                        let ty_str = ctx.ty_str(abs.unwrap().0);
+                        let other = ctx.ty_str(*ty);
+
+                        // TODO: better error reporting, describe where the value is used
+                        return Err(ctx
+                            .report_error(
+                                self.var_span(var),
+                                format!(
+                                    "value of type `{}` cannot be coerced into a `{}`",
+                                    ty_str, other
+                                ),
+                            )
+                            .msg(Msg::note(
+                                abs.unwrap().1,
+                                format!("but this is of type `{}`", ty_str),
+                            ))
+                            .msg(Msg::info(c.src, "")));
                     }
 
-                    abs = Some(*ty);
+                    abs = Some((*ty, c.src));
                 }
                 CnstKind::Integral => {
                     integral = Some(c.src);
@@ -179,7 +193,7 @@ impl InferCtx {
             }
         }
 
-        if let Some(abs) = abs {
+        if let Some((abs, _)) = abs {
             if let Some(span) = integral {
                 if !ctx.tys.ty(abs).is_int() {
                     return Err(ctx
@@ -190,8 +204,7 @@ impl InferCtx {
 
             Ok(abs)
         } else {
-            Err(ctx.error(
-                "inference error",
+            Err(ctx.report_error(
                 self.var_span(var),
                 format!("could not infer type of `{}`", self.var_ident(ctx, var)),
             ))
