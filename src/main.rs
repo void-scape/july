@@ -1,10 +1,12 @@
-use self::unit::comp::CompUnit;
+#![feature(maybe_uninit_slice)]
 
-mod codegen;
-mod interp;
-mod diagnostic;
-mod ir;
+use unit::comp::CompUnit;
 mod air;
+mod arena;
+mod codegen;
+mod diagnostic;
+mod interp;
+mod ir;
 mod lex;
 mod parse;
 mod unit;

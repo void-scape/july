@@ -1,5 +1,4 @@
 use crate::unit::source::Source;
-use anstream::print;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
 use winnow::stream::Stream;
@@ -130,11 +129,15 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     .parse_next(input)?;
 
     let token = match result {
+        "let" => TokenKind::Let,
+        "if" => TokenKind::If,
+        "else" => TokenKind::Else,
+        "true" => TokenKind::True,
+        "false" => TokenKind::False,
+        "return" => TokenKind::Ret,
         "fn" => TokenKind::Fn,
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
-        "return" => TokenKind::Ret,
-        "let" => TokenKind::Let,
         _ => TokenKind::Ident,
     };
 

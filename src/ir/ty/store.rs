@@ -47,6 +47,7 @@ pub struct TyStore {
 
 impl TyStore {
     pub fn register_builtins(&mut self, idents: &mut IdentStore) {
+        self.register_builtin(idents, "bool", Ty::Bool);
         self.register_builtin(idents, "u8", Ty::Int(IntTy::new_8(Sign::U)));
         self.register_builtin(idents, "u16", Ty::Int(IntTy::new_16(Sign::U)));
         self.register_builtin(idents, "u32", Ty::Int(IntTy::new_32(Sign::U)));
@@ -84,6 +85,10 @@ impl TyStore {
         StructId(idx)
     }
 
+    pub fn bool(&self) -> TyId {
+        TyId(0)
+    }
+
     pub fn unit(&self) -> TyId {
         TyId(usize::MAX)
     }
@@ -94,14 +99,14 @@ impl TyStore {
 
     pub fn builtin(&self, ident: &str) -> bool {
         match ident {
-            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" => true,
+            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "bool" => true,
             _ => false,
         }
     }
 
     #[track_caller]
-    pub fn ty(&self, ty_id: TyId) -> &Ty {
-        self.tys.get(ty_id.0).expect("invalid type id")
+    pub fn ty(&self, ty_id: TyId) -> Ty {
+        self.tys.get(ty_id.0).copied().expect("invalid type id")
     }
 
     pub fn ty_id<P: IntoTyPath>(&self, path: P) -> Option<TyId> {
@@ -190,7 +195,7 @@ impl TyStore {
 
         if prev.is_some_and(|id| {
             strukt.fields.iter().any(|f| match ctx.tys.ty(f.ty) {
-                Ty::Struct(s) => *s == id,
+                Ty::Struct(s) => s == id,
                 _ => false,
             })
         }) {
@@ -214,7 +219,7 @@ impl TyStore {
                 struct_ty_map,
                 layouts,
                 offsets,
-                **id,
+                *id,
                 Some(struct_id),
             )?
         }
@@ -230,6 +235,9 @@ impl TyStore {
                 }
                 Ty::Int(int) => {
                     struct_layouts.push(int.layout());
+                }
+                Ty::Bool => {
+                    struct_layouts.push(Layout::splat(1));
                 }
                 Ty::Unit => panic!("field cannot be unit"),
             }

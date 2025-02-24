@@ -4,7 +4,7 @@ use crate::parse::stream::TokenStream;
 use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*};
 
 /// Collection of [`Stmt`]s.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub span: Span,
     pub stmts: Vec<Stmt>,

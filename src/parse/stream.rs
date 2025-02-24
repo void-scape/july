@@ -69,10 +69,13 @@ impl<'a> TokenStream<'a> {
         other.index.saturating_sub(index)
     }
 
+    #[track_caller]
     pub fn full_error(&self, title: &'static str, span: Span, msg: impl Into<String>) -> Diag<'a> {
         Diag::sourced(title, self.buffer.source(), Msg::error(span, msg))
+            .loc(std::panic::Location::caller())
     }
 
+    #[track_caller]
     pub fn error(&self, msg: impl Into<String>) -> Diag<'a> {
         let span = self.buffer.span(self.prev());
         self.full_error(PARSE_ERR, span, msg)

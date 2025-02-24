@@ -1,13 +1,18 @@
+use self::lit::LitKind;
+use self::sem::sem_analysis_pre_typing;
 use crate::diagnostic::{self, Diag, Msg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::Ident;
 use crate::ir::lit::Lit;
 use crate::lex::buffer::{Span, TokenQuery};
 use crate::lex::buffer::{TokenBuffer, TokenId};
-use crate::parse::rules::prelude as rules;
+use crate::lex::kind::TokenKind;
+use crate::parse::rules::prelude::{self as rules};
 use crate::parse::Item;
 use enom::{Enum, EnumDef, Variant};
 use ident::IdentId;
+use resolve::resolve_types;
+use sem::sem_analysis;
 use sig::Param;
 use sig::Sig;
 use std::collections::{HashMap, HashSet};
@@ -15,9 +20,6 @@ use std::hash::Hash;
 use strukt::{Field, FieldDef, Struct, StructDef};
 use ty::store::TyId;
 use ty::TypeKey;
-
-use self::resolve::resolve_types;
-use self::sem::sem_analysis;
 
 pub mod ctx;
 pub mod enom;
@@ -29,8 +31,6 @@ pub mod sem;
 pub mod sig;
 pub mod strukt;
 pub mod ty;
-
-pub const SYM_DEF: &str = "undefined symbol";
 
 pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &'a [Item]) -> Result<(Ctx<'a>, TypeKey), ()> {
     let mut ctx = Ctx::new(tokens);
@@ -75,6 +75,7 @@ pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &'a [Item]) -> Result<(Ctx<
     )?;
     ctx.store_funcs(funcs);
 
+    sem_analysis_pre_typing(&ctx)?;
     let key = match resolve_types(&mut ctx) {
         Ok(key) => key,
         Err(diags) => {
@@ -84,7 +85,6 @@ pub fn lower<'a>(tokens: &'a TokenBuffer<'a>, items: &'a [Item]) -> Result<(Ctx<
             return Err(());
         }
     };
-
     sem_analysis(&ctx, &key).map(|_| (ctx, key))
 }
 
@@ -285,13 +285,13 @@ fn field<'a>(ctx: &mut Ctx<'a>, field: &rules::Field) -> Field {
 }
 
 #[derive(Debug, Clone)]
-pub struct Func {
+pub struct Func<'a> {
     pub name_span: Span,
-    pub sig: Sig,
-    pub block: Block,
+    pub sig: &'a Sig<'a>,
+    pub block: Block<'a>,
 }
 
-impl Func {
+impl Func<'_> {
     pub fn hash(&self) -> FuncHash {
         self.sig.hash()
     }
@@ -300,11 +300,13 @@ impl Func {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FuncHash(pub u64);
 
-fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig, Diag<'a>> {
+fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig<'a>, Diag<'a>> {
+    let params = params(ctx, func)?;
+
     Ok(Sig {
         span: func.span,
         ident: ctx.store_ident(func.name).id,
-        params: params(ctx, func)?,
+        params: ctx.intern_slice(&params),
         ty: if let Some(ty) = func.ty {
             let ident = ctx.store_ident(ty).id;
             match ctx.tys.ty_id(ident) {
@@ -346,23 +348,25 @@ fn params<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Vec<Param>, Diag<
     Ok(params)
 }
 
-fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func, Diag<'a>> {
+fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func<'a>, Diag<'a>> {
+    let sig = func_sig(ctx, func)?;
+
     Ok(Func {
         name_span: ctx.span(func.name),
         block: block(ctx, &func.block)?,
         //.map_err(|err| err.msg(Msg::note(func.block.span, "while parsing this function")))?,
-        sig: func_sig(ctx, func)?,
+        sig: ctx.intern(sig),
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct Block {
+#[derive(Debug, Clone, Copy)]
+pub struct Block<'a> {
     pub span: Span,
-    pub stmts: Vec<Stmt>,
-    pub end: Option<OpenStmt>,
+    pub stmts: &'a [Stmt<'a>],
+    pub end: Option<&'a Expr<'a>>,
 }
 
-fn block<'a>(ctx: &mut Ctx<'a>, block: &rules::Block) -> Result<Block, Diag<'a>> {
+fn block<'a>(ctx: &mut Ctx<'a>, block: &rules::Block) -> Result<Block<'a>, Diag<'a>> {
     let mut stmts = block
         .stmts
         .iter()
@@ -372,7 +376,7 @@ fn block<'a>(ctx: &mut Ctx<'a>, block: &rules::Block) -> Result<Block, Diag<'a>>
     let end = if let Some(last) = stmts.last() {
         match last {
             Stmt::Open(end) => {
-                let end = end.clone();
+                let end = ctx.intern(*end);
                 stmts.pop();
                 Some(end)
             }
@@ -384,18 +388,18 @@ fn block<'a>(ctx: &mut Ctx<'a>, block: &rules::Block) -> Result<Block, Diag<'a>>
 
     Ok(Block {
         span: block.span,
-        stmts,
+        stmts: ctx.intern_slice(&stmts),
         end,
     })
 }
 
-#[derive(Debug, Clone)]
-pub enum Stmt {
-    Semi(SemiStmt),
-    Open(OpenStmt),
+#[derive(Debug, Clone, Copy)]
+pub enum Stmt<'a> {
+    Semi(SemiStmt<'a>),
+    Open(Expr<'a>),
 }
 
-impl Stmt {
+impl Stmt<'_> {
     pub fn span(&self) -> Span {
         match self {
             Stmt::Semi(semi) => semi.span(),
@@ -404,49 +408,26 @@ impl Stmt {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum OpenStmt {
-    Ident(Ident),
-    Lit(Lit),
-    Bin(BinOp),
-    Call(Call),
-    Struct(StructDef),
+#[derive(Debug, Clone, Copy)]
+pub enum SemiStmt<'a> {
+    Let(Let<'a>),
+    Assign(Assign<'a>),
+    Ret(Return<'a>),
+    Expr(Expr<'a>),
 }
 
-impl OpenStmt {
-    pub fn span(&self) -> Span {
-        match self {
-            Self::Ident(ident) => ident.span,
-            Self::Lit(lit) => lit.span,
-            Self::Bin(bin) => bin.span,
-            Self::Call(call) => call.span,
-            Self::Struct(def) => def.span,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum SemiStmt {
-    Let(Let),
-    Assign(Assign),
-    Ret(Return),
-    Bin(BinOp),
-    Call(Call),
-}
-
-impl SemiStmt {
+impl SemiStmt<'_> {
     pub fn span(&self) -> Span {
         match self {
             Self::Let(let_) => let_.span,
             Self::Assign(assign) => assign.span,
             Self::Ret(ret) => ret.span,
-            Self::Bin(bin) => bin.span,
-            Self::Call(call) => call.span,
+            Self::Expr(expr) => expr.span(),
         }
     }
 }
 
-fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
+fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt<'a>, Diag<'a>> {
     Ok(match stmt {
         rules::Stmt::Let { name, ty, assign } => {
             let ty = if let Some(ty) = ty {
@@ -481,37 +462,22 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt, Diag<'a>> {
             rules::Expr::Ret(span, expr) => Stmt::Semi(SemiStmt::Ret(Return {
                 span: *span,
                 expr: match expr {
-                    Some(expr) => Some(open_stmt(ctx, &expr)?),
+                    Some(expr) => Some(pexpr(ctx, &expr)?),
                     None => None,
                 },
             })),
-            rules::Expr::Bin(_, _, _) => Stmt::Semi(SemiStmt::Bin(bin_op(ctx, expr)?)),
-            rules::Expr::Call { span, func, args } => {
-                Stmt::Semi(SemiStmt::Call(call(ctx, *span, *func, args)?))
-            }
-            expr => todo!("{expr:#?}"),
+            e => Stmt::Semi(SemiStmt::Expr(pexpr(ctx, e)?)),
         },
-        rules::Stmt::Open(expr) => Stmt::Open(open_stmt(ctx, &expr)?),
+        rules::Stmt::Open(expr) => Stmt::Open(pexpr(ctx, &expr)?),
     })
 }
 
-fn open_stmt<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<OpenStmt, Diag<'a>> {
-    Ok(match expr {
-        rules::Expr::Ident(ident) => OpenStmt::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Lit(lit) => OpenStmt::Lit(ctx.store_int(*lit)),
-        rules::Expr::Bin(_, _, _) => OpenStmt::Bin(bin_op(ctx, expr)?),
-        rules::Expr::Call { span, func, args } => OpenStmt::Call(call(ctx, *span, *func, args)?),
-        rules::Expr::StructDef(def) => OpenStmt::Struct(struct_def(ctx, def)?),
-        _ => todo!(),
-    })
-}
-
-#[derive(Debug, Clone)]
-pub struct Let {
+#[derive(Debug, Clone, Copy)]
+pub struct Let<'a> {
     pub span: Span,
     pub ty: Option<(Span, TyId)>,
     pub lhs: LetTarget,
-    pub rhs: Expr,
+    pub rhs: Expr<'a>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -519,37 +485,79 @@ pub enum LetTarget {
     Ident(Ident),
 }
 
-#[derive(Debug, Clone)]
-pub enum Expr {
+#[derive(Debug, Clone, Copy)]
+pub enum Expr<'a> {
     Ident(Ident),
-    Lit(Lit),
-    Bin(Box<BinOp>),
-    Struct(StructDef),
+    Lit(Lit<'a>),
+    Bool(Span, bool),
+    Bin(BinOp<'a>),
+    Struct(StructDef<'a>),
     Enum(EnumDef),
-    Call(Call),
+    Call(Call<'a>),
+    Block(Block<'a>),
+    If(If<'a>),
 }
 
-impl Expr {
+impl Expr<'_> {
     pub fn span(&self) -> Span {
         match self {
+            Self::Bool(span, _) => *span,
             Self::Ident(ident) => ident.span,
             Self::Lit(lit) => lit.span,
             Self::Call(call) => call.span,
             Self::Bin(bin) => bin.span,
             Self::Struct(def) => def.span,
             Self::Enum(enom) => enom.span,
+            Self::Block(block) => block.span,
+            Self::If(if_) => if_.span,
         }
     }
 
     pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
         match self {
             Self::Ident(_) => None,
-            Self::Lit(lit) => Some(ctx.expect_lit(lit.kind).is_int()),
+            Self::Lit(lit) => Some(lit.kind.is_int()),
             Self::Call(call) => Some(ctx.tys.ty(call.sig.ty).is_int()),
             Self::Bin(bin) => bin.is_integral(ctx),
-            Self::Struct(_) | Self::Enum(_) => Some(false),
+            Self::Bool(_, _) | Self::Struct(_) | Self::Enum(_) => Some(false),
+            Self::If(_) | Self::Block(_) => todo!(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct If<'a> {
+    pub span: Span,
+    pub condition: &'a Expr<'a>,
+    pub block: &'a Expr<'a>,
+    pub otherwise: Option<&'a Expr<'a>>,
+}
+
+fn if_<'a>(
+    ctx: &mut Ctx<'a>,
+    iff: TokenId,
+    expr: &rules::Expr,
+    blck: &rules::Block,
+    otherwise: Option<&rules::Block>,
+) -> Result<If<'a>, Diag<'a>> {
+    let condition = pexpr(ctx, expr)?;
+
+    // TODO: pre reduce these
+    let blck = Expr::Block(block(ctx, blck)?);
+    let otherwise = match otherwise {
+        Some(blck) => {
+            let otherwise = Expr::Block(block(ctx, blck)?);
+            Some(ctx.intern(otherwise))
+        }
+        None => None,
+    };
+
+    Ok(If {
+        span: Span::from_spans(ctx.span(iff), blck.span()),
+        condition: ctx.intern(condition),
+        block: ctx.intern(blck),
+        otherwise,
+    })
 }
 
 fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
@@ -559,11 +567,11 @@ fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
     }
 }
 
-fn let_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr, Diag<'a>> {
+fn let_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>> {
     Ok(match expr {
         rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Lit(lit) => Expr::Lit(ctx.store_int(*lit)),
-        rules::Expr::Bin(_, _, _) => Expr::Bin(Box::new(bin_op(ctx, expr)?)),
+        rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
+        rules::Expr::Bin(_, _, _) => Expr::Bin(bin_op(ctx, expr)?),
         rules::Expr::StructDef(def) => Expr::Struct(struct_def(ctx, def)?),
         rules::Expr::EnumDef(def) => Expr::Enum(enum_def(ctx, def)?),
         rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
@@ -579,21 +587,22 @@ fn enum_def<'a>(ctx: &mut Ctx<'a>, def: &rules::EnumDef) -> Result<EnumDef, Diag
     })
 }
 
-fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef, Diag<'a>> {
+fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef<'a>, Diag<'a>> {
     let id = ctx.store_ident(def.name).id;
+    let fields = def
+        .fields
+        .iter()
+        .map(|f| field_def(ctx, f))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(StructDef {
         span: def.span,
         id: ctx.expect_struct_id(id),
-        fields: def
-            .fields
-            .iter()
-            .map(|f| field_def(ctx, f))
-            .collect::<Result<_, _>>()?,
+        fields: ctx.intern_slice(&fields),
     })
 }
 
-fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef, Diag<'a>> {
+fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef<'a>, Diag<'a>> {
     Ok(FieldDef {
         span: def.span,
         name: ctx.store_ident(def.name),
@@ -601,15 +610,15 @@ fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef, D
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct BinOp {
+#[derive(Debug, Clone, Copy)]
+pub struct BinOp<'a> {
     pub span: Span,
     pub kind: BinOpKind,
-    pub lhs: Expr,
-    pub rhs: Expr,
+    pub lhs: &'a Expr<'a>,
+    pub rhs: &'a Expr<'a>,
 }
 
-impl BinOp {
+impl BinOp<'_> {
     /// Contains all integral components.
     pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
         self.lhs
@@ -624,15 +633,15 @@ pub fn descend_bin_op_field(ctx: &Ctx, bin: &BinOp, accesses: &mut Vec<Ident>) {
         match bin.lhs {
             Expr::Ident(ident) => {
                 if let Expr::Bin(bin) = &bin.rhs {
-                    accesses.push(ident);
+                    accesses.push(*ident);
                     descend_bin_op_field(ctx, bin, accesses);
                 } else {
                     let Expr::Ident(other) = bin.rhs else {
                         unreachable!()
                     };
 
-                    accesses.push(other);
-                    accesses.push(ident);
+                    accesses.push(*other);
+                    accesses.push(*ident);
                 }
             }
             _ => {}
@@ -658,35 +667,53 @@ impl BinOpKind {
     }
 }
 
-fn bin_op<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<BinOp, Diag<'a>> {
+fn bin_op<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<BinOp<'a>, Diag<'a>> {
     Ok(match expr {
-        rules::Expr::Bin(op, lhs, rhs) => BinOp {
-            span: op.span,
-            kind: op.kind,
-            lhs: pexpr(ctx, lhs)?,
-            rhs: pexpr(ctx, rhs)?,
-        },
+        rules::Expr::Bin(op, lhs, rhs) => {
+            let lhs = pexpr(ctx, lhs)?;
+            let rhs = pexpr(ctx, rhs)?;
+
+            BinOp {
+                span: Span::from_spans(lhs.span(), rhs.span()),
+                kind: op.kind,
+                lhs: ctx.intern(lhs),
+                rhs: ctx.intern(rhs),
+            }
+        }
         _ => todo!(),
     })
 }
 
-fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr, Diag<'a>> {
+fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>> {
     Ok(match expr {
         rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Lit(lit) => Expr::Lit(ctx.store_int(*lit)),
-        rules::Expr::Bin(_, _, _) => Expr::Bin(Box::new(bin_op(ctx, expr)?)),
+        rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
+        rules::Expr::Bin(_, _, _) => Expr::Bin(bin_op(ctx, expr)?),
         rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
         rules::Expr::StructDef(def) => Expr::Struct(struct_def(ctx, def)?),
+        rules::Expr::If(iff, expr, block, otherwise) => {
+            Expr::If(if_(ctx, *iff, expr, block, otherwise.as_ref())?)
+        }
+        //rules::Expr::Block(iff, block) => Expr::Block(else_(ctx, *iff, block)?),
+        rules::Expr::Bool(id) => Expr::Bool(ctx.span(*id), ctx.kind(*id) == TokenKind::True),
         _ => todo!(),
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct Assign {
+fn plit<'a>(ctx: &mut Ctx<'a>, lit: TokenId) -> Result<Lit<'a>, Diag<'a>> {
+    assert!(ctx.kind(lit) == TokenKind::Int);
+    Ok(Lit {
+        span: ctx.span(lit),
+        kind: ctx.intern(LitKind::Int(ctx.int_lit(lit))),
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Assign<'a> {
     pub span: Span,
     pub kind: AssignKind,
-    pub lhs: AssignTarget,
-    pub rhs: Expr,
+    pub lhs: AssignTarget<'a>,
+    pub rhs: Expr<'a>,
 }
 
 // TODO: more assignment kinds
@@ -696,13 +723,13 @@ pub enum AssignKind {
     Add,
 }
 
-#[derive(Debug, Clone)]
-pub enum AssignTarget {
+#[derive(Debug, Clone, Copy)]
+pub enum AssignTarget<'a> {
     Ident(Ident),
-    Field(BinOp),
+    Field(BinOp<'a>),
 }
 
-fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarget, Diag<'a>> {
+fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarget<'a>, Diag<'a>> {
     Ok(match expr {
         rules::Expr::Ident(ident) => AssignTarget::Ident(ctx.store_ident(*ident)),
         rules::Expr::Bin(bin, _, _) => {
@@ -716,37 +743,25 @@ fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarg
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct Return {
+#[derive(Debug, Clone, Copy)]
+pub struct Return<'a> {
     pub span: Span,
-    pub expr: Option<OpenStmt>,
+    pub expr: Option<Expr<'a>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Call {
+#[derive(Debug, Clone, Copy)]
+pub struct Call<'a> {
     pub span: Span,
-    pub sig: Sig,
-    pub args: Args,
+    pub sig: &'a Sig<'a>,
+    pub args: &'a [Expr<'a>],
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Args {
-    pub args: Vec<Expr>,
-}
-
-impl Args {
-    pub fn is_empty(&self) -> bool {
-        self.args.is_empty()
-    }
-}
-
-fn args<'a>(ctx: &mut Ctx<'a>, args: &[rules::Expr]) -> Result<Args, Diag<'a>> {
-    Ok(Args {
-        args: args
-            .iter()
-            .map(|arg| pexpr(ctx, arg))
-            .collect::<Result<_, _>>()?,
-    })
+fn args<'a>(ctx: &mut Ctx<'a>, args: &[rules::Expr]) -> Result<&'a [Expr<'a>], Diag<'a>> {
+    let args = args
+        .iter()
+        .map(|arg| pexpr(ctx, arg))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ctx.intern_slice(&args))
 }
 
 fn call<'a>(
@@ -754,13 +769,12 @@ fn call<'a>(
     span: Span,
     name: TokenId,
     call_args: &[rules::Expr],
-) -> Result<Call, Diag<'a>> {
+) -> Result<Call<'a>, Diag<'a>> {
     let id = ctx.store_ident(name).id;
     Ok(Call {
         sig: ctx
             .get_sig(id)
-            .ok_or_else(|| ctx.report_error(name, "function is not defined"))?
-            .clone(),
+            .ok_or_else(|| ctx.report_error(name, "function is not defined"))?,
         args: args(ctx, call_args)?,
         span,
     })

@@ -38,6 +38,21 @@ impl<'a> Diag<'a> {
         }
     }
 
+    /// Panics if bundle is empty
+    #[track_caller]
+    pub fn bundle(bundle: impl IntoIterator<Item = Self>) -> Self {
+        let mut iter = bundle.into_iter();
+        let Some(mut first) = iter.next() else {
+            panic!("bundle cannot be empty");
+        };
+
+        for diag in iter {
+            first = first.wrap(diag);
+        }
+
+        first
+    }
+
     pub fn level(mut self, level: Level) -> Self {
         match &mut self.inner {
             DiagInnerPtr::One(diag) => {

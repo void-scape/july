@@ -37,6 +37,10 @@ where
             | TokenKind::Greater
             | TokenKind::Comma
             | TokenKind::Dot
+            | TokenKind::If
+            | TokenKind::Else
+            | TokenKind::True
+            | TokenKind::False
             | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
             TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
             TokenKind::Ident => format!("expected {}", kind.as_str()),
@@ -153,6 +157,11 @@ macro_rules! impl_tkt {
         }
     };
 }
+
+impl_tkt!(If, TokenKind::If);
+impl_tkt!(Else, TokenKind::Else);
+impl_tkt!(True, TokenKind::True);
+impl_tkt!(False, TokenKind::False);
 
 impl_tkt!(Enum, TokenKind::Enum);
 impl_tkt!(Fn, TokenKind::Fn);

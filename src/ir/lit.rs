@@ -1,9 +1,9 @@
 use crate::lex::buffer::Span;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Lit {
+pub struct Lit<'a> {
     pub span: Span,
-    pub kind: LitId,
+    pub kind: &'a LitKind<'a>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -15,25 +15,5 @@ pub enum LitKind<'a> {
 impl LitKind<'_> {
     pub fn is_int(&self) -> bool {
         matches!(self, Self::Int(_))
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct LitId(usize);
-
-#[derive(Debug, Default)]
-pub struct LitStore<'a> {
-    lits: Vec<LitKind<'a>>,
-}
-
-impl<'a> LitStore<'a> {
-    pub fn store(&mut self, lit: LitKind<'a>) -> LitId {
-        let idx = self.lits.len();
-        self.lits.push(lit);
-        LitId(idx)
-    }
-
-    pub fn get_lit(&self, id: LitId) -> Option<LitKind<'a>> {
-        self.lits.get(id.0).copied()
     }
 }

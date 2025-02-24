@@ -1,11 +1,13 @@
+use super::ctx::CtxFmt;
 use super::*;
 use crate::lex::buffer::Buffer;
 use std::ops::Deref;
 
-pub fn sem_analysis<'a>(ctx: &'a Ctx<'a>, key: &'a TypeKey) -> Result<(), ()> {
-    let mut ctx = SemCtx::new(ctx, key);
+pub fn sem_analysis_pre_typing<'a>(ctx: &'a Ctx<'a>) -> Result<(), ()> {
+    let mut ctx = SemCtx::new(ctx);
 
     ctx.sem_try(entry);
+    ctx.sem_try(unique_funcs);
     ctx.sem_func(end_is_return);
 
     if ctx.diags.is_empty() {
@@ -15,18 +17,25 @@ pub fn sem_analysis<'a>(ctx: &'a Ctx<'a>, key: &'a TypeKey) -> Result<(), ()> {
     }
 }
 
+pub fn sem_analysis<'a>(ctx: &'a Ctx<'a>, key: &'a TypeKey) -> Result<(), ()> {
+    Ok(())
+}
+
 struct SemCtx<'a> {
     ctx: &'a Ctx<'a>,
-    key: &'a TypeKey,
+    //key: &'a TypeKey,
     diags: Vec<Diag<'a>>,
 }
 
 impl<'a> SemCtx<'a> {
-    pub fn new(ctx: &'a Ctx<'a>, key: &'a TypeKey) -> Self {
+    pub fn new(
+        ctx: &'a Ctx<'a>,
+        //key: &'a TypeKey
+    ) -> Self {
         Self {
             diags: Vec::new(),
             ctx,
-            key,
+            //key,
         }
     }
 
@@ -77,6 +86,27 @@ fn entry<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
     } else {
         Ok(())
     }
+}
+
+fn unique_funcs<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
+    let mut set = HashSet::with_capacity(ctx.funcs.len());
+    for f in ctx.funcs.iter() {
+        if !set.insert(f.sig.ident) {
+            let ident = f.sig.ident;
+            let occurences = ctx
+                .funcs
+                .iter()
+                .filter(|f| f.sig.ident == ident)
+                .collect::<Vec<_>>();
+
+            return Err(ctx.errors(
+                format!("`{}` defined multiple times", ident.ctx_fmt(ctx)),
+                occurences.iter().map(|f| Msg::error(f.name_span, "")),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {

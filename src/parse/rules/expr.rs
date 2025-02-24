@@ -1,3 +1,4 @@
+use super::block::Block;
 use super::enom::EnumDef;
 use super::strukt::StructDef;
 use super::{Next, ParserRule, RResult};
@@ -14,6 +15,7 @@ use crate::parse::{matc::*, stream::TokenStream};
 pub enum Expr {
     Ident(TokenId),
     Lit(TokenId),
+    Bool(TokenId),
     Bin(BinOp, Box<Expr>, Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
@@ -24,6 +26,7 @@ pub enum Expr {
         func: TokenId,
         args: Vec<Expr>,
     },
+    If(TokenId, Box<Expr>, Block, Option<Block>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +151,7 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
 pub enum Term {
     Lit(TokenId),
     Ident(TokenId),
+    Bool(TokenId),
     Call {
         span: Span,
         func: TokenId,
@@ -160,6 +164,7 @@ impl Term {
         match self {
             Self::Lit(id) => Expr::Lit(id),
             Self::Ident(id) => Expr::Ident(id),
+            Self::Bool(bool) => Expr::Bool(bool),
             Self::Call { span, func, args } => Expr::Call { span, func, args },
         }
     }
@@ -245,6 +250,10 @@ impl<'a> ParserRule<'a> for TermRule {
             Some(TokenKind::Int) => {
                 let lit = Next::<Int>::parse(buffer, stream, stack).unwrap();
                 Ok(Term::Lit(lit))
+            }
+            Some(TokenKind::True) | Some(TokenKind::False) => {
+                let bool = Next::<Any>::parse(buffer, stream, stack).unwrap();
+                Ok(Term::Bool(bool))
             }
             kind => Err(stream.full_error(
                 "malformed expression",
@@ -345,7 +354,7 @@ impl<'a> ParserRule<'a> for ExprRule {
         let mut expr_stack = Vec::new();
         let mut operators = Vec::new();
         let mut open_parens = 0;
-        while stream.match_peek::<Not<Any<(Semi, CloseCurly, Comma)>>>() {
+        while stream.match_peek::<Not<Any<(Semi, CloseCurly, Comma, OpenCurly)>>>() {
             if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
                 match op {
                     BinOpTokens::Field(_)
@@ -453,6 +462,9 @@ impl<'a> ParserRule<'a> for ExprRule {
             }
         }
 
-        Ok(accum_op.unwrap())
+        match accum_op {
+            Some(op) => Ok(op),
+            None => Err(stream.error("empty expression")),
+        }
     }
 }

@@ -1,5 +1,5 @@
 use super::ctx::AirCtx;
-use super::{IntKind, OffsetVar};
+use super::{eval_expr, IntKind, OffsetVar};
 use crate::air::ctx::RET_REG;
 use crate::air::{generate_args, Air, Reg};
 use crate::ir::lit::LitKind;
@@ -31,7 +31,7 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                         });
                     }
                     Ty::Struct(id) => {
-                        let bytes = ctx.tys.struct_layout(*id).size;
+                        let bytes = ctx.tys.struct_layout(id).size;
                         ctx.ins_set(&[
                             Air::Addr(Reg::B, dst),
                             Air::Addr(Reg::A, field_var),
@@ -42,12 +42,29 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                             },
                         ]);
                     }
+                    Ty::Bool => {
+                        ctx.ins(Air::PushIVar {
+                            dst,
+                            kind: IntKind::I8,
+                            src: field_var,
+                        });
+                    }
                     Ty::Unit => panic!("field type cannot be unit"),
                 }
             }
             _ => unreachable!(),
         }
     }
+}
+
+/// Evaluate `bin` for its side effects then throw away.
+pub fn eval_bin_op<'a>(ctx: &mut AirCtx<'a>, bin: &'a BinOp) {
+    if bin.kind.is_field() {
+        return;
+    }
+
+    eval_expr(ctx, &bin.lhs);
+    eval_expr(ctx, &bin.rhs);
 }
 
 /// Evalute `bin` and assign to `dst`.
@@ -94,9 +111,10 @@ pub fn aquire_bin_field_offset(ctx: &AirCtx, bin: &BinOp) -> (OffsetVar, TyId) {
             Ty::Struct(id) => {
                 let field_offset = strukt.field_offset(ctx, access.id);
                 offset += field_offset;
-                strukt = ctx.tys.strukt(*id);
+                strukt = ctx.tys.strukt(id);
             }
             Ty::Int(t) => panic!("{t:?} has not fields"),
+            Ty::Bool => panic!("bool has no fields"),
             Ty::Unit => panic!("structs cannot contain unit fields"),
         }
     }
@@ -129,14 +147,18 @@ trait BinOpVisitor
 where
     Self: AllBinOpLeaves,
 {
-    fn visit<'a>(&self, ctx: &mut AirCtx<'a>, kind: IntKind, dst: OffsetVar, bin: &'a BinOp) {
+    fn visit<'a>(&self, ctx: &mut AirCtx<'a>, kind: IntKind, dst: OffsetVar, bin: &'a BinOp<'a>) {
         assert!(bin.kind.is_primitive());
         match &bin.lhs {
-            Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+            Expr::Lit(lit) => match lit.kind {
                 LitKind::Int(lhs_lit) => match &bin.rhs {
-                    Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                    Expr::Bool(_, _) => {
+                        panic!("invalid operation");
+                        //self.visit_leaf(ctx, dst, lhs_lit, *val as i64);
+                    }
+                    Expr::Lit(lit) => match lit.kind {
                         LitKind::Int(rhs_lit) => {
-                            self.visit_leaf(ctx, dst, lhs_lit, rhs_lit);
+                            self.visit_leaf(ctx, dst, *lhs_lit, *rhs_lit);
                         }
                         _ => unreachable!(),
                     },
@@ -146,14 +168,14 @@ where
                             let field_ty = ctx.tys.ty(field_ty);
                             let kind = field_ty.expect_int().kind();
                             match bin.kind {
-                                BinOpKind::Add => add!(ctx, kind, dst, lhs_lit, field_var),
-                                BinOpKind::Sub => sub!(ctx, kind, dst, lhs_lit, field_var),
-                                BinOpKind::Mul => mul!(ctx, kind, dst, lhs_lit, field_var),
+                                BinOpKind::Add => add!(ctx, kind, dst, *lhs_lit, field_var),
+                                BinOpKind::Sub => sub!(ctx, kind, dst, *lhs_lit, field_var),
+                                BinOpKind::Mul => mul!(ctx, kind, dst, *lhs_lit, field_var),
                                 BinOpKind::Field => unreachable!(),
                             }
                         } else {
                             assign_prim_bin_op(ctx, dst, kind, inner_bin);
-                            self.visit_leaf(ctx, dst, lhs_lit, dst);
+                            self.visit_leaf(ctx, dst, *lhs_lit, dst);
                         }
                     }
                     Expr::Call(call @ Call { sig, .. }) => {
@@ -161,22 +183,27 @@ where
                         assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                         let args = generate_args(ctx, call);
                         ctx.ins(Air::Call(sig, args));
-                        self.visit_leaf(ctx, dst, lhs_lit, Reg::A);
+                        self.visit_leaf(ctx, dst, *lhs_lit, Reg::A);
                     }
                     Expr::Ident(ident) => {
                         let rhs = ctx.expect_var(ident.id);
-                        self.visit_leaf(ctx, dst, lhs_lit, OffsetVar::zero(rhs));
+                        self.visit_leaf(ctx, dst, *lhs_lit, OffsetVar::zero(rhs));
                     }
-                    Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
+                    Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
+                    Expr::Block(_) => todo!(),
                 },
                 _ => unreachable!(),
             },
             Expr::Ident(ident) => {
                 let var = OffsetVar::zero(ctx.expect_var(ident.id));
                 match &bin.rhs {
-                    Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                    Expr::Bool(_, _) => {
+                        panic!("invalid operation");
+                        //self.visit_leaf(ctx, dst, var, *val as i64);
+                    }
+                    Expr::Lit(lit) => match lit.kind {
                         LitKind::Int(lit) => {
-                            self.visit_leaf(ctx, dst, var, lit);
+                            self.visit_leaf(ctx, dst, var, *lit);
                         }
                         _ => unreachable!(),
                     },
@@ -206,18 +233,25 @@ where
                         ctx.ins(Air::Call(sig, args));
                         self.visit_leaf(ctx, dst, var, Reg::A);
                     }
-                    Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
+                    Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
+                    Expr::Block(_) => todo!(),
                 }
             }
             Expr::Call(call @ Call { sig, .. }) => {
                 let sig_ty = ctx.tys.ty(sig.ty);
                 assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                 match &bin.rhs {
-                    Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                    Expr::Bool(_, _) => {
+                        panic!("invalid operation");
+                        //let args = generate_args(ctx, call);
+                        //ctx.ins(Air::Call(sig, args));
+                        //self.visit_leaf(ctx, dst, Reg::A, *val as i64);
+                    }
+                    Expr::Lit(lit) => match lit.kind {
                         LitKind::Int(lit) => {
                             let args = generate_args(ctx, call);
                             ctx.ins(Air::Call(sig, args));
-                            self.visit_leaf(ctx, dst, Reg::A, lit);
+                            self.visit_leaf(ctx, dst, Reg::A, *lit);
                         }
                         _ => unreachable!(),
                     },
@@ -276,10 +310,15 @@ where
                         ]);
                         self.visit_leaf(ctx, dst, Reg::B, Reg::A);
                     }
-                    Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
+                    Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
+                    Expr::Block(_) => todo!(),
                 }
             }
-            Expr::Struct(_) | Expr::Enum(_) => unimplemented!(),
+            Expr::Bool(_, _) => {
+                panic!("invalid operation");
+            }
+            Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
+            Expr::Block(_) => todo!(),
             Expr::Bin(_) => unreachable!(),
         }
     }

@@ -1,6 +1,15 @@
 /// Definition of all kinds of tokens found within a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    /// `if`
+    If,
+    /// `else`
+    Else,
+    /// `true`
+    True,
+    /// `false`
+    False,
+
     /// `struct`
     Struct,
     /// `enum`
@@ -73,6 +82,11 @@ impl TokenKind {
             Self::Hyphen => "-",
             Self::Comma => ",",
             Self::Dot => ".",
+
+            Self::If => "if",
+            Self::Else => "else",
+            Self::True => "true",
+            Self::False => "false",
 
             Self::Int => "int literal",
             Self::Ident => "identifier",

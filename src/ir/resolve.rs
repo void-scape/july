@@ -20,23 +20,8 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
         infer.for_func(func);
         init_params(&mut infer, func);
 
-        for stmt in func.block.stmts.iter() {
-            match stmt {
-                Stmt::Semi(semi) => {
-                    if let Err(diag) = constrain_semi_stmt(ctx, &mut infer, semi, &func.sig) {
-                        errors.push(diag);
-                    }
-                }
-                Stmt::Open(_) => {
-                    unreachable!();
-                }
-            }
-        }
-
-        if let Some(end) = &func.block.end {
-            if let Err(diag) = constrain_open_stmt(ctx, &mut infer, end, &func.sig) {
-                errors.push(diag);
-            }
+        if let Err(err) = constrain_block(ctx, &mut infer, &func.block, func.sig) {
+            errors.push(err);
         }
 
         match infer.finish(ctx) {
@@ -65,11 +50,71 @@ fn init_params(infer: &mut InferCtx, func: &Func) {
     }
 }
 
+fn constrain_block<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    block: &Block<'a>,
+    sig: &Sig<'a>,
+) -> Result<(), Diag<'a>> {
+    let mut errors = Vec::new();
+
+    for stmt in block.stmts.iter() {
+        match stmt {
+            Stmt::Semi(semi) => {
+                if let Err(diag) = constrain_semi_stmt(ctx, infer, semi, sig) {
+                    errors.push(diag);
+                }
+            }
+            Stmt::Open(expr) => {
+                // TODO: do we have to check for invalid open statements here? Are those even
+                // possible?
+                if let Err(diag) = constrain_expr_no_var(ctx, infer, sig, expr) {
+                    errors.push(diag);
+                }
+            }
+        }
+    }
+
+    if let Some(end) = &block.end {
+        if let Err(diag) = constrain_return_expr(ctx, infer, end, &sig) {
+            errors.push(diag);
+        }
+    }
+
+    if !errors.is_empty() {
+        Err(Diag::bundle(errors))
+    } else {
+        Ok(())
+    }
+}
+
+fn constrain_block_to<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    block: &Block<'a>,
+    sig: &Sig<'a>,
+    ty: TyId,
+    source: Span,
+) -> Result<(), Diag<'a>> {
+    if let Some(end) = &block.end {
+        constrain_expr_to(ctx, infer, end, sig, ty, source)?;
+    } else {
+        if ty != ctx.tys.unit() {
+            return Err(ctx.report_error(
+                block.span,
+                format!("expected `{}`, got `()`", ctx.ty_str(ty)),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn constrain_semi_stmt<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    stmt: &SemiStmt,
-    sig: &Sig,
+    stmt: &SemiStmt<'a>,
+    sig: &Sig<'a>,
 ) -> Result<(), Diag<'a>> {
     match stmt {
         SemiStmt::Let(let_) => match let_.lhs {
@@ -85,7 +130,7 @@ fn constrain_semi_stmt<'a>(
                         }
                         Expr::Call(call @ Call { sig, span, .. }) => {
                             infer.eq(var, sig.ty, *span);
-                            constrain_call_args(ctx, infer, call)?;
+                            constrain_call_args(ctx, infer, sig, call)?;
                         }
                         Expr::Ident(other) => {
                             let Some(other_var) = infer.get_var(other.id) else {
@@ -99,23 +144,28 @@ fn constrain_semi_stmt<'a>(
                                 let (_, ty) = aquire_bin_field_ty(ctx, infer, &bin)?;
                                 infer.eq(var, ty, bin.span);
                             } else {
-                                constrain_bin_op(ctx, infer, bin, var)?;
+                                constrain_bin_op(ctx, infer, sig, bin, var)?;
                             }
                         }
-                        Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+                        Expr::Lit(lit) => match lit.kind {
                             LitKind::Int(_) => {
                                 infer.integral(var, lit.span);
                             }
                             _ => todo!(),
                         },
+                        Expr::Bool(span, _) => {
+                            infer.eq(var, ctx.tys.bool(), *span);
+                        }
                         Expr::Enum(_) => todo!(),
+                        Expr::If(_) => todo!(),
+                        Expr::Block(_) => todo!(),
                     }
                 }
             }
         },
         SemiStmt::Ret(r) => {
             if let Some(expr) = &r.expr {
-                constrain_open_stmt(ctx, infer, expr, sig)
+                constrain_return_expr(ctx, infer, expr, sig)
                     .map_err(|err| err.msg(Msg::note(sig.span, "from fn signature")))?;
             } else {
                 if !ctx.tys.is_unit(sig.ty) {
@@ -135,7 +185,7 @@ fn constrain_semi_stmt<'a>(
         SemiStmt::Assign(assign) => match &assign.lhs {
             AssignTarget::Ident(ident) => match infer.get_var(ident.id) {
                 Some(var) => {
-                    constrain_expr(ctx, infer, &assign.rhs, var)?;
+                    constrain_expr(ctx, infer, sig, &assign.rhs, var)?;
                 }
                 None => {
                     return Err(ctx.undeclared(ident));
@@ -143,26 +193,23 @@ fn constrain_semi_stmt<'a>(
             },
             AssignTarget::Field(field_bin) => {
                 let (span, ty) = aquire_bin_field_ty(ctx, infer, field_bin)?;
-                constrain_expr_to(ctx, infer, &assign.rhs, ty, span)?;
+                constrain_expr_to(ctx, infer, &assign.rhs, sig, ty, span)?;
             }
         },
-        SemiStmt::Bin(bin) => {
-            constrain_unbounded_bin_op(ctx, infer, bin)?;
-        }
-        SemiStmt::Call(_) => {}
+        SemiStmt::Expr(expr) => constrain_expr_no_var(ctx, infer, sig, expr)?,
     }
 
     Ok(())
 }
 
-fn constrain_open_stmt<'a>(
+fn constrain_return_expr<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    stmt: &OpenStmt,
-    sig: &Sig,
+    expr: &Expr<'a>,
+    sig: &Sig<'a>,
 ) -> Result<(), Diag<'a>> {
-    match stmt {
-        OpenStmt::Ident(ident) => match infer.get_var(ident.id) {
+    match expr {
+        Expr::Ident(ident) => match infer.get_var(ident.id) {
             Some(var) => {
                 infer.eq(var, sig.ty, sig.span);
             }
@@ -170,7 +217,7 @@ fn constrain_open_stmt<'a>(
                 return Err(ctx.undeclared(ident));
             }
         },
-        OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
+        Expr::Lit(lit) => match lit.kind {
             LitKind::Int(_) => {
                 if !ctx.tys.ty(sig.ty).is_int() {
                     return Err(ctx.mismatch(lit.span, sig.ty, "an integer"));
@@ -178,10 +225,10 @@ fn constrain_open_stmt<'a>(
             }
             _ => todo!(),
         },
-        OpenStmt::Bin(bin) => {
-            constrain_bin_op_to(ctx, infer, bin, sig.ty, sig.span)?;
+        Expr::Bin(bin) => {
+            constrain_bin_op_to(ctx, infer, bin, sig, sig.ty, sig.span)?;
         }
-        OpenStmt::Call(call) => {
+        Expr::Call(call) => {
             if call.sig.ty != sig.ty {
                 return Err(ctx.report_error(
                     call.span,
@@ -193,7 +240,7 @@ fn constrain_open_stmt<'a>(
                 ));
             }
         }
-        OpenStmt::Struct(def) => {
+        Expr::Struct(def) => {
             if ctx.tys.struct_ty_id(def.id) != sig.ty {
                 return Err(ctx.report_error(
                     def.span,
@@ -205,6 +252,31 @@ fn constrain_open_stmt<'a>(
                 ));
             }
         }
+        Expr::Bool(span, _) => {
+            if sig.ty != ctx.tys.bool() {
+                return Err(ctx.report_error(
+                    span,
+                    format!(
+                        "invalid type: expected: `{}`, got `bool`",
+                        sig.ty.ctx_fmt(ctx)
+                    ),
+                ));
+            }
+        }
+        Expr::If(if_) => {
+            constrain_return_expr(ctx, infer, if_.block, sig)?;
+            if let Some(otherwise) = if_.otherwise {
+                constrain_return_expr(ctx, infer, otherwise, sig)?;
+            }
+
+            constrain_expr_to(ctx, infer, if_.condition, sig, ctx.tys.bool(), if_.span).map_err(
+                |_| ctx.report_error(if_.condition.span(), "mismatched types: expected a `bool`"),
+            )?;
+        }
+        Expr::Block(blck) => {
+            constrain_block_to(ctx, infer, blck, sig, sig.ty, sig.span)?;
+        }
+        Expr::Enum(_) => todo!(),
     }
 
     Ok(())
@@ -213,7 +285,8 @@ fn constrain_open_stmt<'a>(
 fn constrain_expr<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    expr: &Expr,
+    sig: &Sig<'a>,
+    expr: &Expr<'a>,
     var: TyVar,
 ) -> Result<(), Diag<'a>> {
     match &expr {
@@ -222,7 +295,7 @@ fn constrain_expr<'a>(
         }
         Expr::Call(call @ Call { sig, span, .. }) => {
             infer.eq(var, sig.ty, *span);
-            constrain_call_args(ctx, infer, call)?;
+            constrain_call_args(ctx, infer, sig, call)?;
         }
         Expr::Ident(other) => {
             let Some(other_ty) = infer.get_var(other.id) else {
@@ -232,15 +305,54 @@ fn constrain_expr<'a>(
             infer.var_eq(ctx, var, other_ty);
         }
         Expr::Bin(bin) => {
-            constrain_bin_op(ctx, infer, bin, var)?;
+            constrain_bin_op(ctx, infer, sig, bin, var)?;
         }
-        Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+        Expr::Lit(lit) => match lit.kind {
             LitKind::Int(_) => {
                 infer.integral(var, lit.span);
             }
             _ => todo!(),
         },
+        Expr::Bool(span, _) => {
+            infer.eq(var, ctx.tys.bool(), *span);
+        }
+        Expr::Block(block) => {
+            constrain_block(ctx, infer, block, sig)?;
+        }
+        Expr::If(if_) => {
+            todo!()
+        }
         Expr::Enum(_) => todo!(),
+    }
+
+    Ok(())
+}
+
+fn constrain_expr_no_var<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    sig: &Sig<'a>,
+    expr: &Expr<'a>,
+) -> Result<(), Diag<'a>> {
+    match &expr {
+        Expr::Bool(_, _) | Expr::Lit(_) | Expr::Struct(_) => {}
+        Expr::Call(call) => {
+            constrain_call_args(ctx, infer, sig, call)?;
+        }
+        Expr::Ident(other) => {
+            if infer.get_var(other.id).is_none() {
+                return Err(ctx.undeclared(other));
+            };
+        }
+        Expr::Bin(bin) => {
+            constrain_bin_op_no_var(ctx, infer, sig, bin)?;
+        }
+        Expr::Enum(_) => todo!(),
+        Expr::If(if_) => {
+            todo!();
+            //constrain_expr_to(ctx, infer, &if_.expr, ctx.tys.bool(), if_.span)?;
+        }
+        Expr::Block(_) => todo!(),
     }
 
     Ok(())
@@ -249,7 +361,8 @@ fn constrain_expr<'a>(
 fn constrain_expr_to<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    expr: &Expr,
+    expr: &Expr<'a>,
+    sig: &Sig<'a>,
     ty: TyId,
     source: Span,
 ) -> Result<(), Diag<'a>> {
@@ -264,7 +377,7 @@ fn constrain_expr_to<'a>(
             if sig.ty != ty {
                 return Err(ctx.mismatch(*span, ty, sig.ty));
             }
-            constrain_call_args(ctx, infer, call)?;
+            constrain_call_args(ctx, infer, sig, call)?;
         }
         Expr::Ident(other) => {
             let Some(var) = infer.get_var(other.id) else {
@@ -274,9 +387,9 @@ fn constrain_expr_to<'a>(
             infer.eq(var, ty, source);
         }
         Expr::Bin(bin) => {
-            constrain_bin_op_to(ctx, infer, bin, ty, source)?;
+            constrain_bin_op_to(ctx, infer, bin, sig, ty, source)?;
         }
-        Expr::Lit(lit) => match ctx.expect_lit(lit.kind) {
+        Expr::Lit(lit) => match lit.kind {
             LitKind::Int(_) => {
                 if !ctx.tys.ty(ty).is_int() {
                     return Err(ctx.mismatch(lit.span, ty, "an integer"));
@@ -284,6 +397,15 @@ fn constrain_expr_to<'a>(
             }
             _ => todo!(),
         },
+        Expr::Bool(span, _) => {
+            if ty != ctx.tys.bool() {
+                return Err(ctx.mismatch(*span, ty, "bool"));
+            }
+        }
+        Expr::If(if_) => {
+            constrain_expr_to(ctx, infer, &if_.block, sig, ty, source)?;
+        }
+        Expr::Block(block) => constrain_block_to(ctx, infer, block, sig, ty, source)?,
         Expr::Enum(_) => todo!(),
     }
 
@@ -293,15 +415,30 @@ fn constrain_expr_to<'a>(
 fn constrain_bin_op<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    bin: &BinOp,
+    sig: &Sig<'a>,
+    bin: &BinOp<'a>,
     var: TyVar,
 ) -> Result<(), Diag<'a>> {
     if bin.kind.is_field() {
         let (span, field_ty) = aquire_bin_field_ty(ctx, infer, &bin)?;
         infer.eq(var, field_ty, span);
     } else {
-        constrain_expr(ctx, infer, &bin.lhs, var)?;
-        constrain_expr(ctx, infer, &bin.rhs, var)?;
+        constrain_expr(ctx, infer, sig, &bin.lhs, var)?;
+        constrain_expr(ctx, infer, sig, &bin.rhs, var)?;
+    }
+
+    Ok(())
+}
+
+fn constrain_bin_op_no_var<'a>(
+    ctx: &Ctx<'a>,
+    infer: &mut InferCtx,
+    sig: &Sig<'a>,
+    bin: &BinOp<'a>,
+) -> Result<(), Diag<'a>> {
+    if !bin.kind.is_field() {
+        constrain_expr_no_var(ctx, infer, sig, &bin.lhs)?;
+        constrain_expr_no_var(ctx, infer, sig, &bin.rhs)?;
     }
 
     Ok(())
@@ -310,7 +447,8 @@ fn constrain_bin_op<'a>(
 fn constrain_bin_op_to<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    bin: &BinOp,
+    bin: &BinOp<'a>,
+    sig: &Sig<'a>,
     ty: TyId,
     source: Span,
 ) -> Result<(), Diag<'a>> {
@@ -320,8 +458,8 @@ fn constrain_bin_op_to<'a>(
             return Err(ctx.mismatch(span, ty, field_ty));
         }
     } else {
-        constrain_expr_to(ctx, infer, &bin.lhs, ty, source)?;
-        constrain_expr_to(ctx, infer, &bin.rhs, ty, source)?;
+        constrain_expr_to(ctx, infer, &bin.lhs, sig, ty, source)?;
+        constrain_expr_to(ctx, infer, &bin.rhs, sig, ty, source)?;
     }
 
     Ok(())
@@ -330,13 +468,14 @@ fn constrain_bin_op_to<'a>(
 fn constrain_unbounded_bin_op<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    bin: &BinOp,
+    sig: &Sig<'a>,
+    bin: &BinOp<'a>,
 ) -> Result<(), Diag<'a>> {
     if !bin.kind.is_field() {
         if let Some(var) = find_ty_var_in_bin_op(ctx, infer, bin)? {
-            constrain_bin_op(ctx, infer, bin, var)?;
+            constrain_bin_op(ctx, infer, sig, bin, var)?;
         } else if let Some((span, ty)) = find_ty_in_bin_op(ctx, infer, bin)? {
-            constrain_bin_op_to(ctx, infer, bin, ty, span)?;
+            constrain_bin_op_to(ctx, infer, bin, sig, ty, span)?;
         } else {
             if bin.is_integral(ctx).is_none_or(|i| !i) {
                 return Err(ctx.report_error(bin.span, "expected every term to be an integer"));
@@ -375,6 +514,9 @@ fn find_ty_var_in_expr<'a>(
             .ok_or_else(|| ctx.undeclared(ident)),
         Expr::Bin(bin) => find_ty_var_in_bin_op(ctx, infer, bin),
         Expr::Call(_) | Expr::Struct(_) | Expr::Enum(_) | Expr::Lit(_) => Ok(None),
+        Expr::Bool(_, _) => Ok(None),
+        Expr::If(_) => todo!(),
+        Expr::Block(_) => todo!(),
     }
 }
 
@@ -401,11 +543,14 @@ fn find_ty_in_expr<'a>(
     expr: &Expr,
 ) -> Result<Option<(Span, TyId)>, Diag<'a>> {
     match expr {
+        Expr::Bool(span, _) => Ok(Some((*span, ctx.tys.bool()))),
         Expr::Bin(bin) => find_ty_in_bin_op(ctx, infer, bin),
         Expr::Call(call) => Ok(Some((call.span, call.sig.ty))),
         Expr::Struct(def) => Ok(Some((def.span, ctx.tys.struct_ty_id(def.id)))),
         Expr::Enum(_) => unimplemented!(),
         Expr::Ident(_) | Expr::Lit(_) => Ok(None),
+        Expr::If(_) => todo!(),
+        Expr::Block(_) => todo!(),
     }
 }
 
@@ -436,8 +581,8 @@ pub fn aquire_bin_field_ty<'a>(
     let ty = ctx.tys.ty(ty);
 
     let id = match ty {
-        Ty::Struct(id) => *id,
-        Ty::Int(_) | Ty::Unit => {
+        Ty::Struct(id) => id,
+        Ty::Int(_) | Ty::Unit | Ty::Bool => {
             return Err(ctx.report_error(
                 bin.span,
                 format!(
@@ -458,9 +603,9 @@ pub fn aquire_bin_field_ty<'a>(
 
         match ctx.tys.ty(ty) {
             Ty::Struct(id) => {
-                strukt = ctx.tys.strukt(*id);
+                strukt = ctx.tys.strukt(id);
             }
-            ty @ Ty::Int(_) | ty @ Ty::Unit => {
+            ty @ Ty::Int(_) | ty @ Ty::Unit | ty @ Ty::Bool => {
                 return Err(ctx.report_error(
                     access,
                     format!(
@@ -480,10 +625,11 @@ pub fn aquire_bin_field_ty<'a>(
 fn constrain_call_args<'a>(
     ctx: &Ctx<'a>,
     infer: &mut InferCtx,
-    call: &Call,
+    sig: &Sig<'a>,
+    call: &Call<'a>,
 ) -> Result<(), Diag<'a>> {
     let params = call.sig.params.len();
-    let args = call.args.args.len();
+    let args = call.args.len();
     if params != args {
         return Err(err!(
             ctx,
@@ -493,8 +639,8 @@ fn constrain_call_args<'a>(
         .wrap(note!(ctx, call.sig.span, "function defined here")));
     }
 
-    for (expr, ty) in call.args.args.iter().zip(call.sig.params.iter()) {
-        constrain_expr_to(ctx, infer, expr, ty.ty, ty.ty_binding)?;
+    for (expr, ty) in call.args.iter().zip(call.sig.params.iter()) {
+        constrain_expr_to(ctx, infer, expr, sig, ty.ty, ty.ty_binding)?;
     }
 
     Ok(())

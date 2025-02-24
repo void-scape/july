@@ -1,14 +1,14 @@
 use super::enom::EnumStore;
 use super::ident::*;
-use super::lit::{Lit, LitId, LitKind, LitStore};
-use super::sig::{Sig, SigStore};
+use super::sig::Sig;
 use super::strukt::StructId;
 use super::ty::{store::TyId, store::TyStore, *};
 use super::Func;
+use crate::arena::BlobArena;
 use crate::diagnostic::{Diag, Msg, Sourced};
 use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use annotate_snippets::Level;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct Ctx<'a> {
@@ -16,19 +16,19 @@ pub struct Ctx<'a> {
     pub idents: IdentStore<'a>,
     pub tys: TyStore,
     pub enums: EnumStore,
-    pub funcs: Vec<Func>,
-    lits: LitStore<'a>,
-    sigs: SigStore,
+    pub funcs: Vec<Func<'a>>,
+    arena: BlobArena,
+    sigs: HashMap<IdentId, &'a Sig<'a>>,
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
         Self {
             idents: IdentStore::default(),
-            lits: LitStore::default(),
-            sigs: SigStore::default(),
+            sigs: HashMap::default(),
             tys: TyStore::default(),
             enums: EnumStore::default(),
+            arena: BlobArena::default(),
             funcs: Vec::new(),
             tokens,
         }
@@ -99,11 +99,11 @@ impl<'a> Ctx<'a> {
         diag.loc(std::panic::Location::caller())
     }
 
-    pub fn ty_str(&self, ty: TyId) -> &str {
+    pub fn ty_str(&'a self, ty: TyId) -> &'a str {
         self.tys.ty(ty).as_str(self)
     }
 
-    pub fn store_funcs(&mut self, funcs: Vec<Func>) {
+    pub fn store_funcs(&mut self, funcs: Vec<Func<'a>>) {
         self.funcs.extend(funcs.into_iter());
     }
 
@@ -115,6 +115,22 @@ impl<'a> Ctx<'a> {
     #[track_caller]
     pub fn expect_struct_id(&self, id: IdentId) -> StructId {
         self.tys.expect_struct_id(id)
+    }
+
+    /// Panics if `T` requires drop
+    #[track_caller]
+    pub fn intern<T>(&self, item: T) -> &'a T {
+        self.arena.alloc(item)
+    }
+
+    /// Panics if `T` requires drop
+    #[track_caller]
+    pub fn intern_slice<T>(&self, slice: &[T]) -> &'a [T] {
+        if !slice.is_empty() {
+            self.arena.alloc_slice(slice)
+        } else {
+            &[]
+        }
     }
 
     //pub fn store_enums(&mut self, enums: Vec<Enum>) {
@@ -139,7 +155,7 @@ impl<'a> Ctx<'a> {
         //self.enums.variants = variants;
     }
 
-    pub fn store_sigs(&mut self, sigs: Vec<Sig>) -> Result<(), Diag<'a>> {
+    pub fn store_sigs(&mut self, sigs: Vec<Sig<'a>>) -> Result<(), Diag<'a>> {
         let mut set = HashSet::<&Sig>::default();
         for sig in sigs.iter() {
             if !set.insert(sig) {
@@ -151,14 +167,14 @@ impl<'a> Ctx<'a> {
         }
 
         for sig in sigs.into_iter() {
-            self.sigs.store(sig);
+            self.sigs.insert(sig.ident, self.intern(sig));
         }
 
         Ok(())
     }
 
-    pub fn get_sig(&self, ident: IdentId) -> Option<&Sig> {
-        self.sigs.get_sig(ident)
+    pub fn get_sig(&self, ident: IdentId) -> Option<&'a Sig<'a>> {
+        self.sigs.get(&ident).copied()
     }
 
     #[track_caller]
@@ -176,23 +192,6 @@ impl<'a> Ctx<'a> {
     #[track_caller]
     pub fn expect_ident(&self, id: IdentId) -> &'a str {
         self.get_ident(id).expect("invalid ident id")
-    }
-
-    pub fn get_lit(&self, id: LitId) -> Option<LitKind<'a>> {
-        self.lits.get_lit(id)
-    }
-
-    #[track_caller]
-    pub fn expect_lit(&self, id: LitId) -> LitKind<'a> {
-        self.get_lit(id).expect("invalid lit id")
-    }
-
-    #[track_caller]
-    pub fn store_int(&mut self, int: TokenId) -> Lit {
-        Lit {
-            span: self.span(int),
-            kind: self.lits.store(LitKind::Int(self.int_lit(int))),
-        }
     }
 }
 
@@ -333,7 +332,6 @@ macro_rules! note {
         )
     }};
 }
-
 
 #[macro_export]
 macro_rules! help {

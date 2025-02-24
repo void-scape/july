@@ -32,25 +32,25 @@ impl Struct {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Field {
     pub span: Span,
     pub name: Ident,
     pub ty: TyId,
 }
 
-#[derive(Debug, Clone)]
-pub struct StructDef {
+#[derive(Debug, Clone, Copy)]
+pub struct StructDef<'a> {
     pub span: Span,
     pub id: StructId,
-    pub fields: Vec<FieldDef>,
+    pub fields: &'a [FieldDef<'a>],
 }
 
-#[derive(Debug, Clone)]
-pub struct FieldDef {
+#[derive(Debug, Clone, Copy)]
+pub struct FieldDef<'a> {
     pub span: Span,
     pub name: Ident,
-    pub expr: Expr,
+    pub expr: Expr<'a>,
 }
 
 #[derive(Debug, Clone)]

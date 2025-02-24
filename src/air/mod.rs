@@ -17,7 +17,7 @@ pub mod ctx;
 #[derive(Debug, Clone)]
 pub enum Air<'a> {
     Ret,
-    Call(&'a Sig, Args),
+    Call(&'a Sig<'a>, Args),
 
     /// Swap the A and B registers.
     SwapReg,
@@ -58,7 +58,7 @@ pub enum Air<'a> {
 /// Collection of [`Air`] instructions for a [`crate::ir::Func`].
 #[derive(Debug)]
 pub struct AirFunc<'a> {
-    pub func: &'a Func,
+    pub func: &'a Func<'a>,
     pub instrs: Vec<Air<'a>>,
 }
 
@@ -156,17 +156,20 @@ pub fn lower_func<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a
             Stmt::Semi(stmt) => match stmt {
                 SemiStmt::Let(let_) => air_let_stmt(ctx, let_),
                 SemiStmt::Assign(assign) => air_assign_stmt(ctx, assign),
-                SemiStmt::Call(call @ Call { sig, .. }) => {
-                    let args = generate_args(ctx, call);
-                    ctx.call(sig, args)
-                }
-                SemiStmt::Bin(bin) => air_bin_semi(ctx, bin),
+                //SemiStmt::Call(call @ Call { sig, .. }) => {
+                //    let args = generate_args(ctx, call);
+                //    ctx.call(sig, args)
+                //}
+                //SemiStmt::Bin(bin) => air_bin_semi(ctx, bin),
                 SemiStmt::Ret(ret) => match &ret.expr {
                     Some(expr) => {
                         air_return(ctx, func.sig.ty, &expr);
                     }
                     None => ctx.ins(Air::Ret),
                 },
+                SemiStmt::Expr(expr) => {
+                    eval_expr(ctx, expr);
+                }
             },
             Stmt::Open(_) => unreachable!(),
         }
@@ -226,6 +229,9 @@ fn air_let_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Let) {
 
 fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Expr) {
     match &expr {
+        Expr::Bool(_, val) => {
+            ctx.ins(Air::PushIConst(dst, IntKind::I64, *val as i64));
+        }
         Expr::Lit(lit) => {
             assign_lit(ctx, lit, dst, ty);
         }
@@ -247,7 +253,7 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                     });
                 }
                 Ty::Struct(s) => {
-                    let bytes = ctx.tys.struct_layout(*s).size;
+                    let bytes = ctx.tys.struct_layout(s).size;
                     ctx.ins_set(&[
                         Air::Addr(Reg::B, dst),
                         Air::MemCpy {
@@ -260,6 +266,13 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                             bytes,
                         },
                     ]);
+                }
+                Ty::Bool => {
+                    ctx.ins(Air::PushIReg {
+                        dst,
+                        kind: IntKind::I8,
+                        src: Reg::A,
+                    });
                 }
                 Ty::Unit => todo!(),
             }
@@ -276,7 +289,7 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                     });
                 }
                 Ty::Struct(id) => {
-                    let bytes = ctx.tys.struct_layout(*id).size;
+                    let bytes = ctx.tys.struct_layout(id).size;
                     ctx.ins_set(&[
                         Air::Addr(Reg::B, dst),
                         Air::Addr(Reg::A, other),
@@ -287,17 +300,51 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                         },
                     ]);
                 }
+                Ty::Bool => {
+                    ctx.ins(Air::PushIVar {
+                        dst,
+                        kind: IntKind::I8,
+                        src: other,
+                    });
+                }
                 Ty::Unit => todo!(),
             }
         }
+        Expr::If(_) => todo!(),
+        Expr::Block(_) => todo!(),
         Expr::Enum(_) => {
             todo!()
         }
     }
 }
 
+/// Evaluate an expression for its side effects and throw away the value. The type
+/// of the expression is possibly not known and should be chosen in such cases.
+fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
+    match &expr {
+        Expr::Lit(_) | Expr::Bool(_, _) | Expr::Ident(_) => {}
+        Expr::Bin(bin) => {
+            eval_bin_op(ctx, bin);
+        }
+        Expr::Struct(def) => {
+            let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
+            define_struct(ctx, def, dst);
+        }
+        Expr::Call(call) => {
+            let args = generate_args(ctx, call);
+            ctx.ins(Air::Call(&call.sig, args));
+        }
+        Expr::Enum(_) => {
+            todo!()
+        }
+        Expr::If(_) => todo!(),
+        Expr::Block(_) => todo!(),
+        Expr::Block(_) => todo!(),
+    }
+}
+
 fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
-    assert_eq!(call.args.args.len(), call.sig.params.len());
+    assert_eq!(call.args.len(), call.sig.params.len());
     if call.args.is_empty() {
         return Args::default();
     }
@@ -306,7 +353,7 @@ fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
         vars: Vec::with_capacity(call.sig.params.len()),
     };
 
-    for (expr, param) in call.args.args.iter().zip(call.sig.params.iter()) {
+    for (expr, param) in call.args.iter().zip(call.sig.params.iter()) {
         //let arg = OffsetVar::zero(ctx.new_var_registered(param.ident.id, param.ty));
 
         let the_fn_param = match ctx.get_var_with_hash(param.ident.id, call.sig.hash()) {
@@ -385,26 +432,28 @@ fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Assign) {
 #[track_caller]
 fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
     match ctx.tys.ty(ty) {
-        Ty::Int(int_ty) => match ctx.expect_lit(lit.kind) {
+        Ty::Int(int_ty) => match lit.kind {
             LitKind::Int(int) => {
-                ctx.ins(Air::PushIConst(var, int_ty.kind(), int));
+                ctx.ins(Air::PushIConst(var, int_ty.kind(), *int));
             }
             other => panic!("cannot assign int to `{other:?}`"),
         },
+        Ty::Bool => panic!("invalid operation"),
         Ty::Unit => panic!("cannot assign lit to unit"),
         Ty::Struct(_) => panic!("cannot assign lit to struct"),
     }
 }
 
-fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a OpenStmt) {
+fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a Expr) {
     match end {
-        OpenStmt::Lit(lit) => match ctx.expect_lit(lit.kind) {
+        Expr::Bool(_, val) => ctx.ret_iconst(*val as i64),
+        Expr::Lit(lit) => match lit.kind {
             LitKind::Int(int) => {
-                ctx.ret_iconst(int);
+                ctx.ret_iconst(*int);
             }
             _ => unreachable!(),
         },
-        OpenStmt::Ident(ident) => {
+        Expr::Ident(ident) => {
             let var = OffsetVar::zero(ctx.expect_var(ident.id));
             let out_ty = ctx.expect_var_ty(var.var);
             assert_eq!(out_ty, ty);
@@ -414,10 +463,11 @@ fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a OpenStmt) {
                     ctx.ret_ivar(var, int.kind());
                 }
                 Ty::Struct(_) => ctx.ret_ptr(var),
+                Ty::Bool => ctx.ret_ivar(var, IntKind::I8),
                 Ty::Unit => todo!(),
             }
         }
-        OpenStmt::Bin(bin) => {
+        Expr::Bin(bin) => {
             if bin.kind.is_primitive() {
                 match ctx.tys.ty(ty) {
                     Ty::Int(int) => {
@@ -425,6 +475,13 @@ fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a OpenStmt) {
                         let dst = OffsetVar::zero(ctx.anon_var(ty));
                         assign_prim_bin_op(ctx, dst, kind, bin);
                         ctx.ret_ivar(dst, kind);
+                    }
+                    Ty::Bool => {
+                        panic!("invalid operation");
+                        //let kind = IntKind::I8;
+                        //let dst = OffsetVar::zero(ctx.anon_var(ty));
+                        //assign_prim_bin_op(ctx, dst, kind, bin);
+                        //ctx.ret_ivar(dst, kind);
                     }
                     Ty::Struct(_) | Ty::Unit => unreachable!(),
                 }
@@ -440,6 +497,7 @@ fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a OpenStmt) {
                             Ty::Struct(_) => {
                                 ctx.ret_ptr(field_var);
                             }
+                            Ty::Bool => ctx.ret_ivar(field_var, IntKind::I8),
                             Ty::Unit => unreachable!(),
                         }
                     }
@@ -447,16 +505,21 @@ fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a OpenStmt) {
                 }
             }
         }
-        OpenStmt::Call(call) => {
+        Expr::Call(call) => {
             assert_eq!(call.sig.ty, ty);
             let args = generate_args(ctx, call);
             ctx.ins(Air::Call(&call.sig, args));
             ctx.ins(Air::Ret);
         }
-        OpenStmt::Struct(def) => {
+        Expr::Struct(def) => {
             let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
             define_struct(ctx, def, dst);
             ctx.ret_ptr(dst);
         }
+        Expr::If(if_) => {
+            todo!()
+        },
+        Expr::Block(_) => todo!(),
+        Expr::Enum(_) => todo!(),
     }
 }
