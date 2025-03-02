@@ -478,14 +478,22 @@ fn constrain_bin_op_to<'a>(
     ty: TyId,
     source: Span,
 ) -> Result<(), Diag<'a>> {
-    if bin.kind.is_field() {
-        let (span, field_ty) = aquire_bin_field_ty(ctx, infer, bin)?;
-        if ty != field_ty {
-            return Err(ctx.mismatch(span, ty, field_ty));
+    match bin.kind {
+        BinOpKind::Field => {
+            let (span, field_ty) = aquire_bin_field_ty(ctx, infer, bin)?;
+            if ty != field_ty {
+                return Err(ctx.mismatch(span, ty, field_ty));
+            }
         }
-    } else {
-        constrain_expr_to(ctx, infer, &bin.lhs, sig, ty, source)?;
-        constrain_expr_to(ctx, infer, &bin.rhs, sig, ty, source)?;
+        BinOpKind::Eq => {
+            if ty != ctx.tys.bool() {
+                return Err(ctx.mismatch(bin.span, ctx.tys.bool(), ty));
+            }
+        }
+        _ => {
+            constrain_expr_to(ctx, infer, &bin.lhs, sig, ty, source)?;
+            constrain_expr_to(ctx, infer, &bin.rhs, sig, ty, source)?;
+        }
     }
 
     Ok(())

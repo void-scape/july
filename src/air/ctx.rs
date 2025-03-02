@@ -126,6 +126,7 @@ impl<'a> AirCtx<'a> {
         Var(idx)
     }
 
+    #[track_caller]
     pub fn anon_var(&mut self, ty: TyId) -> Var {
         let var = self.anon_var_no_salloc(ty);
         self.ins(Air::SAlloc(var, self.tys.ty(ty).size(self)));

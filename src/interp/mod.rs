@@ -231,6 +231,13 @@ fn entry(
             Air::MulAB => {
                 rega.w(rega.r() * regb.r());
             }
+            Air::EqAB => {
+                rega.w((rega.r() == regb.r()) as i64);
+            }
+
+            Air::Exit => {
+                break;
+            }
         }
 
         instr_num += 1;
@@ -257,7 +264,13 @@ fn debug_instr(
     );
 
     match instr {
-        Air::Jmp(_) => {}
+        Air::PushIConst(_, _, _)
+        | Air::Exit
+        | Air::Jmp(_)
+        | Air::SwapReg
+        | Air::MovIConst(_, _)
+        | Air::PushIVar { .. }
+        | Air::PushIReg { .. } => {}
         Air::IfElse {
             condition,
             then,
@@ -295,9 +308,6 @@ fn debug_instr(
             println!(" | Addr({:?}) = {:#x}", var.var, addr,);
             println!(" | Offset({})", var.offset);
         }
-        Air::SwapReg => {}
-        Air::PushIConst(_, _, _) => {}
-        Air::MovIConst(_, _) => {}
         Air::MovIVar(reg, var, kind) => {
             let int = stack.read_some_int(*var, *kind);
             println!(" | {reg:?} <- {int}{}", kind.as_str());
@@ -328,8 +338,6 @@ fn debug_instr(
                 &args.vars
             );
         }
-        Air::PushIVar { .. } => {}
-        Air::PushIReg { .. } => {}
         Air::AddAB => {
             let result = rega.r() + regb.r();
             println!(" | A <- {} <- A({}) + B({})", result, rega.r(), regb.r());
@@ -341,6 +349,10 @@ fn debug_instr(
         Air::MulAB => {
             let result = rega.r() * regb.r();
             println!(" | A <- {} <- A({}) * B({})", result, rega.r(), regb.r());
+        }
+        Air::EqAB => {
+            let result = rega.r() == regb.r();
+            println!(" | A <- {} <- A({}) == B({})", result, rega.r(), regb.r());
         }
     }
 }

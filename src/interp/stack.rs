@@ -3,7 +3,7 @@ use crate::air::{IntKind, OffsetVar, Var};
 #[derive(Debug, Default)]
 pub struct Stack {
     vars: HashMap<Var, usize>,
-    stack: Vec<u8>,
+    stack: Vec<i64>,
     sp: usize,
 }
 
@@ -83,12 +83,18 @@ impl Stack {
     }
 
     pub fn memcpy(&mut self, dst: usize, src: usize, bytes: usize) {
-        self.stack.copy_within(src..src + bytes, dst);
+        unsafe {
+            std::mem::transmute::<&mut [i64], &mut [u8]>(self.stack.as_mut_slice())
+                .copy_within(src..src + bytes, dst)
+        };
     }
 
     fn read_int<I: Readable>(&self, addr: usize) -> i64 {
         assert!(addr < self.stack.len(), "invalid stack memory");
-        I::read(&self.stack, addr)
+        I::read(
+            unsafe { std::mem::transmute::<&[i64], &[u8]>(self.stack.as_slice()) },
+            addr,
+        )
     }
 
     fn push_int<I: Stackable>(&mut self, int: I, addr: usize) {
@@ -99,7 +105,10 @@ impl Stack {
             }
         }
 
-        int.stack(&mut self.stack, addr);
+        int.stack(
+            unsafe { std::mem::transmute::<&mut [i64], &mut [u8]>(self.stack.as_mut_slice()) },
+            addr,
+        );
     }
 }
 
@@ -168,7 +177,7 @@ impl Readable for i64 {
 }
 
 trait Stackable {
-    fn stack(&self, stack: &mut Vec<u8>, addr: usize);
+    fn stack(&self, stack: &mut [u8], addr: usize);
 }
 
 use std::collections::HashMap;
@@ -181,20 +190,20 @@ impl_stackable!(i8, i16, i32, i64);
 macro_rules! impl_stackable {
     ($ty8:ident, $ty16:ident, $ty32:ident, $ty64:ident) => {
         impl Stackable for $ty8 {
-            fn stack(&self, stack: &mut Vec<u8>, addr: usize) {
+            fn stack(&self, stack: &mut [u8], addr: usize) {
                 stack[addr] = *self as u8;
             }
         }
 
         impl Stackable for $ty16 {
-            fn stack(&self, stack: &mut Vec<u8>, addr: usize) {
+            fn stack(&self, stack: &mut [u8], addr: usize) {
                 stack[addr] = *self as u8;
                 stack[addr + 1] = (*self >> 8) as u8;
             }
         }
 
         impl Stackable for $ty32 {
-            fn stack(&self, stack: &mut Vec<u8>, addr: usize) {
+            fn stack(&self, stack: &mut [u8], addr: usize) {
                 stack[addr] = *self as u8;
                 stack[addr + 1] = (*self >> 8) as u8;
                 stack[addr + 2] = (*self >> 16) as u8;
@@ -203,7 +212,7 @@ macro_rules! impl_stackable {
         }
 
         impl Stackable for $ty64 {
-            fn stack(&self, stack: &mut Vec<u8>, addr: usize) {
+            fn stack(&self, stack: &mut [u8], addr: usize) {
                 stack[addr] = *self as u8;
                 stack[addr + 1] = (*self >> 8) as u8;
                 stack[addr + 2] = (*self >> 16) as u8;

@@ -109,9 +109,13 @@ fn unique_funcs<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
     Ok(())
 }
 
-
 fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
-    if func.sig.ty == ctx.tys.unit() && func.block.end.is_some() {
+    if func.sig.ty == ctx.tys.unit()
+        && func
+            .block
+            .end
+            .is_some_and(|b| b.is_unit(ctx).is_some_and(|c| !c))
+    {
         Err(ctx
             .report_error(
                 func.block.end.as_ref().unwrap().span(),
@@ -152,4 +156,3 @@ fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
         Ok(())
     }
 }
-

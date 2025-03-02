@@ -12,9 +12,31 @@ use std::panic::Location;
 pub struct Func {
     pub span: Span,
     pub name: TokenId,
+    pub attributes: Vec<Attr>,
     pub ty: Option<TokenId>,
     pub params: Vec<Param>,
     pub block: Block,
+}
+
+impl Func {
+    pub fn parse_attr<'a>(
+        &mut self,
+        stream: &TokenStream<'a>,
+        attr: Attribute,
+    ) -> Result<(), Diag<'a>> {
+        match &*attr.str {
+            "intrinsic" => {
+                self.attributes.push(Attr::Intrinsic);
+                Ok(())
+            }
+            _ => Err(stream.full_error(format!("invalid attribute `{}`", attr.str), attr.span, "")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Attr {
+    Intrinsic,
 }
 
 #[derive(Debug)]
@@ -57,6 +79,7 @@ impl<'a> ParserRule<'a> for FnRule {
                     let (name, _, params, ty) = res.into_inner();
                     Ok(Func {
                         ty: ty.map(|(_, _, t)| t),
+                        attributes: Vec::new(),
                         params,
                         span,
                         name,

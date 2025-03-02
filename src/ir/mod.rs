@@ -7,7 +7,7 @@ use crate::ir::lit::Lit;
 use crate::lex::buffer::{Span, TokenQuery};
 use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::lex::kind::TokenKind;
-use crate::parse::rules::prelude::{self as rules};
+use crate::parse::rules::prelude::{self as rules, Attr};
 use crate::parse::Item;
 use enom::{Enum, EnumDef, Variant};
 use ident::IdentId;
@@ -289,11 +289,16 @@ pub struct Func<'a> {
     pub name_span: Span,
     pub sig: &'a Sig<'a>,
     pub block: Block<'a>,
+    pub attrs: Vec<Attr>,
 }
 
 impl Func<'_> {
     pub fn hash(&self) -> FuncHash {
         self.sig.hash()
+    }
+
+    pub fn has_attr(&self, attr: Attr) -> bool {
+        self.attrs.iter().any(|a| *a == attr)
     }
 }
 
@@ -354,6 +359,7 @@ fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func<'a>, Diag<'a>>
     Ok(Func {
         name_span: ctx.span(func.name),
         block: block(ctx, &func.block)?,
+        attrs: func.attributes.clone(),
         //.map_err(|err| err.msg(Msg::note(func.block.span, "while parsing this function")))?,
         sig: ctx.intern(sig),
     })
@@ -525,6 +531,29 @@ impl Expr<'_> {
         }
     }
 
+    pub fn is_unit(&self, ctx: &Ctx) -> Option<bool> {
+        match self {
+            Self::Ident(_) => None,
+            Self::Struct(_) | Self::Enum(_) | Self::Lit(_) | Self::Bool(_, _) => Some(false),
+            Self::Call(call) => Some(ctx.tys.is_unit(call.sig.ty)),
+            Self::If(if_) => {
+                let block = if_.block.is_unit(ctx);
+                let otherwise = if_.otherwise.map(|o| o.is_unit(ctx));
+                match (block, otherwise) {
+                    (Some(c1), Some(Some(c2))) => Some(c1 && c2),
+                    (Some(c), _) => Some(c),
+                    (None, Some(Some(c))) => Some(c),
+                    _ => None,
+                }
+            }
+            Self::Bin(_) => Some(false),
+            Self::Block(block) => match block.end {
+                Some(end) => end.is_unit(ctx),
+                None => Some(true),
+            },
+        }
+    }
+
     pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
         match self {
             Self::Ident(_) => None,
@@ -667,6 +696,7 @@ pub enum BinOpKind {
     Sub,
     Mul,
     Field,
+    Eq,
 }
 
 impl BinOpKind {

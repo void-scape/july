@@ -67,7 +67,7 @@ fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> Option<PResult<Token>> {
 }
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">"))
+    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">", "#"))
         .with_span()
         .parse_next(input)?;
     let token = match sym {
@@ -80,6 +80,7 @@ fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         ":" => TokenKind::Colon,
         "-" => TokenKind::Hyphen,
         ">" => TokenKind::Greater,
+        "#" => TokenKind::Pound,
         _ => unreachable!(),
     };
 

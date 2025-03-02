@@ -50,6 +50,7 @@ impl From<BinOpTokens> for BinOpKind {
             BinOpTokens::Hyphen(_) => Self::Sub,
             BinOpTokens::Asterisk(_) => Self::Mul,
             BinOpTokens::Field(_) => Self::Field,
+            BinOpTokens::DoubleEquals(_) => Self::Eq,
             _ => panic!(),
         }
     }
@@ -65,6 +66,7 @@ pub enum BinOpTokens {
     Asterisk(TokenId),
     OpenParen(TokenId),
     CloseParen(TokenId),
+    DoubleEquals(TokenId),
     Field(TokenId),
 }
 
@@ -76,6 +78,7 @@ impl BinOpTokens {
             | Self::Asterisk(t)
             | Self::OpenParen(t)
             | Self::Field(t)
+            | Self::DoubleEquals(t)
             | Self::CloseParen(t) => buffer.span(*t),
         }
     }
@@ -88,7 +91,11 @@ trait Precedence {
 impl Precedence for BinOpTokens {
     fn precedence(&self) -> usize {
         match self {
-            Self::Hyphen(_) | Self::Plus(_) | Self::OpenParen(_) | Self::CloseParen(_) => 1,
+            Self::DoubleEquals(_)
+            | Self::Hyphen(_)
+            | Self::Plus(_)
+            | Self::OpenParen(_)
+            | Self::CloseParen(_) => 1,
             Self::Asterisk(_) => 2,
             Self::Field(_) => 3,
         }
@@ -124,11 +131,16 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
         match stream.peek_kind() {
             Some(TokenKind::Equals) => {
                 let equals = stream.expect();
-                Err(stream.full_error(
-                    "invalid assign",
-                    buffer.span(equals),
-                    "cannot assign expression",
-                ))
+                if stream.peek_kind() == Some(TokenKind::Equals) {
+                    stream.expect();
+                    Ok(BinOpTokens::DoubleEquals(equals))
+                } else {
+                    Err(stream.full_error(
+                        "invalid assign",
+                        buffer.span(equals),
+                        "cannot assign expression",
+                    ))
+                }
             }
             Some(TokenKind::Plus) => Ok(BinOpTokens::Plus(stream.expect())),
             Some(TokenKind::Hyphen) => Ok(BinOpTokens::Hyphen(stream.expect())),
@@ -358,6 +370,7 @@ impl<'a> ParserRule<'a> for ExprRule {
             if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
                 match op {
                     BinOpTokens::Field(_)
+                    | BinOpTokens::DoubleEquals(_)
                     | BinOpTokens::Hyphen(_)
                     | BinOpTokens::Plus(_)
                     | BinOpTokens::Asterisk(_) => {

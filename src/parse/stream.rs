@@ -70,7 +70,12 @@ impl<'a> TokenStream<'a> {
     }
 
     #[track_caller]
-    pub fn full_error(&self, title: &'static str, span: Span, msg: impl Into<String>) -> Diag<'a> {
+    pub fn full_error(
+        &self,
+        title: impl Into<String>,
+        span: Span,
+        msg: impl Into<String>,
+    ) -> Diag<'a> {
         Diag::sourced(title, self.buffer.source(), Msg::error(span, msg))
             .loc(std::panic::Location::caller())
     }

@@ -174,7 +174,7 @@ seed: () -> i64 {
 // ------------ Control Flow ------------
 
 simple_if_then: (condition: bool, x: i32) -> i32 {
-    if condition {
+    if condition == false {
         x
     } else {
         let y = x - 2;
@@ -199,10 +199,24 @@ num: () -> i32 {
 }
 
 main: () -> i32 {
-    // var_2_var()
-    // operations()
-    // double(2);
-    // seed()
-    simple_if_then(false, 4)
+    tests();
+    simple_if_then(true, 4)
 }
 
+tests: () {
+    assert(double(2) == 4);
+    assert(double(4) == 8);
+    assert(double(28) == 56);
+    assert(seed() == 42);
+    assert(operations() == 30);
+    assert(var_2_var() == 16);
+}
+
+assert: (condition: bool) {
+    if condition == false {
+        exit(1);
+    }
+}
+
+#[intrinsic]
+exit: (code: i32) {}

@@ -31,6 +31,7 @@ impl Parser {
         let mut stack = Vec::with_capacity(buffer.len());
         let mut diags = Vec::new();
         let mut stream = buffer.stream();
+        let mut active_attribute = None;
 
         while !stream.is_empty() {
             match (
@@ -38,7 +39,25 @@ impl Parser {
                 stream.peekn(1).map(|t| buffer.kind(t)),
                 stream.peekn(2).map(|t| buffer.kind(t)),
             ) {
+                (Some(TokenKind::Pound), Some(TokenKind::OpenBracket), _) => {
+                    match rules::prelude::AttributeRule::parse(buffer, &mut stream, &mut stack) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(a) => {
+                            active_attribute = Some(a);
+                        }
+                    }
+                }
                 (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Enum)) => {
+                    if active_attribute.is_some() {
+                        diags.push(stream.full_error(
+                            "cannot add attributes to enums",
+                            buffer.span(stream.peek().unwrap()),
+                            "",
+                        ))
+                    }
+
                     match rules::prelude::EnumRule::parse(buffer, &mut stream, &mut stack) {
                         Err(diag) => {
                             diags.push(diag);
@@ -49,6 +68,14 @@ impl Parser {
                     }
                 }
                 (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Struct)) => {
+                    if active_attribute.is_some() {
+                        diags.push(stream.full_error(
+                            "cannot add attributes to enums",
+                            buffer.span(stream.peek().unwrap()),
+                            "",
+                        ))
+                    }
+
                     match rules::prelude::StructRule::parse(buffer, &mut stream, &mut stack) {
                         Err(diag) => {
                             diags.push(diag);
@@ -63,12 +90,18 @@ impl Parser {
                         Err(diag) => {
                             diags.push(diag);
                         }
-                        Ok(f) => {
+                        Ok(mut f) => {
+                            if let Some(attr) = active_attribute.take() {
+                                if let Err(diag) = f.parse_attr(&stream, attr) {
+                                    diags.push(diag);
+                                }
+                            }
                             items.push(Item::Func(f));
                         }
                     }
                 }
-                _ => {
+                (_t1, _t2, _t3) => {
+                    // panic!("{_t1:?}, {_t2:?}, {_t3:?}");
                     diags.push(stream.error("expected a `struct`, `enum`, or `function`"));
                     while !Ident::matches(stream.peek().map(|t| buffer.kind(t)))
                         || !Colon::matches(stream.peekn(1).map(|t| buffer.kind(t)))

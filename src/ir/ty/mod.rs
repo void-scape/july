@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use self::store::TyId;
 use super::ctx::Ctx;
 use super::ident::IdentId;
 use super::mem::Layout;
 use super::strukt::StructId;
 use super::FuncHash;
+use std::collections::HashMap;
 
 pub mod infer;
 pub mod store;
@@ -35,6 +35,7 @@ impl Ty {
     pub fn expect_int(&self) -> IntTy {
         match self {
             Self::Int(ty) => *ty,
+            Self::Bool => IntTy::new_8(Sign::U),
             _ => panic!("expected int"),
         }
     }

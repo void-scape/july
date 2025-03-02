@@ -11,48 +11,47 @@ use crate::ir::*;
 ///
 /// Panics
 ///     `bin` does not evaluate to `ty`
+#[track_caller]
 pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'a BinOp) {
     let ty = ctx.tys.ty(ty);
 
-    if bin.kind.is_primitive() {
-        let kind = ty.expect_int().kind();
-        assign_prim_bin_op(ctx, dst, kind, bin);
-    } else {
-        match bin.kind {
-            BinOpKind::Field => {
-                let (field_var, field_ty) = aquire_bin_field_offset(ctx, bin);
-                match ctx.tys.ty(field_ty) {
-                    Ty::Int(int_ty) => {
-                        assert_eq!(ty.expect_int().kind(), int_ty.kind());
-                        ctx.ins(Air::PushIVar {
-                            dst,
-                            kind: int_ty.kind(),
-                            src: field_var,
-                        });
-                    }
-                    Ty::Struct(id) => {
-                        let bytes = ctx.tys.struct_layout(id).size;
-                        ctx.ins_set(&[
-                            Air::Addr(Reg::B, dst),
-                            Air::Addr(Reg::A, field_var),
-                            Air::MemCpy {
-                                dst: Reg::B,
-                                src: Reg::A,
-                                bytes,
-                            },
-                        ]);
-                    }
-                    Ty::Bool => {
-                        ctx.ins(Air::PushIVar {
-                            dst,
-                            kind: IntKind::I8,
-                            src: field_var,
-                        });
-                    }
-                    Ty::Unit => panic!("field type cannot be unit"),
+    match bin.kind {
+        BinOpKind::Field => {
+            let (field_var, field_ty) = aquire_bin_field_offset(ctx, bin);
+            match ctx.tys.ty(field_ty) {
+                Ty::Int(int_ty) => {
+                    assert_eq!(ty.expect_int().kind(), int_ty.kind());
+                    ctx.ins(Air::PushIVar {
+                        dst,
+                        kind: int_ty.kind(),
+                        src: field_var,
+                    });
                 }
+                Ty::Struct(id) => {
+                    let bytes = ctx.tys.struct_layout(id).size;
+                    ctx.ins_set(&[
+                        Air::Addr(Reg::B, dst),
+                        Air::Addr(Reg::A, field_var),
+                        Air::MemCpy {
+                            dst: Reg::B,
+                            src: Reg::A,
+                            bytes,
+                        },
+                    ]);
+                }
+                Ty::Bool => {
+                    ctx.ins(Air::PushIVar {
+                        dst,
+                        kind: IntKind::I8,
+                        src: field_var,
+                    });
+                }
+                Ty::Unit => panic!("field type cannot be unit"),
             }
-            _ => unreachable!(),
+        }
+        _ => {
+            let kind = ty.expect_int().kind();
+            assign_prim_bin_op(ctx, dst, kind, bin);
         }
     }
 }
@@ -79,6 +78,7 @@ pub fn assign_prim_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, kind: IntKin
         BinOpKind::Add => Add(kind).visit(ctx, kind, dst, bin),
         BinOpKind::Mul => Mul(kind).visit(ctx, kind, dst, bin),
         BinOpKind::Sub => Sub(kind).visit(ctx, kind, dst, bin),
+        BinOpKind::Eq => Eq(kind).visit(ctx, kind, dst, bin),
         _ => unreachable!(),
     }
 }
@@ -138,10 +138,12 @@ macro_rules! impl_op {
 impl_op!(add, Add);
 impl_op!(sub, Sub);
 impl_op!(mul, Mul);
+impl_op!(eq, Eq);
 
 crate::impl_prim_bin_op_visitor!(Add, AddAB, +);
 crate::impl_prim_bin_op_visitor!(Sub, SubAB, -);
 crate::impl_prim_bin_op_visitor!(Mul, MulAB, *);
+crate::impl_prim_bin_op_visitor!(Eq, EqAB, ==);
 
 trait BinOpVisitor
 where
@@ -154,7 +156,6 @@ where
                 LitKind::Int(lhs_lit) => match &bin.rhs {
                     Expr::Bool(_, _) => {
                         panic!("invalid operation");
-                        //self.visit_leaf(ctx, dst, lhs_lit, *val as i64);
                     }
                     Expr::Lit(lit) => match lit.kind {
                         LitKind::Int(rhs_lit) => {
@@ -171,6 +172,7 @@ where
                                 BinOpKind::Add => add!(ctx, kind, dst, *lhs_lit, field_var),
                                 BinOpKind::Sub => sub!(ctx, kind, dst, *lhs_lit, field_var),
                                 BinOpKind::Mul => mul!(ctx, kind, dst, *lhs_lit, field_var),
+                                BinOpKind::Eq => eq!(ctx, kind, dst, Reg::A, field_var),
                                 BinOpKind::Field => unreachable!(),
                             }
                         } else {
@@ -179,8 +181,8 @@ where
                         }
                     }
                     Expr::Call(call @ Call { sig, .. }) => {
-                        let sig_ty = ctx.tys.ty(sig.ty);
-                        assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
+                        //let sig_ty = ctx.tys.ty(sig.ty);
+                        //assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                         let args = generate_args(ctx, call);
                         ctx.ins(Air::Call(sig, args));
                         self.visit_leaf(ctx, dst, *lhs_lit, Reg::A);
@@ -216,6 +218,7 @@ where
                                 BinOpKind::Add => add!(ctx, kind, dst, var, field_var),
                                 BinOpKind::Sub => sub!(ctx, kind, dst, var, field_var),
                                 BinOpKind::Mul => mul!(ctx, kind, dst, var, field_var),
+                                BinOpKind::Eq => eq!(ctx, kind, dst, Reg::A, field_var),
                                 BinOpKind::Field => unreachable!(),
                             }
                         } else {
@@ -238,8 +241,8 @@ where
                 }
             }
             Expr::Call(call @ Call { sig, .. }) => {
-                let sig_ty = ctx.tys.ty(sig.ty);
-                assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
+                //let sig_ty = ctx.tys.ty(sig.ty);
+                //assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
                 match &bin.rhs {
                     Expr::Bool(_, _) => {
                         panic!("invalid operation");
@@ -267,6 +270,7 @@ where
                                 BinOpKind::Add => add!(ctx, kind, dst, Reg::A, field_var),
                                 BinOpKind::Sub => sub!(ctx, kind, dst, Reg::A, field_var),
                                 BinOpKind::Mul => mul!(ctx, kind, dst, Reg::A, field_var),
+                                BinOpKind::Eq => eq!(ctx, kind, dst, Reg::A, field_var),
                                 BinOpKind::Field => unreachable!(),
                             }
                         } else {
@@ -314,9 +318,42 @@ where
                     Expr::Block(_) => todo!(),
                 }
             }
-            Expr::Bool(_, _) => {
-                panic!("invalid operation");
-            }
+            Expr::Bool(_, val) => match &bin.rhs {
+                Expr::Bool(_, other) => {
+                    self.visit_leaf(ctx, dst, *val as i64, *other as i64);
+                }
+                Expr::Bin(inner_bin) => {
+                    if inner_bin.kind.is_field() {
+                        let (field_var, field_ty) = aquire_bin_field_offset(ctx, inner_bin);
+                        let field_ty = ctx.tys.ty(field_ty);
+                        let kind = field_ty.expect_int().kind();
+                        match bin.kind {
+                            BinOpKind::Add => add!(ctx, kind, dst, *val as i64, field_var),
+                            BinOpKind::Sub => sub!(ctx, kind, dst, *val as i64, field_var),
+                            BinOpKind::Mul => mul!(ctx, kind, dst, *val as i64, field_var),
+                            BinOpKind::Eq => eq!(ctx, kind, dst, Reg::A, field_var),
+                            BinOpKind::Field => unreachable!(),
+                        }
+                    } else {
+                        assign_prim_bin_op(ctx, dst, kind, inner_bin);
+                        self.visit_leaf(ctx, dst, *val as i64, dst);
+                    }
+                }
+                Expr::Call(call @ Call { sig, .. }) => {
+                    let sig_ty = ctx.tys.ty(sig.ty);
+                    assert!(sig_ty.is_int() && sig_ty.expect_int().kind() == kind);
+                    let args = generate_args(ctx, call);
+                    ctx.ins(Air::Call(sig, args));
+                    self.visit_leaf(ctx, dst, *val as i64, Reg::A);
+                }
+                Expr::Ident(ident) => {
+                    let rhs = ctx.expect_var(ident.id);
+                    self.visit_leaf(ctx, dst, *val as i64, OffsetVar::zero(rhs));
+                }
+                Expr::Lit(_) | Expr::Struct(_) | Expr::Enum(_) => panic!("invalid operation"),
+                Expr::If(_) => unimplemented!(),
+                Expr::Block(_) => todo!(),
+            },
             Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
             Expr::Block(_) => todo!(),
             Expr::Bin(_) => unreachable!(),
@@ -352,7 +389,7 @@ macro_rules! impl_prim_bin_op_visitor {
 
         impl BinOpLeaf<i64, i64> for $name {
             fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: i64, rhs: i64) {
-                ctx.ins(Air::PushIConst(dst, self.0, lhs $op rhs));
+                ctx.ins(Air::PushIConst(dst, self.0, (lhs $op rhs) as i64));
             }
         }
 

@@ -41,6 +41,7 @@ where
             | TokenKind::Else
             | TokenKind::True
             | TokenKind::False
+            | TokenKind::Pound
             | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
             TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
             TokenKind::Ident => format!("expected {}", kind.as_str()),
@@ -134,11 +135,17 @@ impl DelimPair for Curly {
     }
 }
 
-//impl DelimPair for OpenBracket {
-//    fn closing_delim(&self) -> impl TokenKindType {
-//        CloseBracket
-//    }
-//}
+pub struct Bracket;
+
+impl DelimPair for Bracket {
+    fn matches_open(kind: Option<TokenKind>) -> bool {
+        OpenBracket::matches(kind)
+    }
+
+    fn matches_close(kind: Option<TokenKind>) -> bool {
+        CloseBracket::matches(kind)
+    }
+}
 
 /// Associates a [`TokenKind`] with the implementer.
 pub trait TokenKindType {
@@ -179,7 +186,10 @@ impl_tkt!(OpenCurly, TokenKind::OpenCurly);
 impl_tkt!(CloseCurly, TokenKind::CloseCurly);
 impl_tkt!(OpenParen, TokenKind::OpenParen);
 impl_tkt!(CloseParen, TokenKind::CloseParen);
+impl_tkt!(OpenBracket, TokenKind::OpenBracket);
+impl_tkt!(CloseBracket, TokenKind::CloseBracket);
 impl_tkt!(Hyphen, TokenKind::Hyphen);
 impl_tkt!(Greater, TokenKind::Greater);
 impl_tkt!(Comma, TokenKind::Comma);
 impl_tkt!(Dot, TokenKind::Dot);
+impl_tkt!(Pound, TokenKind::Pound);
