@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::ops::Range;
+
 use crate::ir::lit::{Lit, LitKind};
 use crate::ir::sig::{Param, Sig};
 use crate::ir::strukt::StructDef;
@@ -36,6 +39,14 @@ pub enum Air<'a> {
         bytes: usize,
     },
 
+    IfElse {
+        /// The evalauted boolean condition.
+        condition: Reg,
+        then: BlockId,
+        otherwise: BlockId,
+    },
+    Jmp(BlockId),
+
     // TODO: rename Push
     PushIConst(OffsetVar, IntKind, i64),
     PushIReg {
@@ -59,7 +70,101 @@ pub enum Air<'a> {
 #[derive(Debug)]
 pub struct AirFunc<'a> {
     pub func: &'a Func<'a>,
-    pub instrs: Vec<Air<'a>>,
+    instrs: Vec<Air<'a>>,
+    blocks: HashMap<BlockId, Range<usize>>,
+}
+
+impl<'a> AirFunc<'a> {
+    pub fn new(func: &'a Func<'a>, blocks: Vec<Vec<Air<'a>>>) -> Self {
+        let mut instrs = Vec::new();
+        let mut ranges = HashMap::with_capacity(blocks.len());
+        for (hash, block_instrs) in blocks.into_iter().enumerate() {
+            let start = instrs.len();
+            instrs.extend(block_instrs);
+            let end = instrs.len();
+            ranges.insert(BlockId(hash), start..end);
+        }
+
+        Self {
+            blocks: ranges,
+            func,
+            instrs,
+        }
+    }
+
+    pub fn start(&self) -> &[Air<'a>] {
+        self.block(BlockId(0))
+    }
+
+    pub fn start_block(&self) -> BlockId {
+        BlockId(0)
+    }
+
+    #[track_caller]
+    pub fn block(&self, block: BlockId) -> &[Air<'a>] {
+        self.blocks
+            .get(&block)
+            .map(|range| &self.instrs[range.start..range.end])
+            .expect("invalid block")
+    }
+
+    #[track_caller]
+    pub fn next_block(&self, block: BlockId) -> Option<&[Air<'a>]> {
+        self.blocks
+            .get(&BlockId(block.0 + 1))
+            .map(|range| &self.instrs[range.start..range.end])
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BlockId(usize);
+
+#[derive(Debug)]
+pub struct AirFuncBuilder<'a> {
+    pub func: &'a Func<'a>,
+    instrs: Vec<Vec<Air<'a>>>,
+}
+
+impl<'a> AirFuncBuilder<'a> {
+    pub fn new(func: &'a Func<'a>) -> Self {
+        Self {
+            instrs: Vec::new(),
+            func,
+        }
+    }
+
+    pub fn new_block(&mut self) -> BlockId {
+        let id = BlockId(self.instrs.len());
+        self.instrs.push(Vec::new());
+        id
+    }
+
+    #[track_caller]
+    pub fn insert_active(&mut self, instr: Air<'a>) {
+        self.instrs.last_mut().expect("no active block").push(instr);
+    }
+
+    #[track_caller]
+    pub fn insert_active_set(&mut self, instrs: impl IntoIterator<Item = Air<'a>>) {
+        self.instrs
+            .last_mut()
+            .expect("no active block")
+            .extend(instrs);
+    }
+
+    #[track_caller]
+    pub fn insert(&mut self, block: BlockId, instr: Air<'a>) {
+        self.instrs
+            .get_mut(block.0)
+            .expect("invalid block id")
+            .push(instr);
+    }
+
+    #[track_caller]
+    pub fn build(self) -> AirFunc<'a> {
+        assert!(!self.instrs.is_empty());
+        AirFunc::new(self.func, self.instrs)
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -115,6 +220,8 @@ pub enum IntKind {
 }
 
 impl IntKind {
+    pub const BOOL: Self = IntKind::U8;
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::I8 => "i8",
@@ -151,19 +258,47 @@ impl IntTy {
 pub fn lower_func<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start(func);
     init_params(ctx, func);
-    for stmt in func.block.stmts.iter() {
+
+    let dst = OffsetVar::zero(ctx.anon_var(func.sig.ty));
+    assign_air_block(ctx, &func.sig, dst, func.sig.ty, &func.block);
+    ctx.ret_var(dst, func.sig.ty);
+    ctx.finish()
+}
+
+fn init_params(ctx: &mut AirCtx, func: &Func) {
+    for Param { ident, ty, .. } in func.sig.params.iter() {
+        if ctx.get_var(ident.id).is_none() {
+            ctx.new_var_registered_no_salloc(ident.id, *ty);
+        }
+    }
+}
+
+fn assign_air_block<'a>(
+    ctx: &mut AirCtx<'a>,
+    sig: &'a Sig<'a>,
+    dst: OffsetVar,
+    ty: TyId,
+    block: &'a Block<'a>,
+) {
+    block_stmts(ctx, sig, block.stmts);
+    if let Some(end) = &block.end {
+        assign_expr(ctx, dst, ty, end);
+    } else {
+        // TODO: need analysis of return statements
+        //println!("{block:?}");
+        //assert!(ty == ctx.tys.unit());
+    }
+}
+
+fn block_stmts<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, stmts: &'a [Stmt<'a>]) {
+    for stmt in stmts.iter() {
         match stmt {
             Stmt::Semi(stmt) => match stmt {
                 SemiStmt::Let(let_) => air_let_stmt(ctx, let_),
                 SemiStmt::Assign(assign) => air_assign_stmt(ctx, assign),
-                //SemiStmt::Call(call @ Call { sig, .. }) => {
-                //    let args = generate_args(ctx, call);
-                //    ctx.call(sig, args)
-                //}
-                //SemiStmt::Bin(bin) => air_bin_semi(ctx, bin),
                 SemiStmt::Ret(ret) => match &ret.expr {
                     Some(expr) => {
-                        air_return(ctx, func.sig.ty, &expr);
+                        air_return(ctx, sig.ty, &expr);
                     }
                     None => ctx.ins(Air::Ret),
                 },
@@ -172,25 +307,6 @@ pub fn lower_func<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a
                 }
             },
             Stmt::Open(_) => unreachable!(),
-        }
-    }
-
-    if let Some(end) = &func.block.end {
-        air_return(ctx, func.sig.ty, end);
-    } else {
-        ctx.ins(Air::Ret);
-    }
-
-    AirFunc {
-        func,
-        instrs: ctx.finish(),
-    }
-}
-
-fn init_params(ctx: &mut AirCtx, func: &Func) {
-    for Param { ident, ty, .. } in func.sig.params.iter() {
-        if ctx.get_var(ident.id).is_none() {
-            ctx.new_var_registered_no_salloc(ident.id, *ty);
         }
     }
 }
@@ -230,7 +346,11 @@ fn air_let_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Let) {
 fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Expr) {
     match &expr {
         Expr::Bool(_, val) => {
-            ctx.ins(Air::PushIConst(dst, IntKind::I64, *val as i64));
+            ctx.ins(Air::PushIConst(
+                dst,
+                IntKind::BOOL,
+                if *val { 1 } else { 0 },
+            ));
         }
         Expr::Lit(lit) => {
             assign_lit(ctx, lit, dst, ty);
@@ -310,7 +430,54 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                 Ty::Unit => todo!(),
             }
         }
-        Expr::If(_) => todo!(),
+        Expr::If(if_) => {
+            let bool_ = ctx.tys.bool();
+            let condition = OffsetVar::zero(ctx.anon_var(bool_));
+
+            assign_expr(ctx, condition, bool_, if_.condition);
+            ctx.ins(Air::MovIVar(Reg::A, condition, IntKind::BOOL));
+
+            match (if_.block, if_.otherwise) {
+                (Expr::Block(then), Some(Expr::Block(otherwise))) => {
+                    let enter_block = ctx.active_block();
+                    let then = ctx.in_new_block(|ctx, _| {
+                        assign_air_block(ctx, ctx.active_sig(), dst, ty, then);
+                    });
+                    let otherwise = ctx.in_new_block(|ctx, _| {
+                        assign_air_block(ctx, ctx.active_sig(), dst, ty, otherwise);
+                    });
+
+                    ctx.ins_in_block(
+                        enter_block,
+                        Air::IfElse {
+                            condition: Reg::A,
+                            then,
+                            otherwise,
+                        },
+                    );
+
+                    let exit = ctx.new_block();
+                    ctx.ins_in_block(then, Air::Jmp(exit));
+                }
+                (Expr::Block(then), None) => {
+                    let enter_block = ctx.active_block();
+                    let then = ctx.in_new_block(|ctx, _| {
+                        assign_air_block(ctx, ctx.active_sig(), dst, ty, then);
+                    });
+                    let otherwise = ctx.new_block();
+
+                    ctx.ins_in_block(
+                        enter_block,
+                        Air::IfElse {
+                            condition: Reg::A,
+                            then,
+                            otherwise,
+                        },
+                    );
+                }
+                _ => unimplemented!(),
+            }
+        }
         Expr::Block(_) => todo!(),
         Expr::Enum(_) => {
             todo!()
@@ -338,7 +505,6 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
             todo!()
         }
         Expr::If(_) => todo!(),
-        Expr::Block(_) => todo!(),
         Expr::Block(_) => todo!(),
     }
 }
@@ -444,82 +610,91 @@ fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
     }
 }
 
+// TODO: return to optimized return stratedgy
 fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a Expr) {
-    match end {
-        Expr::Bool(_, val) => ctx.ret_iconst(*val as i64),
-        Expr::Lit(lit) => match lit.kind {
-            LitKind::Int(int) => {
-                ctx.ret_iconst(*int);
-            }
-            _ => unreachable!(),
-        },
-        Expr::Ident(ident) => {
-            let var = OffsetVar::zero(ctx.expect_var(ident.id));
-            let out_ty = ctx.expect_var_ty(var.var);
-            assert_eq!(out_ty, ty);
+    let dst = OffsetVar::zero(ctx.anon_var(ty));
+    assign_expr(ctx, dst, ty, end);
+    ctx.ret_var(dst, ty);
 
-            match ctx.tys.ty(out_ty) {
-                Ty::Int(int) => {
-                    ctx.ret_ivar(var, int.kind());
-                }
-                Ty::Struct(_) => ctx.ret_ptr(var),
-                Ty::Bool => ctx.ret_ivar(var, IntKind::I8),
-                Ty::Unit => todo!(),
-            }
-        }
-        Expr::Bin(bin) => {
-            if bin.kind.is_primitive() {
-                match ctx.tys.ty(ty) {
-                    Ty::Int(int) => {
-                        let kind = int.kind();
-                        let dst = OffsetVar::zero(ctx.anon_var(ty));
-                        assign_prim_bin_op(ctx, dst, kind, bin);
-                        ctx.ret_ivar(dst, kind);
-                    }
-                    Ty::Bool => {
-                        panic!("invalid operation");
-                        //let kind = IntKind::I8;
-                        //let dst = OffsetVar::zero(ctx.anon_var(ty));
-                        //assign_prim_bin_op(ctx, dst, kind, bin);
-                        //ctx.ret_ivar(dst, kind);
-                    }
-                    Ty::Struct(_) | Ty::Unit => unreachable!(),
-                }
-            } else {
-                match bin.kind {
-                    BinOpKind::Field => {
-                        let (field_var, field_ty) = aquire_bin_field_offset(ctx, bin);
-                        assert_eq!(ty, field_ty);
-                        match ctx.tys.ty(field_ty) {
-                            Ty::Int(int) => {
-                                ctx.ret_ivar(field_var, int.kind());
-                            }
-                            Ty::Struct(_) => {
-                                ctx.ret_ptr(field_var);
-                            }
-                            Ty::Bool => ctx.ret_ivar(field_var, IntKind::I8),
-                            Ty::Unit => unreachable!(),
-                        }
-                    }
-                    k => unreachable!("{k:?}"),
-                }
-            }
-        }
-        Expr::Call(call) => {
-            assert_eq!(call.sig.ty, ty);
-            let args = generate_args(ctx, call);
-            ctx.ins(Air::Call(&call.sig, args));
-            ctx.ins(Air::Ret);
-        }
-        Expr::Struct(def) => {
-            let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
-            define_struct(ctx, def, dst);
-            ctx.ret_ptr(dst);
-        }
-        Expr::If(if_) => {
-            todo!()
-        },
-        Expr::Block(_) => todo!(),
-        Expr::Enum(_) => todo!(),
-    }
+    //match end {
+    //    Expr::Bool(_, val) => ctx.ret_iconst(*val as i64),
+    //    Expr::Lit(lit) => match lit.kind {
+    //        LitKind::Int(int) => {
+    //            ctx.ret_iconst(*int);
+    //        }
+    //        _ => unreachable!(),
+    //    },
+    //    Expr::Ident(ident) => {
+    //        let var = OffsetVar::zero(ctx.expect_var(ident.id));
+    //        let out_ty = ctx.expect_var_ty(var.var);
+    //        assert_eq!(out_ty, ty);
+    //
+    //        match ctx.tys.ty(out_ty) {
+    //            Ty::Int(int) => {
+    //                ctx.ret_ivar(var, int.kind());
+    //            }
+    //            Ty::Struct(_) => ctx.ret_ptr(var),
+    //            Ty::Bool => ctx.ret_ivar(var, IntKind::I8),
+    //            Ty::Unit => todo!(),
+    //        }
+    //    }
+    //    Expr::Bin(bin) => {
+    //        if bin.kind.is_primitive() {
+    //            match ctx.tys.ty(ty) {
+    //                Ty::Int(int) => {
+    //                    let kind = int.kind();
+    //                    let dst = OffsetVar::zero(ctx.anon_var(ty));
+    //                    assign_prim_bin_op(ctx, dst, kind, bin);
+    //                    ctx.ret_ivar(dst, kind);
+    //                }
+    //                Ty::Bool => {
+    //                    panic!("invalid operation");
+    //                    //let kind = IntKind::I8;
+    //                    //let dst = OffsetVar::zero(ctx.anon_var(ty));
+    //                    //assign_prim_bin_op(ctx, dst, kind, bin);
+    //                    //ctx.ret_ivar(dst, kind);
+    //                }
+    //                Ty::Struct(_) | Ty::Unit => unreachable!(),
+    //            }
+    //        } else {
+    //            match bin.kind {
+    //                BinOpKind::Field => {
+    //                    let (field_var, field_ty) = aquire_bin_field_offset(ctx, bin);
+    //                    assert_eq!(ty, field_ty);
+    //                    match ctx.tys.ty(field_ty) {
+    //                        Ty::Int(int) => {
+    //                            ctx.ret_ivar(field_var, int.kind());
+    //                        }
+    //                        Ty::Struct(_) => {
+    //                            ctx.ret_ptr(field_var);
+    //                        }
+    //                        Ty::Bool => ctx.ret_ivar(field_var, IntKind::I8),
+    //                        Ty::Unit => unreachable!(),
+    //                    }
+    //                }
+    //                k => unreachable!("{k:?}"),
+    //            }
+    //        }
+    //    }
+    //    Expr::Call(call) => {
+    //        assert_eq!(call.sig.ty, ty);
+    //        let args = generate_args(ctx, call);
+    //        ctx.ins(Air::Call(&call.sig, args));
+    //        ctx.ins(Air::Ret);
+    //    }
+    //    Expr::Struct(def) => {
+    //        let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
+    //        define_struct(ctx, def, dst);
+    //        ctx.ret_ptr(dst);
+    //    }
+    //    Expr::If(if_) => {
+    //        let bool_ = ctx.tys.bool();
+    //        let condition = ctx.anon_var(bool_);
+    //        assign_expr(ctx, OffsetVar::zero(condition), bool_, if_.condition);
+    //
+    //        todo!()
+    //    }
+    //    Expr::Block(_) => todo!(),
+    //    Expr::Enum(_) => todo!(),
+    //}
 }

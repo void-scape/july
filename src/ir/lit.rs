@@ -1,12 +1,12 @@
 use crate::lex::buffer::Span;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Lit<'a> {
     pub span: Span,
     pub kind: &'a LitKind<'a>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LitKind<'a> {
     Int(i64),
     Str(&'a str),

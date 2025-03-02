@@ -16,7 +16,7 @@ use sem::sem_analysis;
 use sig::Param;
 use sig::Sig;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use strukt::{Field, FieldDef, Struct, StructDef};
 use ty::store::TyId;
 use ty::TypeKey;
@@ -359,12 +359,24 @@ fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func<'a>, Diag<'a>>
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Block<'a> {
     pub span: Span,
     pub stmts: &'a [Stmt<'a>],
     pub end: Option<&'a Expr<'a>>,
 }
+
+//// TODO: could be the span + source file
+//#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+//pub struct BlockHash(u64);
+//
+//impl Block<'_> {
+//    pub fn hash(&self) -> BlockHash {
+//        let mut hash = DefaultHasher::new();
+//        <Self as Hash>::hash(self, &mut hash);
+//        BlockHash(hash.finish())
+//    }
+//}
 
 fn block<'a>(ctx: &mut Ctx<'a>, block: &rules::Block) -> Result<Block<'a>, Diag<'a>> {
     let mut stmts = block
@@ -393,7 +405,7 @@ fn block<'a>(ctx: &mut Ctx<'a>, block: &rules::Block) -> Result<Block<'a>, Diag<
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stmt<'a> {
     Semi(SemiStmt<'a>),
     Open(Expr<'a>),
@@ -408,7 +420,7 @@ impl Stmt<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SemiStmt<'a> {
     Let(Let<'a>),
     Assign(Assign<'a>),
@@ -472,7 +484,7 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt<'a>, Diag<'a>>
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Let<'a> {
     pub span: Span,
     pub ty: Option<(Span, TyId)>,
@@ -480,12 +492,12 @@ pub struct Let<'a> {
     pub rhs: Expr<'a>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LetTarget {
     Ident(Ident),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Expr<'a> {
     Ident(Ident),
     Lit(Lit<'a>),
@@ -525,7 +537,7 @@ impl Expr<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct If<'a> {
     pub span: Span,
     pub condition: &'a Expr<'a>,
@@ -610,7 +622,7 @@ fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef<'a
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BinOp<'a> {
     pub span: Span,
     pub kind: BinOpKind,
@@ -649,7 +661,7 @@ pub fn descend_bin_op_field(ctx: &Ctx, bin: &BinOp, accesses: &mut Vec<Ident>) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
     Add,
     Sub,
@@ -708,7 +720,7 @@ fn plit<'a>(ctx: &mut Ctx<'a>, lit: TokenId) -> Result<Lit<'a>, Diag<'a>> {
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Assign<'a> {
     pub span: Span,
     pub kind: AssignKind,
@@ -717,13 +729,13 @@ pub struct Assign<'a> {
 }
 
 // TODO: more assignment kinds
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignKind {
     Equals,
     Add,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignTarget<'a> {
     Ident(Ident),
     Field(BinOp<'a>),
@@ -743,13 +755,13 @@ fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarg
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Return<'a> {
     pub span: Span,
     pub expr: Option<Expr<'a>>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Call<'a> {
     pub span: Span,
     pub sig: &'a Sig<'a>,

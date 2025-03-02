@@ -128,7 +128,13 @@ impl InferCtx {
             .map(|(hash, (var, span))| (var, (hash, span)))
             .collect::<HashMap<&TyVar, (&VarHash, &Span)>>();
         for (var, constraints) in self.constraints.iter() {
-            let (ident, _) = map.get(&var).unwrap();
+            let Some((ident, _)) = map.get(&var) else {
+                //errors.push(ctx.report_error(Span::empty(), "Unkown"));
+                //break;
+                // TODO: why does this ever happen?
+                continue;
+            };
+
             match self.unify_constraints(ctx, *var, &constraints.1) {
                 Ok(ty) => {
                     self.key.insert(**ident, ty);

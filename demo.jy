@@ -173,13 +173,13 @@ seed: () -> i64 {
 
 // ------------ Control Flow ------------
 
-simple: (x: i32) -> i32 {
-    69
-    // if false {
-    //     x
-    // } else {
-    //     69
-    // }
+simple_if_then: (condition: bool, x: i32) -> i32 {
+    if condition {
+        x
+    } else {
+        let y = x - 2;
+        y
+    }
 }
 
 // ------------ Demo ------------
@@ -198,10 +198,11 @@ num: () -> i32 {
     return 1;
 }
 
-main: () -> i64 {
+main: () -> i32 {
     // var_2_var()
     // operations()
     // double(2);
-    seed()
+    // seed()
+    simple_if_then(false, 4)
 }
 

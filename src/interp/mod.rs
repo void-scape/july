@@ -1,4 +1,4 @@
-use crate::air::{Air, AirFunc, Reg};
+use crate::air::{Air, AirFunc, BlockId, Reg};
 use crate::ir::ctx::Ctx;
 use anstream::println;
 use stack::*;
@@ -23,16 +23,16 @@ pub fn run(ctx: &Ctx, air_funcs: &[AirFunc]) -> Result<i32, InterpErr> {
 
 #[derive(Default)]
 pub struct CallStack<'a> {
-    stack: Vec<(LR<'a>, usize)>,
+    stack: Vec<(LR<'a>, usize, BlockId)>,
 }
 
 impl<'a> CallStack<'a> {
-    pub fn push_lr(&mut self, lr: LR<'a>) {
-        self.stack.push((lr, 0));
+    pub fn push_lr(&mut self, lr: LR<'a>, block_id: BlockId) {
+        self.stack.push((lr, 0, block_id));
     }
 
     pub fn grow_stack(&mut self, bytes: usize) {
-        if let Some((_, stack)) = self.stack.last_mut() {
+        if let Some((_, stack, _)) = self.stack.last_mut() {
             *stack += bytes;
         }
     }
@@ -62,9 +62,9 @@ fn entry(
     air_funcs: &[AirFunc],
     stack: &mut Stack,
 ) -> Result<i32, InterpErr> {
-
     let mut current_func = main;
-    let mut instrs = main.instrs.iter();
+    let mut instrs = main.start().iter();
+    let mut current_block = Some(main.start_block());
     let mut call_stack = CallStack::default();
     let mut rega = Rega::default();
     let mut regb = Rega::default();
@@ -74,6 +74,13 @@ fn entry(
 
     loop {
         let Some(instr) = instrs.next() else {
+            if let Some(block) = current_block {
+                if let Some(next_block) = current_func.next_block(block) {
+                    instrs = next_block.iter();
+                    continue;
+                }
+            }
+
             return Err(InterpErr::DryStream);
         };
 
@@ -91,14 +98,15 @@ fn entry(
 
         match instr {
             Air::Ret => match call_stack.stack.last() {
-                Some((LR { func, instr }, stack_frame_size)) => {
+                Some((LR { func, instr }, stack_frame_size, block)) => {
                     current_func = func;
-                    instrs = func.instrs.iter();
+                    instrs = func.start().iter();
                     for _ in 0..*instr {
                         instrs.next();
                     }
                     instr_num = *instr;
                     *stack.sp_mut() -= stack_frame_size;
+                    current_block = Some(*block);
                     call_stack.stack.pop();
                     continue;
                 }
@@ -113,10 +121,13 @@ fn entry(
             },
             // we don't do anything with the args because they are already registered in the stack
             Air::Call(sig, _args) => {
-                call_stack.push_lr(LR {
-                    func: current_func,
-                    instr: instr_num + 1,
-                });
+                call_stack.push_lr(
+                    LR {
+                        func: current_func,
+                        instr: instr_num + 1,
+                    },
+                    current_block.expect("no current block"),
+                );
                 instr_num = 0;
 
                 let func = air_funcs
@@ -124,8 +135,30 @@ fn entry(
                     .find(|f| f.func.sig.ident == sig.ident)
                     .ok_or_else(|| InterpErr::InvalidFunc)?;
                 current_func = func;
-                instrs = func.instrs.iter();
+                instrs = func.start().iter();
+                current_block = Some(func.start_block());
                 continue;
+            }
+
+            Air::IfElse {
+                condition,
+                then,
+                otherwise,
+            } => {
+                if match condition {
+                    Reg::A => rega.r() == 1,
+                    Reg::B => regb.r() == 1,
+                } {
+                    current_block = Some(*then);
+                    instrs = current_func.block(*then).iter();
+                } else {
+                    current_block = Some(*otherwise);
+                    instrs = current_func.block(*otherwise).iter();
+                }
+            }
+            Air::Jmp(block) => {
+                current_block = Some(*block);
+                instrs = current_func.block(*block).iter();
             }
 
             Air::SAlloc(var, bytes) => {
@@ -224,6 +257,22 @@ fn debug_instr(
     );
 
     match instr {
+        Air::Jmp(_) => {}
+        Air::IfElse {
+            condition,
+            then,
+            otherwise,
+        } => {
+            println!(
+                " | if ({:#x}), then {:?}, otherwise {:?}",
+                match condition {
+                    Reg::A => rega.r(),
+                    Reg::B => regb.r(),
+                },
+                then,
+                otherwise
+            );
+        }
         Air::SAlloc(var, bytes) => {
             println!(" | Addr({:?}) <- {:#x}", var, stack.sp());
             println!(" | SP({:?}) += {}", stack.sp(), bytes);
@@ -255,7 +304,7 @@ fn debug_instr(
         }
         Air::Ret => {
             match call_stack.stack.last() {
-                Some((LR { func, instr }, _)) => {
+                Some((LR { func, instr }, _, _)) => {
                     println!(
                         " | proc {} -> proc {} @ instr #{}",
                         ctx.expect_ident(current_func.func.sig.ident),

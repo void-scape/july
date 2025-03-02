@@ -36,13 +36,13 @@ impl Enum {
     //}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Variant {
     pub span: Span,
     pub name: Ident,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EnumDef {
     pub span: Span,
     pub name: Ident,

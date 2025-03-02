@@ -1,6 +1,5 @@
 use super::{Next, ParserRule, RResult};
 use crate::lex::buffer::*;
-use crate::lex::kind::TokenKind;
 use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*, stream::TokenStream};
 
 /// High level operation performed in blocks.
@@ -67,7 +66,7 @@ impl<'a> ParserRule<'a> for LetRule {
     }
 }
 
-/// `if { <stmts> }`
+/// `if <condition> { <stmts> } [else { <stmts> }]`
 pub struct CntrlFlowRule;
 
 impl<'a> ParserRule<'a> for CntrlFlowRule {
@@ -80,7 +79,7 @@ impl<'a> ParserRule<'a> for CntrlFlowRule {
     ) -> RResult<'a, Self::Output> {
         let (iff, expr, block, otherwise) = <(
             Next<If>,
-            ExprRule,
+            IfExprRule,
             BlockRules,
             Opt<(Next<Else>, BlockRules)>,
         ) as ParserRule>::parse(buffer, stream, stack)?;
@@ -90,17 +89,28 @@ impl<'a> ParserRule<'a> for CntrlFlowRule {
         } else {
             Expr::If(iff, Box::new(expr), block, None)
         })
+    }
+}
 
-        //match (buffer.kind(iff), expr) {
-        //    (TokenKind::If, Some(expr)) => Ok(Expr::If(iff, Box::new(expr), block)),
-        //    (TokenKind::If, None) => {
-        //        Err(stream.full_error("expected expression following `if`", buffer.span(iff), ""))
-        //    }
-        //    (TokenKind::Else, None) => Ok(Expr::Else(iff, block)),
-        //    (TokenKind::Else, Some(_)) => {
-        //        Err(stream.full_error("expected block following `else`", buffer.span(iff), ""))
-        //    }
-        //    _ => unreachable!(),
-        //}
+pub struct IfExprRule;
+
+impl<'a> ParserRule<'a> for IfExprRule {
+    type Output = Expr;
+
+    fn parse(
+        buffer: &'a TokenBuffer<'a>,
+        stream: &mut TokenStream<'a>,
+        stack: &mut Vec<TokenId>,
+    ) -> RResult<'a, Self::Output> {
+        let chk = *stream;
+        let mut slice = stream.slice(stream.find_offset::<OpenCurly>());
+        stream.eat_until::<OpenCurly>();
+        match ExprRule::parse(buffer, &mut slice, stack) {
+            Ok(expr) => Ok(expr),
+            Err(diag) => {
+                *stream = chk;
+                Err(diag)
+            }
+        }
     }
 }

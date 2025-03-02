@@ -96,18 +96,36 @@ fn constrain_block_to<'a>(
     ty: TyId,
     source: Span,
 ) -> Result<(), Diag<'a>> {
-    if let Some(end) = &block.end {
-        constrain_expr_to(ctx, infer, end, sig, ty, source)?;
-    } else {
-        if ty != ctx.tys.unit() {
-            return Err(ctx.report_error(
-                block.span,
-                format!("expected `{}`, got `()`", ctx.ty_str(ty)),
-            ));
+    let mut errors = Vec::new();
+
+    for stmt in block.stmts.iter() {
+        match stmt {
+            Stmt::Semi(semi) => {
+                if let Err(diag) = constrain_semi_stmt(ctx, infer, semi, sig) {
+                    errors.push(diag);
+                }
+            }
+            Stmt::Open(expr) => {
+                // TODO: do we have to check for invalid open statements here? Are those even
+                // possible?
+                if let Err(diag) = constrain_expr_no_var(ctx, infer, sig, expr) {
+                    errors.push(diag);
+                }
+            }
         }
     }
 
-    Ok(())
+    if let Some(end) = &block.end {
+        if let Err(diag) = constrain_expr_to(ctx, infer, end, sig, ty, source) {
+            errors.push(diag);
+        }
+    }
+
+    if !errors.is_empty() {
+        Err(Diag::bundle(errors))
+    } else {
+        Ok(())
+    }
 }
 
 fn constrain_semi_stmt<'a>(
@@ -239,6 +257,7 @@ fn constrain_return_expr<'a>(
                     ),
                 ));
             }
+            constrain_call_args(ctx, infer, sig, call)?;
         }
         Expr::Struct(def) => {
             if ctx.tys.struct_ty_id(def.id) != sig.ty {
@@ -272,6 +291,10 @@ fn constrain_return_expr<'a>(
             constrain_expr_to(ctx, infer, if_.condition, sig, ctx.tys.bool(), if_.span).map_err(
                 |_| ctx.report_error(if_.condition.span(), "mismatched types: expected a `bool`"),
             )?;
+            constrain_expr_to(ctx, infer, if_.block, sig, sig.ty, if_.span)?;
+            if let Some(otherwise) = if_.otherwise {
+                constrain_expr_to(ctx, infer, otherwise, sig, sig.ty, if_.span)?;
+            }
         }
         Expr::Block(blck) => {
             constrain_block_to(ctx, infer, blck, sig, sig.ty, sig.span)?;
@@ -403,7 +426,10 @@ fn constrain_expr_to<'a>(
             }
         }
         Expr::If(if_) => {
-            constrain_expr_to(ctx, infer, &if_.block, sig, ty, source)?;
+            constrain_expr_to(ctx, infer, if_.block, sig, ty, source)?;
+            if let Some(otherwise) = if_.otherwise {
+                constrain_expr_to(ctx, infer, otherwise, sig, ty, source)?;
+            }
         }
         Expr::Block(block) => constrain_block_to(ctx, infer, block, sig, ty, source)?,
         Expr::Enum(_) => todo!(),

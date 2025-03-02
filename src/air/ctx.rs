@@ -1,4 +1,4 @@
-use super::{Air, Args, IntKind, OffsetVar, Reg, Var};
+use super::{Air, AirFunc, AirFuncBuilder, Args, BlockId, IntKind, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::ir::sig::Sig;
@@ -11,43 +11,82 @@ use std::ops::Deref;
 /// Contains relevant context for constructing [`Air`] instructions.
 ///
 /// To start constructing a function, use [`AirCtx::start`], and to collect the resulting
-/// instructions, use [`AirCtx::finish`]. `AirCtx` reuses data structures for efficiency.
+/// [`AirFunc`], use [`AirCtx::finish`]. `AirCtx` reuses data structures for efficiency.
 pub struct AirCtx<'a> {
     ctx: &'a Ctx<'a>,
     key: &'a TypeKey,
-    instrs: &'a mut Vec<Air<'a>>,
     var_index: usize,
     var_map: HashMap<(FuncHash, IdentId), Var>,
     ty_map: HashMap<Var, TyId>,
     func: Option<FuncHash>,
+    func_builder: Option<AirFuncBuilder<'a>>,
 }
 
 impl<'a> AirCtx<'a> {
-    pub fn new(ctx: &'a Ctx<'a>, key: &'a TypeKey, buf: &'a mut Vec<Air<'a>>) -> Self {
+    pub fn new(ctx: &'a Ctx<'a>, key: &'a TypeKey) -> Self {
         Self {
             ctx,
             key,
-            instrs: buf,
             var_index: 0,
             var_map: HashMap::default(),
             ty_map: HashMap::default(),
             func: None,
+            func_builder: None,
         }
     }
 
-    pub fn start(&mut self, func: &ir::Func) {
-        assert!(
-            self.instrs.is_empty(),
-            "lost function instructions: {}",
-            self.expect_ident(func.sig.ident)
-        );
-        //self.var_map.clear();
-        //self.ty_map.clear();
-        self.func = Some(func.hash());
+    #[track_caller]
+    pub fn active_sig(&self) -> &'a Sig<'a> {
+        self.func_builder.as_ref().expect("no active func").func.sig
     }
 
-    pub fn finish(&mut self) -> Vec<Air<'a>> {
-        self.instrs.drain(..).collect()
+    pub fn start(&mut self, func: &'a ir::Func) -> BlockId {
+        self.func = Some(func.hash());
+        let mut builder = AirFuncBuilder::new(func);
+        let id = builder.new_block();
+        self.func_builder = Some(builder);
+        id
+    }
+
+    #[track_caller]
+    pub fn finish(&mut self) -> AirFunc<'a> {
+        self.func_builder
+            .take()
+            .expect("cannot finish with no builder")
+            .build()
+    }
+
+    #[track_caller]
+    pub fn new_block(&mut self) -> BlockId {
+        self.func_builder
+            .as_mut()
+            .expect("init func builder")
+            .new_block()
+    }
+
+    pub fn ins_in_block(&mut self, block: BlockId, ins: Air<'a>) {
+        self.func_builder
+            .as_mut()
+            .expect("init func builder")
+            .insert(block, ins);
+    }
+
+    #[track_caller]
+    pub fn active_block(&self) -> BlockId {
+        let builder = self.func_builder.as_ref().expect("init func builder");
+
+        if builder.instrs.is_empty() {
+            panic!("expected an active block");
+        }
+
+        BlockId(builder.instrs.len().saturating_sub(1))
+    }
+
+    #[track_caller]
+    pub fn in_new_block(&mut self, f: impl FnOnce(&mut Self, BlockId)) -> BlockId {
+        let inner = self.new_block();
+        f(self, inner);
+        inner
     }
 
     pub fn new_var_registered_with_hash(
@@ -127,11 +166,26 @@ pub const RET_REG: Reg = Reg::A;
 
 impl<'a> AirCtx<'a> {
     pub fn ins(&mut self, instr: Air<'a>) {
-        self.instrs.push(instr);
+        self.func_builder
+            .as_mut()
+            .expect("init func builder")
+            .insert_active(instr);
     }
 
     pub fn ins_set(&mut self, instrs: &[Air<'a>]) {
-        self.instrs.extend(instrs.iter().cloned());
+        self.func_builder
+            .as_mut()
+            .expect("init func builder")
+            .insert_active_set(instrs.iter().cloned());
+    }
+
+    pub fn ret_var(&mut self, var: OffsetVar, ty: TyId) {
+        match self.tys.ty(ty) {
+            Ty::Unit => panic!("return unit"),
+            Ty::Bool => self.ret_ivar(var, IntKind::I64),
+            Ty::Int(ty) => self.ret_ivar(var, ty.kind()),
+            Ty::Struct(_) => self.ret_ptr(var),
+        }
     }
 
     pub fn ret_iconst(&mut self, val: i64) {
