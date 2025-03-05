@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::ops::Range;
-
 use crate::ir::lit::{Lit, LitKind};
 use crate::ir::sig::{Param, Sig};
 use crate::ir::strukt::StructDef;
@@ -10,8 +7,9 @@ use crate::ir::*;
 use crate::parse::rules::prelude::Attr;
 use bin::*;
 use ctx::*;
-
-use self::data::BssEntry;
+use data::BssEntry;
+use std::collections::HashMap;
+use std::ops::Range;
 
 mod bin;
 pub mod ctx;
@@ -471,13 +469,8 @@ fn block_stmts<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, stmts: &'a [Stmt<'a>]
 }
 
 fn air_bin_semi<'a>(ctx: &mut AirCtx<'a>, bin: &'a BinOp) {
-    match bin.kind {
-        BinOpKind::Field => {}
-        BinOpKind::Eq | BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul => {
-            air_bin_semi_expr(ctx, &bin.lhs);
-            air_bin_semi_expr(ctx, &bin.rhs);
-        }
-    }
+    air_bin_semi_expr(ctx, &bin.lhs);
+    air_bin_semi_expr(ctx, &bin.rhs);
 }
 
 fn air_bin_semi_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
@@ -511,6 +504,7 @@ fn assign_expr<'a>(
 ) {
     match &expr {
         Expr::Bool(_, val) => {
+            assert_eq!(ty, TyId::BOOL);
             ctx.ins(Air::PushIConst(
                 dst,
                 IntKind::BOOL,
@@ -518,6 +512,7 @@ fn assign_expr<'a>(
             ));
         }
         Expr::Str(_, str) => {
+            assert_eq!(ty, TyId::STR_LIT);
             let (entry, len) = ctx.str_lit(str);
             ctx.ins_set([
                 Air::PushIConst(dst, IntKind::U64, ConstData::Int(len as i64)),
@@ -531,9 +526,12 @@ fn assign_expr<'a>(
             assign_bin_op(ctx, dst, ty, bin);
         }
         Expr::Struct(def) => {
+            assert_eq!(ty, ctx.tys.struct_ty_id(def.id));
             define_struct(ctx, sig, def, dst);
         }
         Expr::Call(call) => {
+            assert_eq!(ty, call.sig.ty);
+
             let args = generate_args(ctx, sig, call);
             ctx.ins(Air::Call(&call.sig, args));
             match ctx.tys.ty(call.sig.ty) {
@@ -581,56 +579,19 @@ fn assign_expr<'a>(
         }
         Expr::Ident(ident) => {
             let other = OffsetVar::zero(ctx.expect_var(ident.id));
-
-            match ctx.tys.ty(ty) {
-                Ty::Int(ty) => {
-                    ctx.ins(Air::PushIVar {
-                        dst,
-                        kind: ty.kind(),
-                        src: other,
-                    });
-                }
-                Ty::Ref(_) => {
-                    ctx.ins(Air::PushIVar {
-                        dst,
-                        kind: IntKind::PTR,
-                        src: other,
-                    });
-                }
-                Ty::Struct(id) => {
-                    let bytes = ctx.tys.struct_layout(id).size;
-                    ctx.ins_set([
-                        Air::Addr(Reg::B, dst),
-                        Air::Addr(Reg::A, other),
-                        Air::MemCpy {
-                            dst: Reg::B,
-                            src: Reg::A,
-                            bytes,
-                        },
-                    ]);
-                }
-                Ty::Bool => {
-                    ctx.ins(Air::PushIVar {
-                        dst,
-                        kind: IntKind::I8,
-                        src: other,
-                    });
-                }
-                Ty::Str => {
-                    panic!("cannot assign to str");
-                }
-                Ty::Unit => todo!(),
-            }
+            assign_var_other(ctx, dst, other, ty);
+        }
+        Expr::Access(access) => {
+            let (other, field_ty) = aquire_accessor_field(ctx, access);
+            assert_eq!(field_ty, ty);
+            assign_var_other(ctx, dst, other, field_ty);
         }
         Expr::If(if_) => {
             assign_if(ctx, sig, dst, ty, if_);
         }
-        Expr::Block(_) => todo!(),
-        Expr::Enum(_) => {
-            todo!()
-        }
         Expr::Ref(ref_) => match ref_.inner {
             Expr::Ident(ident) => {
+                assert!(ctx.tys.ty(ty).is_ref());
                 let var = ctx.expect_var(ident.id);
                 ctx.ins_set([
                     Air::Addr(Reg::A, OffsetVar::zero(var)),
@@ -643,11 +604,55 @@ fn assign_expr<'a>(
             }
             _ => todo!(),
         },
-        // this means that a loop is the last statement, and in order to leave we must return, so
-        // just ignore this for now
         Expr::Loop(_) => {
+            // this means that a loop is the last statement, and in order to leave we must return, so
+            // just ignore this for now
+            //assert_eq!(ty, TyId::UNIT);
             eval_expr(ctx, sig, expr);
         }
+        Expr::Enum(_) | Expr::Block(_) => todo!(),
+    }
+}
+
+fn assign_var_other<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, other: OffsetVar, ty: TyId) {
+    match ctx.tys.ty(ty) {
+        Ty::Int(ty) => {
+            ctx.ins(Air::PushIVar {
+                dst,
+                kind: ty.kind(),
+                src: other,
+            });
+        }
+        Ty::Ref(_) => {
+            ctx.ins(Air::PushIVar {
+                dst,
+                kind: IntKind::PTR,
+                src: other,
+            });
+        }
+        Ty::Struct(id) => {
+            let bytes = ctx.tys.struct_layout(id).size;
+            ctx.ins_set([
+                Air::Addr(Reg::B, dst),
+                Air::Addr(Reg::A, other),
+                Air::MemCpy {
+                    dst: Reg::B,
+                    src: Reg::A,
+                    bytes,
+                },
+            ]);
+        }
+        Ty::Bool => {
+            ctx.ins(Air::PushIVar {
+                dst,
+                kind: IntKind::I8,
+                src: other,
+            });
+        }
+        Ty::Str => {
+            panic!("cannot assign to str");
+        }
+        Ty::Unit => todo!(),
     }
 }
 
@@ -751,7 +756,7 @@ fn eval_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, if_: &If<'a>) {
 
 fn eval_expr<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, expr: &'a Expr) {
     match &expr {
-        Expr::Str(_, _) | Expr::Lit(_) | Expr::Bool(_, _) | Expr::Ident(_) => {}
+        Expr::Access(_) | Expr::Str(_, _) | Expr::Lit(_) | Expr::Bool(_, _) | Expr::Ident(_) => {}
         Expr::Bin(bin) => {
             eval_bin_op(ctx, sig, bin);
         }
@@ -789,8 +794,6 @@ fn generate_args<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, call: &'a Call) -> 
     };
 
     for (expr, param) in call.args.iter().zip(call.sig.params.iter()) {
-        //let arg = OffsetVar::zero(ctx.new_var_registered(param.ident.id, param.ty));
-
         let the_fn_param = match ctx.get_var_with_hash(param.ident.id, call.sig.hash()) {
             Some(var) => {
                 ctx.ins(Air::SAlloc(var, ctx.tys.ty(param.ty).size(ctx)));
@@ -804,18 +807,6 @@ fn generate_args<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, call: &'a Call) -> 
         };
 
         assign_expr(ctx, sig, the_fn_param, param.ty, expr);
-
-        //let bytes = ctx.tys.ty(param.ty).size(ctx);
-        //ctx.ins_set(&[
-        //    Air::Addr(Reg::B, the_fn_param),
-        //    Air::Addr(Reg::A, arg),
-        //    Air::MemCpy {
-        //        dst: Reg::B,
-        //        src: Reg::A,
-        //        bytes,
-        //    },
-        //]);
-
         args.vars.push(the_fn_param);
     }
 
@@ -844,7 +835,7 @@ fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, stmt: &'a Assign)
             OffsetVar::zero(ctx.expect_var(ident.id)),
             ctx.var_ty(ident.id),
         ),
-        AssignTarget::Field(bin) => aquire_bin_field_offset(ctx, &bin),
+        AssignTarget::Access(access) => aquire_accessor_field(ctx, access),
     };
 
     match stmt.kind {

@@ -158,12 +158,11 @@ fn constrain_semi_stmt<'a>(
                             infer.var_eq(ctx, var, other_var);
                         }
                         Expr::Bin(bin) => {
-                            if bin.kind.is_field() {
-                                let (_, ty) = aquire_bin_field_ty(ctx, infer, &bin)?;
-                                infer.eq(var, ty, bin.span);
-                            } else {
-                                constrain_bin_op(ctx, infer, sig, bin, var)?;
-                            }
+                            constrain_bin_op(ctx, infer, sig, bin, var)?;
+                        }
+                        Expr::Access(access) => {
+                            let (_, ty) = aquire_access_ty(ctx, infer, access)?;
+                            infer.eq(var, ty, access.span);
                         }
                         Expr::Lit(lit) => match lit.kind {
                             LitKind::Int(_) => {
@@ -213,8 +212,8 @@ fn constrain_semi_stmt<'a>(
                     return Err(ctx.undeclared(ident));
                 }
             },
-            AssignTarget::Field(field_bin) => {
-                let (span, ty) = aquire_bin_field_ty(ctx, infer, field_bin)?;
+            AssignTarget::Access(access) => {
+                let (span, ty) = aquire_access_ty(ctx, infer, access)?;
                 constrain_expr_to(ctx, infer, &assign.rhs, sig, ty, span)?;
             }
         },
@@ -405,6 +404,10 @@ fn constrain_expr<'a>(
         Expr::Block(block) => {
             constrain_block(ctx, infer, block, sig)?;
         }
+        Expr::Access(access) => {
+            let (span, ty) = aquire_access_ty(ctx, infer, access)?;
+            infer.eq(var, ty, span);
+        }
         Expr::If(_) => {
             todo!()
         }
@@ -441,6 +444,9 @@ fn constrain_expr_no_var<'a>(
             if let Some(expr) = if_.otherwise {
                 constrain_expr_to(ctx, infer, expr, sig, TyId::UNIT, if_.span)?;
             }
+        }
+        Expr::Access(access) => {
+            _ = aquire_access_ty(ctx, infer, access)?;
         }
         Expr::Ref(_) => todo!(),
         Expr::Block(_) => todo!(),
@@ -496,6 +502,9 @@ fn constrain_expr_to<'a>(
             } else {
                 constrain_bin_op_to(ctx, infer, bin, sig, ty, source)?;
             }
+        }
+        Expr::Access(access) => {
+            constrain_access_to(ctx, infer, access, ty)?;
         }
         Expr::Lit(lit) => match lit.kind {
             LitKind::Int(_) => {
@@ -563,14 +572,8 @@ fn constrain_bin_op<'a>(
     bin: &BinOp<'a>,
     var: TyVar,
 ) -> Result<(), Diag<'a>> {
-    if bin.kind.is_field() {
-        let (span, field_ty) = aquire_bin_field_ty(ctx, infer, &bin)?;
-        infer.eq(var, field_ty, span);
-    } else {
-        constrain_expr(ctx, infer, sig, &bin.lhs, var)?;
-        constrain_expr(ctx, infer, sig, &bin.rhs, var)?;
-    }
-
+    constrain_expr(ctx, infer, sig, &bin.lhs, var)?;
+    constrain_expr(ctx, infer, sig, &bin.rhs, var)?;
     Ok(())
 }
 
@@ -580,9 +583,20 @@ fn constrain_bin_op_no_var<'a>(
     sig: &Sig<'a>,
     bin: &BinOp<'a>,
 ) -> Result<(), Diag<'a>> {
-    if !bin.kind.is_field() {
-        constrain_expr_no_var(ctx, infer, sig, &bin.lhs)?;
-        constrain_expr_no_var(ctx, infer, sig, &bin.rhs)?;
+    constrain_expr_no_var(ctx, infer, sig, &bin.lhs)?;
+    constrain_expr_no_var(ctx, infer, sig, &bin.rhs)?;
+    Ok(())
+}
+
+fn constrain_access_to<'a>(
+    ctx: &mut Ctx<'a>,
+    infer: &mut InferCtx,
+    access: &Access<'a>,
+    ty: TyId,
+) -> Result<(), Diag<'a>> {
+    let (span, field_ty) = aquire_access_ty(ctx, infer, access)?;
+    if ty != field_ty {
+        return Err(ctx.mismatch(span, ty, field_ty));
     }
 
     Ok(())
@@ -597,19 +611,8 @@ fn constrain_bin_op_to<'a>(
     ty: TyId,
     source: Span,
 ) -> Result<(), Diag<'a>> {
-    match bin.kind {
-        BinOpKind::Field => {
-            let (span, field_ty) = aquire_bin_field_ty(ctx, infer, bin)?;
-            if ty != field_ty {
-                return Err(ctx.mismatch(span, ty, field_ty));
-            }
-        }
-        _ => {
-            constrain_expr_to(ctx, infer, &bin.lhs, sig, ty, source)?;
-            constrain_expr_to(ctx, infer, &bin.rhs, sig, ty, source)?;
-        }
-    }
-
+    constrain_expr_to(ctx, infer, &bin.lhs, sig, ty, source)?;
+    constrain_expr_to(ctx, infer, &bin.rhs, sig, ty, source)?;
     Ok(())
 }
 
@@ -619,18 +622,15 @@ fn constrain_unbounded_bin_op<'a>(
     sig: &Sig<'a>,
     bin: &BinOp<'a>,
 ) -> Result<(), Diag<'a>> {
-    if !bin.kind.is_field() {
-        if let Some(var) = find_ty_var_in_bin_op(ctx, infer, bin)? {
-            constrain_bin_op(ctx, infer, sig, bin, var)?;
-        } else if let Some((span, ty)) = find_ty_in_bin_op(ctx, infer, bin)? {
-            constrain_bin_op_to(ctx, infer, bin, sig, ty, span)?;
-        } else {
-            if bin.is_integral(ctx).is_none_or(|i| !i) {
-                return Err(ctx.report_error(bin.span, "expected every term to be an integer"));
-            }
+    if let Some(var) = find_ty_var_in_bin_op(ctx, infer, bin)? {
+        constrain_bin_op(ctx, infer, sig, bin, var)?;
+    } else if let Some((span, ty)) = find_ty_in_bin_op(ctx, infer, bin)? {
+        constrain_bin_op_to(ctx, infer, bin, sig, ty, span)?;
+    } else {
+        if bin.is_integral(ctx).is_none_or(|i| !i) {
+            return Err(ctx.report_error(bin.span, "expected every term to be an integer"));
         }
     }
-
     Ok(())
 }
 
@@ -639,14 +639,10 @@ fn find_ty_var_in_bin_op<'a>(
     infer: &mut InferCtx,
     bin: &BinOp,
 ) -> Result<Option<TyVar>, Diag<'a>> {
-    if bin.kind.is_field() {
-        Ok(None)
+    if let Some(var) = find_ty_var_in_expr(ctx, infer, &bin.lhs)? {
+        Ok(Some(var))
     } else {
-        if let Some(var) = find_ty_var_in_expr(ctx, infer, &bin.lhs)? {
-            Ok(Some(var))
-        } else {
-            find_ty_var_in_expr(ctx, infer, &bin.rhs)
-        }
+        find_ty_var_in_expr(ctx, infer, &bin.rhs)
     }
 }
 
@@ -662,7 +658,7 @@ fn find_ty_var_in_expr<'a>(
             .ok_or_else(|| ctx.undeclared(ident)),
         Expr::Bin(bin) => find_ty_var_in_bin_op(ctx, infer, bin),
         Expr::Call(_) | Expr::Struct(_) | Expr::Enum(_) | Expr::Lit(_) => Ok(None),
-        Expr::Str(_, _) | Expr::Bool(_, _) => Ok(None),
+        Expr::Access(_) | Expr::Str(_, _) | Expr::Bool(_, _) => Ok(None),
         Expr::Ref(_) => todo!(),
         //Expr::Ref(inner) => find_ty_var_in_expr(ctx, infer, inner.inner),
         Expr::If(_) => todo!(),
@@ -676,15 +672,10 @@ fn find_ty_in_bin_op<'a>(
     infer: &mut InferCtx,
     bin: &BinOp,
 ) -> Result<Option<(Span, TyId)>, Diag<'a>> {
-    if bin.kind.is_field() {
-        let (span, ty) = aquire_bin_field_ty(ctx, infer, bin)?;
-        Ok(Some((span, ty)))
+    if let Some(ty) = find_ty_in_expr(ctx, infer, &bin.lhs)? {
+        Ok(Some(ty))
     } else {
-        if let Some(ty) = find_ty_in_expr(ctx, infer, &bin.lhs)? {
-            Ok(Some(ty))
-        } else {
-            find_ty_in_expr(ctx, infer, &bin.rhs)
-        }
+        find_ty_in_expr(ctx, infer, &bin.rhs)
     }
 }
 
@@ -700,6 +691,7 @@ fn find_ty_in_expr<'a>(
         Expr::Struct(def) => Ok(Some((def.span, ctx.tys.struct_ty_id(def.id)))),
         Expr::Ident(_) | Expr::Lit(_) => Ok(None),
         Expr::Str(span, _) => Ok(Some((*span, ctx.tys.str_lit()))),
+        Expr::Access(access) => Ok(Some(aquire_access_ty(ctx, infer, access)?)),
         Expr::Ref(ref_) => Ok(find_ty_in_expr(ctx, infer, ref_.inner)?.map(|(_, ty)| {
             (
                 ref_.span,
@@ -713,26 +705,21 @@ fn find_ty_in_expr<'a>(
     }
 }
 
-pub fn aquire_bin_field_ty<'a>(
+pub fn aquire_access_ty<'a>(
     ctx: &Ctx<'a>,
     infer: &InferCtx,
-    bin: &BinOp,
+    access: &Access,
 ) -> Result<(Span, TyId), Diag<'a>> {
-    assert_eq!(bin.kind, BinOpKind::Field);
+    let ty_var = match access.lhs {
+        Expr::Ident(ident) => infer
+            .get_var(ident.id)
+            .ok_or_else(|| ctx.undeclared(ident))?,
+        _ => unimplemented!(),
+    };
 
-    let mut accesses = Vec::new();
-    descend_bin_op_field(ctx, bin, &mut accesses);
-
-    let var = accesses.first().unwrap();
-    let ty_var = infer.get_var(var.id).ok_or_else(|| {
-        ctx.report_error(
-            var.span,
-            format!("`{}` is undeclared", ctx.expect_ident(var.id)),
-        )
-    })?;
     let Some(ty) = infer.guess_var_ty(ctx, ty_var) else {
         return Err(ctx.report_error(
-            bin.span,
+            access.lhs.span(),
             format!("failed to infer type of `{}`", infer.var_ident(ctx, ty_var)),
         ));
     };
@@ -742,10 +729,13 @@ pub fn aquire_bin_field_ty<'a>(
         Ty::Struct(id) => id,
         Ty::Int(_) | Ty::Unit | Ty::Bool | Ty::Ref(_) | Ty::Str => {
             return Err(ctx.report_error(
-                bin.span,
+                access.lhs.span(),
                 format!(
                     "invalid access: `{}` is of type `{}`, which has no fields",
-                    var.to_string(ctx),
+                    match access.lhs {
+                        Expr::Ident(ident) => ident.to_string(ctx),
+                        _ => unreachable!(),
+                    },
                     ty.to_string(ctx)
                 ),
             ));
@@ -753,9 +743,9 @@ pub fn aquire_bin_field_ty<'a>(
     };
     let mut strukt = ctx.tys.strukt(*id);
 
-    for (i, access) in accesses.iter().skip(1).enumerate() {
-        let ty = strukt.field_ty(access.id);
-        if i == accesses.len() - 2 {
+    for (i, acc) in access.accessors.iter().enumerate() {
+        let ty = strukt.field_ty(acc.id);
+        if i == access.accessors.len() - 1 {
             return Ok((access.span, ty));
         }
 
@@ -765,10 +755,10 @@ pub fn aquire_bin_field_ty<'a>(
             }
             Ty::Int(_) | Ty::Unit | Ty::Bool | Ty::Ref(_) | Ty::Str => {
                 return Err(ctx.report_error(
-                    access,
+                    acc,
                     format!(
                         "invalid field access, `{}` is of type `{}`, which has no fields",
-                        access.to_string(ctx),
+                        acc.to_string(ctx),
                         ty.to_string(ctx)
                     ),
                 ));

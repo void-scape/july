@@ -17,7 +17,7 @@ pub enum Expr {
     Lit(TokenId),
     Str(TokenId),
     Bool(TokenId),
-    Bin(BinOp, Box<Expr>, Box<Expr>),
+    Bin(PBinOp, Box<Expr>, Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
     StructDef(StructDef),
@@ -32,10 +32,30 @@ pub enum Expr {
     Loop(Block),
 }
 
+/// A parser `BinOp` can either be a true `BinOp` or a field accessor.
 #[derive(Debug, Clone, Copy)]
-pub struct BinOp {
+pub struct PBinOp {
     pub span: Span,
-    pub kind: BinOpKind,
+    pub kind: PBinOpKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PBinOpKind {
+    Bin(BinOpKind),
+    Accessor,
+}
+
+impl From<BinOpTokens> for PBinOpKind {
+    fn from(value: BinOpTokens) -> Self {
+        match value {
+            BinOpTokens::Plus(_) => Self::Bin(BinOpKind::Add),
+            BinOpTokens::Hyphen(_) => Self::Bin(BinOpKind::Sub),
+            BinOpTokens::Asterisk(_) => Self::Bin(BinOpKind::Mul),
+            BinOpTokens::DoubleEquals(_) => Self::Bin(BinOpKind::Eq),
+            BinOpTokens::Field(_) => Self::Accessor,
+            _ => panic!(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,19 +64,6 @@ pub struct Assign {
     pub kind: AssignKind,
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
-}
-
-impl From<BinOpTokens> for BinOpKind {
-    fn from(value: BinOpTokens) -> Self {
-        match value {
-            BinOpTokens::Plus(_) => Self::Add,
-            BinOpTokens::Hyphen(_) => Self::Sub,
-            BinOpTokens::Asterisk(_) => Self::Mul,
-            BinOpTokens::Field(_) => Self::Field,
-            BinOpTokens::DoubleEquals(_) => Self::Eq,
-            _ => panic!(),
-        }
-    }
 }
 
 /// Produce the next [`BinOpKind`].
@@ -456,9 +463,9 @@ impl<'a> ParserRule<'a> for ExprRule {
                 Item::Op(op) => match accum_op {
                     Some(acop) => {
                         accum_op = Some(Expr::Bin(
-                            BinOp {
+                            PBinOp {
                                 span: op.span(buffer),
-                                kind: BinOpKind::from(op),
+                                kind: PBinOpKind::from(op),
                             },
                             Box::new(terms.pop().unwrap()),
                             Box::new(acop),
@@ -466,9 +473,9 @@ impl<'a> ParserRule<'a> for ExprRule {
                     }
                     None => {
                         accum_op = Some(Expr::Bin(
-                            BinOp {
+                            PBinOp {
                                 span: op.span(buffer),
-                                kind: BinOpKind::from(op),
+                                kind: PBinOpKind::from(op),
                             },
                             Box::new(terms.pop().unwrap()),
                             Box::new(terms.pop().unwrap()),

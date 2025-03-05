@@ -49,8 +49,9 @@ impl Ty<'_> {
     pub fn expect_int(&self) -> IntTy {
         match self {
             Self::Int(ty) => *ty,
-            Self::Bool => IntTy::new_8(Sign::U),
-            _ => panic!("expected int"),
+            Self::Bool => IntTy::BOOL,
+            Self::Ref(_) => IntTy::PTR,
+            ty => panic!("expected int, got {:?}", ty),
         }
     }
 
@@ -91,35 +92,38 @@ pub struct IntTy {
 }
 
 impl IntTy {
-    pub fn new(sign: Sign, width: IWidth) -> Self {
+    pub const BOOL: Self = IntTy::new_8(Sign::U);
+    pub const PTR: Self = IntTy::new_64(Sign::I);
+
+    pub const fn new(sign: Sign, width: IWidth) -> Self {
         Self { sign, width }
     }
 
-    pub fn new_8(sign: Sign) -> Self {
+    pub const fn new_8(sign: Sign) -> Self {
         Self::new(sign, IWidth::W8)
     }
 
-    pub fn new_16(sign: Sign) -> Self {
+    pub const fn new_16(sign: Sign) -> Self {
         Self::new(sign, IWidth::W16)
     }
 
-    pub fn new_32(sign: Sign) -> Self {
+    pub const fn new_32(sign: Sign) -> Self {
         Self::new(sign, IWidth::W32)
     }
 
-    pub fn new_64(sign: Sign) -> Self {
+    pub const fn new_64(sign: Sign) -> Self {
         Self::new(sign, IWidth::W64)
     }
 
-    pub fn size(&self) -> usize {
+    pub const fn size(&self) -> usize {
         self.width.bytes()
     }
 
-    pub fn layout(&self) -> Layout {
+    pub const fn layout(&self) -> Layout {
         Layout::splat(self.size())
     }
 
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self.sign {
             Sign::I => match self.width {
                 IWidth::W8 => "i8",
@@ -152,7 +156,7 @@ pub enum IWidth {
 }
 
 impl IWidth {
-    pub fn bytes(&self) -> usize {
+    pub const fn bytes(&self) -> usize {
         match self {
             Self::W8 => 1,
             Self::W16 => 2,

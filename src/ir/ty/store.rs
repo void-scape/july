@@ -136,6 +136,10 @@ impl<'a> TyStore<'a> {
         }
     }
 
+    pub fn get_ty_id(&self, ty: &Ty<'a>) -> Option<TyId> {
+        self.ty_map.get(ty).copied()
+    }
+
     #[track_caller]
     pub fn strukt(&self, id: StructId) -> &Struct {
         self.structs.get(id.0).expect("invalid struct id")

@@ -9,8 +9,9 @@ use crate::ir::lit::Lit;
 use crate::lex::buffer::{Buffer, Span, TokenQuery};
 use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::lex::kind::TokenKind;
-use crate::parse::rules::prelude::{self as rules, Attr};
+use crate::parse::rules::prelude::{self as rules, Attr, PBinOpKind};
 use crate::parse::Item;
+use anstream::println;
 use enom::{Enum, EnumDef, Variant};
 use ident::IdentId;
 use resolve::resolve_types;
@@ -580,6 +581,7 @@ pub enum Expr<'a> {
     Str(Span, &'a str),
     Bool(Span, bool),
     Bin(BinOp<'a>),
+    Access(Access<'a>),
     Struct(StructDef<'a>),
     Enum(EnumDef),
     Call(Call<'a>),
@@ -604,6 +606,7 @@ impl Expr<'_> {
             Self::Loop(block) => block.span,
             Self::Str(span, _) => *span,
             Self::Ref(ref_) => ref_.span,
+            Self::Access(access) => access.span,
         }
     }
 
@@ -624,7 +627,7 @@ impl Expr<'_> {
                     _ => None,
                 }
             }
-            Self::Ref(_) | Self::Bin(_) => Some(false),
+            Self::Access(_) | Self::Ref(_) | Self::Bin(_) => Some(false),
             Self::Loop(_) => Some(true),
             Self::Block(block) => match block.end {
                 Some(end) => end.is_unit(ctx),
@@ -635,7 +638,7 @@ impl Expr<'_> {
 
     pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
         match self {
-            Self::Ident(_) => None,
+            Self::Access(_) | Self::Ident(_) => None,
             Self::Lit(lit) => Some(lit.kind.is_int()),
             Self::Call(call) => Some(ctx.tys.ty(call.sig.ty).is_int()),
             Self::Bin(bin) => bin.is_integral(ctx),
@@ -702,7 +705,7 @@ fn let_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<
     Ok(match expr {
         rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
         rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
-        rules::Expr::Bin(_, _, _) => Expr::Bin(bin_op(ctx, expr)?),
+        rules::Expr::Bin(op, lhs, rhs) => bin_op(ctx, op.kind, lhs, rhs)?,
         rules::Expr::StructDef(def) => Expr::Struct(struct_def(ctx, def)?),
         rules::Expr::EnumDef(def) => Expr::Enum(enum_def(ctx, def)?),
         rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
@@ -758,21 +761,71 @@ impl BinOp<'_> {
     }
 }
 
-/// Descend into `bin` and recover the full accessor path.
-pub fn descend_bin_op_field(ctx: &Ctx, bin: &BinOp, accesses: &mut Vec<Ident>) {
-    if bin.kind == BinOpKind::Field {
-        match bin.lhs {
-            Expr::Ident(ident) => {
-                if let Expr::Bin(bin) = &bin.rhs {
-                    accesses.push(*ident);
-                    descend_bin_op_field(ctx, bin, accesses);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Eq,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Access<'a> {
+    pub span: Span,
+    pub lhs: &'a Expr<'a>,
+    pub accessors: &'a [Ident],
+}
+
+fn bin_op<'a>(
+    ctx: &mut Ctx<'a>,
+    op: rules::PBinOpKind,
+    lhs: &rules::Expr,
+    rhs: &rules::Expr,
+) -> Result<Expr<'a>, Diag<'a>> {
+    Ok({
+        let lhs_expr = pexpr(ctx, lhs)?;
+        let rhs_expr = pexpr(ctx, rhs)?;
+
+        match op {
+            rules::PBinOpKind::Bin(kind) => Expr::Bin(BinOp {
+                span: Span::from_spans(lhs_expr.span(), rhs_expr.span()),
+                lhs: ctx.intern(lhs_expr),
+                rhs: ctx.intern(rhs_expr),
+                kind,
+            }),
+            rules::PBinOpKind::Accessor => {
+                let mut accessors = Vec::new();
+                descend_bin_op_field(ctx, op, lhs, rhs, &mut accessors);
+                Expr::Access(Access {
+                    span: Span::from_spans(lhs_expr.span(), rhs_expr.span()),
+                    lhs: ctx.intern(rhs_expr),
+                    accessors: ctx.intern_slice(&accessors[1..]),
+                })
+            }
+        }
+    })
+}
+
+pub fn descend_bin_op_field(
+    ctx: &mut Ctx,
+    op: rules::PBinOpKind,
+    lhs: &rules::Expr,
+    rhs: &rules::Expr,
+    accesses: &mut Vec<Ident>,
+) {
+    if op == PBinOpKind::Accessor {
+        match lhs {
+            rules::Expr::Ident(ident) => {
+                if let rules::Expr::Bin(bin, lhs, rhs) = rhs {
+                    accesses.push(ctx.store_ident(*ident));
+                    descend_bin_op_field(ctx, bin.kind, lhs, rhs, accesses);
                 } else {
-                    let Expr::Ident(other) = bin.rhs else {
-                        unreachable!()
+                    let rules::Expr::Ident(other) = rhs else {
+                        unimplemented!()
                     };
 
-                    accesses.push(*other);
-                    accesses.push(*ident);
+                    accesses.push(ctx.store_ident(*other));
+                    accesses.push(ctx.store_ident(*ident));
                 }
             }
             _ => {}
@@ -780,47 +833,11 @@ pub fn descend_bin_op_field(ctx: &Ctx, bin: &BinOp, accesses: &mut Vec<Ident>) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BinOpKind {
-    Add,
-    Sub,
-    Mul,
-    Field,
-    Eq,
-}
-
-impl BinOpKind {
-    pub fn is_primitive(&self) -> bool {
-        !self.is_field()
-    }
-
-    pub fn is_field(&self) -> bool {
-        matches!(self, Self::Field)
-    }
-}
-
-fn bin_op<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<BinOp<'a>, Diag<'a>> {
-    Ok(match expr {
-        rules::Expr::Bin(op, lhs, rhs) => {
-            let lhs = pexpr(ctx, lhs)?;
-            let rhs = pexpr(ctx, rhs)?;
-
-            BinOp {
-                span: Span::from_spans(lhs.span(), rhs.span()),
-                kind: op.kind,
-                lhs: ctx.intern(lhs),
-                rhs: ctx.intern(rhs),
-            }
-        }
-        _ => todo!(),
-    })
-}
-
 fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>> {
     Ok(match expr {
         rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
         rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
-        rules::Expr::Bin(_, _, _) => Expr::Bin(bin_op(ctx, expr)?),
+        rules::Expr::Bin(op, lhs, rhs) => bin_op(ctx, op.kind, lhs, rhs)?,
         rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
         rules::Expr::StructDef(def) => Expr::Struct(struct_def(ctx, def)?),
         rules::Expr::If(iff, expr, block, otherwise) => {
@@ -873,19 +890,18 @@ pub enum AssignKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignTarget<'a> {
     Ident(Ident),
-    Field(BinOp<'a>),
+    Access(Access<'a>),
 }
 
 fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarget<'a>, Diag<'a>> {
     Ok(match expr {
         rules::Expr::Ident(ident) => AssignTarget::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Bin(bin, _, _) => {
-            if bin.kind == BinOpKind::Field {
-                AssignTarget::Field(bin_op(ctx, expr)?)
-            } else {
-                todo!()
+        rules::Expr::Bin(op, lhs, rhs) => match bin_op(ctx, op.kind, lhs, rhs)? {
+            Expr::Access(access) => AssignTarget::Access(access),
+            _ => {
+                return Err(ctx.report_error(op.span, "expected an identifier or a structure field"))
             }
-        }
+        },
         _ => todo!(),
     })
 }
