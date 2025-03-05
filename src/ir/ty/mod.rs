@@ -10,25 +10,39 @@ pub mod infer;
 pub mod store;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Ty {
+pub enum Ty<'a> {
     Int(IntTy),
     Struct(StructId),
+    Ref(&'a Ty<'a>),
     Bool,
+    Str,
     Unit,
 }
 
-impl Ty {
+impl Ty<'_> {
+    pub const PTR_SIZE: usize = 8;
+    pub const FAT_PTR_SIZE: usize = 16;
+
     pub fn size(&self, ctx: &Ctx) -> usize {
         match self {
             Self::Unit => 0,
             Self::Bool => 1,
+            Self::Ref(inner) => match inner {
+                Ty::Str => Self::FAT_PTR_SIZE,
+                _ => Self::PTR_SIZE,
+            },
             Self::Int(int) => int.size(),
+            Self::Str => panic!("size of str is unknown"),
             Self::Struct(id) => ctx.tys.struct_layout(*id).size,
         }
     }
 
     pub fn is_int(&self) -> bool {
         matches!(self, Self::Int(_))
+    }
+
+    pub fn is_ref(&self) -> bool {
+        matches!(self, Self::Ref(_))
     }
 
     #[track_caller]
@@ -48,12 +62,24 @@ impl Ty {
         }
     }
 
-    pub fn as_str<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str {
+    pub fn to_string(&self, ctx: &Ctx) -> String {
         match self {
-            Self::Unit => "()",
-            Self::Bool => "bool",
-            Self::Int(int) => int.as_str(),
-            Self::Struct(s) => ctx.expect_ident(ctx.tys.strukt(*s).name.id),
+            Self::Unit => "()".to_string(),
+            Self::Bool => "bool".to_string(),
+            Self::Ref(inner) => format!("&{}", inner.to_string(ctx)),
+            Self::Str => "str".to_string(),
+            Self::Int(int) => int.as_str().to_string(),
+            Self::Struct(s) => ctx.expect_ident(ctx.tys.strukt(*s).name.id).to_string(),
+        }
+    }
+
+    pub fn peel_refs(&self) -> (&Ty, usize) {
+        match self {
+            Self::Ref(inner) => {
+                let (ty, level) = inner.peel_refs();
+                (ty, level + 1)
+            }
+            inner => (inner, 0),
         }
     }
 }

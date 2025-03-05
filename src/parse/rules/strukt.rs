@@ -1,4 +1,5 @@
 use super::expr::{Expr, ExprRule};
+use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
 use crate::diagnostic::Msg;
 use crate::lex::buffer::*;
@@ -20,7 +21,7 @@ pub struct Field {
     pub span: Span,
     pub name: TokenId,
     pub colon: TokenId,
-    pub ty: TokenId,
+    pub ty: PType,
 }
 
 /// <ident> : struct { [<fields>, ...] }
@@ -103,7 +104,7 @@ impl<'a> ParserRule<'a> for StructFieldDecl {
 
         while !stream.match_peek::<CloseCurly>() {
             let field =
-                Spanned::<(Next<Ident>, Next<Colon>, Next<Ident>, Opt<Next<Comma>>)>::parse(
+                Spanned::<(Next<Ident>, Next<Colon>, TypeRule, Opt<Next<Comma>>)>::parse(
                     buffer, stream, stack,
                 )?;
             let span = field.span();

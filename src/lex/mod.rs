@@ -1,6 +1,7 @@
 use crate::unit::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
+use winnow::combinator::{delimited, preceded};
 use winnow::stream::Stream;
 use winnow::{combinator::alt, stream::AsChar, token::take_while, LocatingSlice, PResult, Parser};
 
@@ -62,12 +63,20 @@ fn any_token<'a>(input: &mut LocatingSlice<&'a str>) -> Option<PResult<Token>> {
         return None;
     }
 
-    let token = alt((symbols, delim, int_lit, keyword_ident)).parse_next(input);
+    let token = alt((str_lit, symbols, delim, int_lit, keyword_ident)).parse_next(input);
     Some(token)
 }
 
+fn str_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
+    let ((_, inner_span), _span) = delimited("\"", take_while(.., |c| c != '\"').with_span(), "\"")
+        .with_span()
+        .parse_next(input)?;
+    // TODO: include the `"`
+    Ok(Token::new(TokenKind::Str, Span::from_range(inner_span)))
+}
+
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">", "#"))
+    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">", "#", "&"))
         .with_span()
         .parse_next(input)?;
     let token = match sym {
@@ -81,6 +90,7 @@ fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         "-" => TokenKind::Hyphen,
         ">" => TokenKind::Greater,
         "#" => TokenKind::Pound,
+        "&" => TokenKind::Ampersand,
         _ => unreachable!(),
     };
 
@@ -105,9 +115,12 @@ fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 }
 
 fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (_, span) = take_while(1.., AsChar::is_dec_digit)
-        .with_span()
-        .parse_next(input)?;
+    let (_, span) = alt((
+        preceded("0x", take_while(1.., AsChar::is_dec_digit)),
+        take_while(1.., AsChar::is_dec_digit),
+    ))
+    .with_span()
+    .parse_next(input)?;
 
     Ok(Token::new(TokenKind::Int, Span::from_range(span)))
 }
@@ -139,6 +152,9 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         "fn" => TokenKind::Fn,
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
+        "loop" => TokenKind::Loop,
+        "const" => TokenKind::Const,
+        "extern" => TokenKind::Extern,
         _ => TokenKind::Ident,
     };
 

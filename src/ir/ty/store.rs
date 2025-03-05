@@ -1,30 +1,42 @@
 use super::{IntTy, Sign, VarHash};
 use crate::diagnostic::Diag;
 use crate::ir::ctx::Ctx;
-use crate::ir::ident::{IdentId, IdentStore};
+use crate::ir::ident::IdentId;
 use crate::ir::mem::Layout;
 use crate::ir::strukt::{FieldMap, Struct, StructId};
 use crate::ir::ty::Ty;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TyPath {
-    Global(IdentId),
+pub enum TyPath<'a> {
+    Global(&'a [IdentId]),
     Var(VarHash),
 }
 
-pub trait IntoTyPath {
-    fn into_ty_path(&self) -> TyPath;
+pub trait IntoTyPath<'a> {
+    fn into_ty_path(&self) -> TyPath<'a>;
 }
 
-impl IntoTyPath for IdentId {
-    fn into_ty_path(&self) -> TyPath {
-        TyPath::Global(*self)
+impl<'a> IntoTyPath<'a> for TyPath<'a> {
+    fn into_ty_path(&self) -> TyPath<'a> {
+        *self
     }
 }
 
-impl IntoTyPath for VarHash {
-    fn into_ty_path(&self) -> TyPath {
+impl<'a> IntoTyPath<'a> for &'a [IdentId] {
+    fn into_ty_path(&self) -> TyPath<'a> {
+        TyPath::Global(self)
+    }
+}
+
+impl<'a, const N: usize> IntoTyPath<'a> for &'a [IdentId; N] {
+    fn into_ty_path(&self) -> TyPath<'a> {
+        TyPath::Global(&self[..])
+    }
+}
+
+impl IntoTyPath<'static> for VarHash {
+    fn into_ty_path(&self) -> TyPath<'static> {
         TyPath::Var(*self)
     }
 }
@@ -32,10 +44,16 @@ impl IntoTyPath for VarHash {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyId(usize);
 
+impl TyId {
+    pub const UNIT: Self = TyId(0);
+    pub const BOOL: Self = TyId(1);
+    pub const STR_LIT: Self = TyId(2);
+}
+
 #[derive(Debug, Default, Clone)]
-pub struct TyStore {
-    ty_map: HashMap<TyPath, TyId>,
-    tys: Vec<Ty>,
+pub struct TyStore<'a> {
+    ty_map: HashMap<Ty<'a>, TyId>,
+    tys: Vec<Ty<'a>>,
 
     struct_map: HashMap<IdentId, StructId>,
     struct_ty_map: HashMap<StructId, TyId>,
@@ -45,40 +63,36 @@ pub struct TyStore {
     layouts: HashMap<TyId, Layout>,
 }
 
-impl TyStore {
-    pub fn register_builtins(&mut self, idents: &mut IdentStore) {
-        self.register_builtin(idents, "bool", Ty::Bool);
-        self.register_builtin(idents, "u8", Ty::Int(IntTy::new_8(Sign::U)));
-        self.register_builtin(idents, "u16", Ty::Int(IntTy::new_16(Sign::U)));
-        self.register_builtin(idents, "u32", Ty::Int(IntTy::new_32(Sign::U)));
-        self.register_builtin(idents, "u64", Ty::Int(IntTy::new_64(Sign::U)));
-        self.register_builtin(idents, "i8", Ty::Int(IntTy::new_8(Sign::I)));
-        self.register_builtin(idents, "i16", Ty::Int(IntTy::new_16(Sign::I)));
-        self.register_builtin(idents, "i32", Ty::Int(IntTy::new_32(Sign::I)));
-        self.register_builtin(idents, "i64", Ty::Int(IntTy::new_64(Sign::I)));
+impl<'a> TyStore<'a> {
+    pub fn new() -> Self {
+        let mut slf = Self::default();
+
+        slf.store_ty(Ty::Unit);
+        slf.store_ty(Ty::Bool);
+        slf.store_ty(Ty::Ref(&Ty::Str));
+        slf.store_ty(Ty::Int(IntTy::new_8(Sign::U)));
+        slf.store_ty(Ty::Int(IntTy::new_16(Sign::U)));
+        slf.store_ty(Ty::Int(IntTy::new_32(Sign::U)));
+        slf.store_ty(Ty::Int(IntTy::new_64(Sign::U)));
+        slf.store_ty(Ty::Int(IntTy::new_8(Sign::I)));
+        slf.store_ty(Ty::Int(IntTy::new_16(Sign::I)));
+        slf.store_ty(Ty::Int(IntTy::new_32(Sign::I)));
+        slf.store_ty(Ty::Int(IntTy::new_64(Sign::I)));
+
+        slf
     }
 
-    fn register_builtin(&mut self, idents: &mut IdentStore, str: &'static str, ty: Ty) {
-        idents.store(str);
-        let id = idents.get_id(str).unwrap();
-        self.store_ty(id, ty);
-    }
-
-    pub fn store_ty<P: IntoTyPath>(&mut self, path: P, ty: Ty) -> TyId {
-        let path = path.into_ty_path();
+    pub fn store_ty(&mut self, ty: Ty<'a>) -> TyId {
         let idx = self.tys.len();
-        assert!(self
-            .ty_map
-            .get(&path)
-            .is_none_or(|old| self.tys[old.0] == ty));
-        self.ty_map.insert(path, TyId(idx));
+        assert!(self.ty_map.get(&ty).is_none_or(|old| self.tys[old.0] == ty));
+        self.ty_map.insert(ty, TyId(idx));
         self.tys.push(ty);
         TyId(idx)
     }
 
     pub fn store_struct(&mut self, strukt: Struct) -> StructId {
         let idx = self.structs.len();
-        let ty_id = self.store_ty(strukt.name.id, Ty::Struct(StructId(idx)));
+        let ty_id = self.store_ty(Ty::Struct(StructId(idx)));
         self.struct_map.insert(strukt.name.id, StructId(idx));
         self.struct_ty_map.insert(StructId(idx), ty_id);
         self.structs.push(strukt);
@@ -86,43 +100,45 @@ impl TyStore {
     }
 
     pub fn bool(&self) -> TyId {
-        TyId(0)
+        TyId::BOOL
+    }
+
+    pub fn str_lit(&self) -> TyId {
+        TyId::STR_LIT
     }
 
     pub fn unit(&self) -> TyId {
-        TyId(usize::MAX)
+        TyId::UNIT
     }
 
     pub fn is_unit(&self, ty: TyId) -> bool {
         ty == self.unit()
     }
 
+    /// Used during the construction of types, where [`Ty`]s are not easily accessible.
     pub fn builtin(&self, ident: &str) -> bool {
         match ident {
-            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "bool" => true,
+            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "bool" | "str" => true,
             _ => false,
         }
     }
 
     #[track_caller]
-    pub fn ty(&self, ty_id: TyId) -> Ty {
+    pub fn ty(&self, ty_id: TyId) -> Ty<'a> {
         self.tys.get(ty_id.0).copied().expect("invalid type id")
     }
 
-    pub fn ty_id<P: IntoTyPath>(&self, path: P) -> Option<TyId> {
-        let path = path.into_ty_path();
-        self.ty_map.get(&path).copied()
+    pub fn ty_id(&mut self, ty: &Ty<'a>) -> TyId {
+        if let Some(id) = self.ty_map.get(ty) {
+            *id
+        } else {
+            self.store_ty(*ty)
+        }
     }
 
     #[track_caller]
     pub fn strukt(&self, id: StructId) -> &Struct {
         self.structs.get(id.0).expect("invalid struct id")
-    }
-
-    #[track_caller]
-    pub fn expect_struct_ident(&self, ident: IdentId) -> &Struct {
-        let id = self.expect_struct_id(ident);
-        self.strukt(id)
     }
 
     #[track_caller]
@@ -161,7 +177,7 @@ impl TyStore {
         self.layout(*ty_id)
     }
 
-    pub fn build_layouts<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
+    pub fn build_layouts(&mut self, ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
         for (i, strukt) in self.structs.iter().enumerate() {
             let ty_id = self.struct_ty_map.get(&StructId(i)).unwrap();
             if !self.layouts.contains_key(&ty_id) {
@@ -181,7 +197,7 @@ impl TyStore {
         Ok(())
     }
 
-    fn layout_struct<'a>(
+    fn layout_struct(
         ctx: &Ctx<'a>,
         buf: &[Struct],
         struct_ty_map: &HashMap<StructId, TyId>,
@@ -190,6 +206,7 @@ impl TyStore {
         strukt: StructId,
         prev: Option<StructId>,
     ) -> Result<(), Diag<'a>> {
+        let mut errors = Vec::new();
         let struct_id = strukt;
         let strukt = &buf[strukt.0];
 
@@ -239,6 +256,12 @@ impl TyStore {
                 Ty::Bool => {
                     struct_layouts.push(Layout::splat(1));
                 }
+                Ty::Ref(_) => {
+                    struct_layouts.push(Layout::PTR);
+                }
+                Ty::Str => {
+                    errors.push(ctx.report_error(field.span, "`str` is of unknown size"));
+                }
                 Ty::Unit => panic!("field cannot be unit"),
             }
         }
@@ -274,6 +297,10 @@ impl TyStore {
             },
         );
 
-        Ok(())
+        if !errors.is_empty() {
+            Err(Diag::bundle(errors))
+        } else {
+            Ok(())
+        }
     }
 }

@@ -12,6 +12,7 @@ pub trait TokenQuery<'a> {
     fn span(&'a self, token: TokenId) -> Span;
     fn int_lit(&'a self, token: TokenId) -> i64;
     fn ident(&'a self, token: TokenId) -> &'a str;
+    fn as_str(&'a self, token: TokenId) -> &'a str;
     fn is_terminator(&'a self, token: TokenId) -> bool;
 }
 
@@ -37,6 +38,11 @@ where
     #[track_caller]
     fn int_lit(&'a self, token: TokenId) -> i64 {
         self.token_buffer().int_lit(token)
+    }
+
+    #[track_caller]
+    fn as_str(&'a self, token: TokenId) -> &'a str {
+        self.token_buffer().as_str(token)
     }
 
     fn is_terminator(&'a self, token: TokenId) -> bool {
@@ -121,6 +127,11 @@ impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
             );
         }
 
+        self.as_str(token)
+    }
+
+    #[track_caller]
+    fn as_str(&'a self, token: TokenId) -> &'a str {
         &self.source.raw()[self.span(token).range()]
     }
 
@@ -133,7 +144,13 @@ impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
             );
         }
 
-        self.source.raw()[self.span(token).range()].parse().unwrap()
+        // TODO: check bounds of integer size somewhere
+        let str = self.as_str(token);
+        if str.contains("0x") {
+            i64::from_str_radix(&str[2..], 16).unwrap()
+        } else {
+            str.parse().unwrap()
+        }
     }
 
     fn is_terminator(&self, token: TokenId) -> bool {

@@ -15,18 +15,21 @@ use crate::parse::{matc::*, stream::TokenStream};
 pub enum Expr {
     Ident(TokenId),
     Lit(TokenId),
+    Str(TokenId),
     Bool(TokenId),
     Bin(BinOp, Box<Expr>, Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
     StructDef(StructDef),
     EnumDef(EnumDef),
+    TakeRef(TokenId, Box<Expr>),
     Call {
         span: Span,
         func: TokenId,
         args: Vec<Expr>,
     },
     If(TokenId, Box<Expr>, Block, Option<Block>),
+    Loop(Block),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -159,9 +162,10 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
 /// Collection of viable terms within an expression.
 ///
 /// Directly translate to [`Expr`] with [`Term::into_expr`].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Term {
     Lit(TokenId),
+    Str(TokenId),
     Ident(TokenId),
     Bool(TokenId),
     Call {
@@ -169,15 +173,18 @@ pub enum Term {
         func: TokenId,
         args: Vec<Expr>,
     },
+    Ref(TokenId, Box<Term>),
 }
 
 impl Term {
     pub fn into_expr(self) -> Expr {
         match self {
             Self::Lit(id) => Expr::Lit(id),
+            Self::Str(id) => Expr::Str(id),
             Self::Ident(id) => Expr::Ident(id),
             Self::Bool(bool) => Expr::Bool(bool),
             Self::Call { span, func, args } => Expr::Call { span, func, args },
+            Self::Ref(token, term) => Expr::TakeRef(token, Box::new(term.clone().into_expr())),
         }
     }
 }
@@ -259,14 +266,13 @@ impl<'a> ParserRule<'a> for TermRule {
                     _ => Ok(Term::Ident(ident)),
                 }
             }
-            Some(TokenKind::Int) => {
-                let lit = Next::<Int>::parse(buffer, stream, stack).unwrap();
-                Ok(Term::Lit(lit))
-            }
-            Some(TokenKind::True) | Some(TokenKind::False) => {
-                let bool = Next::<Any>::parse(buffer, stream, stack).unwrap();
-                Ok(Term::Bool(bool))
-            }
+            Some(TokenKind::Int) => Ok(Term::Lit(stream.expect())),
+            Some(TokenKind::True) | Some(TokenKind::False) => Ok(Term::Bool(stream.expect())),
+            Some(TokenKind::Str) => Ok(Term::Str(stream.expect())),
+            Some(TokenKind::Ampersand) => Ok(Term::Ref(
+                stream.expect(),
+                Box::new(TermRule::parse(buffer, stream, stack)?),
+            )),
             kind => Err(stream.full_error(
                 "malformed expression",
                 buffer.span(stream.peek().unwrap()),

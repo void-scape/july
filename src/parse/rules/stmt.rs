@@ -7,7 +7,7 @@ use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*, stream::T
 pub enum Stmt {
     Let {
         name: TokenId,
-        ty: Option<TokenId>,
+        ty: Option<PType>,
         assign: Expr,
     },
     Semi(Expr),
@@ -25,9 +25,10 @@ impl<'a> ParserRule<'a> for StmtRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        let (expr, semi) = <(Alt<(CntrlFlowRule, ExprRule, AssignRule)>, Opt<Next<Semi>>)>::parse(
-            buffer, stream, stack,
-        )?;
+        let (expr, semi) = <(
+            Alt<(CntrlFlowRule, ExprRule, AssignRule, LoopRule)>,
+            Opt<Next<Semi>>,
+        )>::parse(buffer, stream, stack)?;
 
         if semi.is_some() {
             Ok(Stmt::Semi(expr))
@@ -52,7 +53,7 @@ impl<'a> ParserRule<'a> for LetRule {
             <(
                 Next<Let>,
                 Next<Ident>,
-                Opt<(Next<Colon>, Next<Ident>)>,
+                Opt<(Next<Colon>, TypeRule)>,
                 Next<Equals>,
                 ExprRule,
                 Next<Semi>,
@@ -112,5 +113,22 @@ impl<'a> ParserRule<'a> for IfExprRule {
                 Err(diag)
             }
         }
+    }
+}
+
+/// `loop { <stmts> .. }`
+pub struct LoopRule;
+
+impl<'a> ParserRule<'a> for LoopRule {
+    type Output = Expr;
+
+    fn parse(
+        buffer: &'a TokenBuffer<'a>,
+        stream: &mut TokenStream<'a>,
+        stack: &mut Vec<TokenId>,
+    ) -> RResult<'a, Self::Output> {
+        let (_loop, block) =
+            <(Next<Loop>, BlockRules) as ParserRule>::parse(buffer, stream, stack)?;
+        Ok(Expr::Loop(block))
     }
 }

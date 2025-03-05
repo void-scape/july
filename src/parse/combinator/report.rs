@@ -7,6 +7,7 @@ pub trait Report {
         -> Diag<'a>;
 }
 
+// TODO: parsing errors need to be brought up into the title so they are more concise
 #[derive(Debug, Default)]
 pub struct Reported<T, R>(T, R);
 

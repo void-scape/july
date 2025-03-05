@@ -1,6 +1,10 @@
 /// Definition of all kinds of tokens found within a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    /// `const`
+    Const,
+    /// `loop`
+    Loop,
     /// `if`
     If,
     /// `else`
@@ -10,6 +14,8 @@ pub enum TokenKind {
     /// `false`
     False,
 
+    /// `extern`
+    Extern,
     /// `struct`
     Struct,
     /// `enum`
@@ -40,6 +46,8 @@ pub enum TokenKind {
     CloseCurly,
     /// `0`..`9`
     Int,
+    /// `"I am a string literal!"`
+    Str,
     /// `<a..z | A..Z>[a..z | A..Z | 0..9]`
     Ident,
     /// '+'
@@ -58,11 +66,14 @@ pub enum TokenKind {
     Dot,
     /// `#`
     Pound,
+    /// `&`
+    Ampersand,
 }
 
 impl TokenKind {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Extern => "extern",
             Self::Enum => "enum",
             Self::Struct => "struct",
             Self::Let => "let",
@@ -85,13 +96,17 @@ impl TokenKind {
             Self::Comma => ",",
             Self::Dot => ".",
             Self::Pound => "#",
+            Self::Ampersand => "&",
 
+            Self::Const => "const",
+            Self::Loop => "loop",
             Self::If => "if",
             Self::Else => "else",
             Self::True => "true",
             Self::False => "false",
 
-            Self::Int => "int literal",
+            Self::Int => "integer literal",
+            Self::Str => "string literal",
             Self::Ident => "identifier",
         }
     }

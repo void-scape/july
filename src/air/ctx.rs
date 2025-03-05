@@ -1,3 +1,4 @@
+use super::data::{Bss, BssEntry};
 use super::{Air, AirFunc, AirFuncBuilder, Args, BlockId, IntKind, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
@@ -18,6 +19,7 @@ pub struct AirCtx<'a> {
     var_index: usize,
     var_map: HashMap<(FuncHash, IdentId), Var>,
     ty_map: HashMap<Var, TyId>,
+    bss: Bss,
     func: Option<FuncHash>,
     func_builder: Option<AirFuncBuilder<'a>>,
 }
@@ -30,6 +32,7 @@ impl<'a> AirCtx<'a> {
             var_index: 0,
             var_map: HashMap::default(),
             ty_map: HashMap::default(),
+            bss: Bss::default(),
             func: None,
             func_builder: None,
         }
@@ -161,6 +164,10 @@ impl<'a> AirCtx<'a> {
             self.func.expect("AirCtx func hash not set in `lower_func`"),
         )
     }
+
+    pub fn str_lit(&mut self, str: &str) -> (BssEntry, usize) {
+        self.bss.str_lit(str)
+    }
 }
 
 pub const RET_REG: Reg = Reg::A;
@@ -173,19 +180,21 @@ impl<'a> AirCtx<'a> {
             .insert_active(instr);
     }
 
-    pub fn ins_set(&mut self, instrs: &[Air<'a>]) {
+    pub fn ins_set(&mut self, instrs: impl IntoIterator<Item = Air<'a>>) {
         self.func_builder
             .as_mut()
             .expect("init func builder")
-            .insert_active_set(instrs.iter().cloned());
+            .insert_active_set(instrs);
     }
 
     pub fn ret_var(&mut self, var: OffsetVar, ty: TyId) {
         match self.tys.ty(ty) {
-            Ty::Unit => panic!("return unit"),
             Ty::Bool => self.ret_ivar(var, IntKind::I64),
             Ty::Int(ty) => self.ret_ivar(var, ty.kind()),
+            Ty::Ref(_) => self.ret_ivar(var, IntKind::PTR),
             Ty::Struct(_) => self.ret_ptr(var),
+            Ty::Unit => panic!("cannot return unit"),
+            Ty::Str => panic!("cannot return str"),
         }
     }
 

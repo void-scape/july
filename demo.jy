@@ -182,35 +182,100 @@ simple_if_then: (condition: bool, x: i32) -> i32 {
     }
 }
 
-// ------------ Demo ------------
+// ------------ FFI -------
 
-operations: () -> i32 {
-    let x = num() + ((10 + 2) * 2); // x = 25
-    x += 1 + 2; // 28
+#[link("SDL3")]
+extern("C") {
+    SDL_Init: (init_code: u32) -> bool;
+    SDL_CreateWindow: (title: u64, width: i32, height: i32, flags: u64) -> &Window;
 
-    let y = 4; // y = 4
-    y = y - 2; // y = 2
+    SDL_CreateRenderer: (window: &Window, name: u64) -> &Renderer;
+    SDL_RenderClear: (renderer: &Renderer) -> bool;
+    SDL_RenderPresent: (renderer: &Renderer) -> bool;
 
-    x + y // 28 + 2 = 30
+    SDL_PollEvent: (event: &Event) -> bool;
+    SDL_Delay: (ms: u32);
 }
 
-num: () -> i32 {
-    return 1;
+// ------------ Demo ------------
+
+Window: struct {
+    id: u32,
+    title: &u8,
+}
+
+Renderer: struct {
+    id: u32,
+}
+
+Event: struct {
+    event_type: u32,
+    d1: u32,
+    d2: u64,
+    d3: u64,
+    d4: u64,
+
+    d5: u64,
+    d6: u64,
+    d7: u64,
+    d8: u64,
+
+    d9: u64,
+    d10: u64,
+    d11: u64,
+    d12: u64,
+
+    d13: u64,
+    d14: u64,
+    d15: u64,
+    d16: u64,
+}
+
+// SDL_QUIT     : const u32 = 0x100;
+// SDL_KEY_DOWN : const u32 = 0x300;
+
+game_loop: () -> i32 {
+    assert(SDL_Init(69));
+    let window = SDL_CreateWindow(0, 640, 380, 0);
+    if window == 0 {
+        printf("failed to create window\n");
+        return 1;
+    }
+
+    let renderer = SDL_CreateRenderer(window, 0);
+    if renderer == 0 {
+        printf("failed to create renderer\n");
+        return 1;
+    }
+
+    let event = Event { event_type: 0x100 };
+    loop {
+        if SDL_PollEvent(&event) {
+            if event.event_type == 0x100 {
+                return 0;
+            }
+
+            if event.event_type == 0x300 {
+                return 0;
+            }
+        }
+
+        if SDL_RenderClear(renderer)   {} else { return 1; }
+        if SDL_RenderPresent(renderer) {} else { return 1; }
+        SDL_Delay(16);
+    }
 }
 
 main: () -> i32 {
     tests();
-    simple_if_then(true, 4)
+    game_loop()
 }
 
-tests: () {
-    assert(double(2) == 4);
-    assert(double(4) == 8);
-    assert(double(28) == 56);
-    assert(seed() == 42);
-    assert(operations() == 30);
-    assert(var_2_var() == 16);
-}
+#[intrinsic]
+exit: (code: i32) {}
+
+#[intrinsic]
+printf: (fmt: &str) {}
 
 assert: (condition: bool) {
     if condition == false {
@@ -218,5 +283,18 @@ assert: (condition: bool) {
     }
 }
 
-#[intrinsic]
-exit: (code: i32) {}
+assert_n: (condition: bool) {
+    if condition == true {
+        exit(1);
+    }
+}
+
+tests: () {
+    assert(double(2) == 4);
+    assert(double(4) == 8);
+    assert(double(28) == 56);
+    assert(seed() == 42);
+    assert(var_2_var() == 16);
+    assert(simple_if_then(true, 4) == 2);
+    assert(24 == 24);
+}

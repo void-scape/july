@@ -14,11 +14,11 @@ use std::collections::{HashMap, HashSet};
 pub struct Ctx<'a> {
     pub tokens: &'a TokenBuffer<'a>,
     pub idents: IdentStore<'a>,
-    pub tys: TyStore,
+    pub tys: TyStore<'a>,
     pub enums: EnumStore,
     pub funcs: Vec<Func<'a>>,
-    arena: BlobArena,
-    sigs: HashMap<IdentId, &'a Sig<'a>>,
+    pub arena: BlobArena,
+    pub sigs: HashMap<IdentId, &'a Sig<'a>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -26,7 +26,7 @@ impl<'a> Ctx<'a> {
         Self {
             idents: IdentStore::default(),
             sigs: HashMap::default(),
-            tys: TyStore::default(),
+            tys: TyStore::new(),
             enums: EnumStore::default(),
             arena: BlobArena::default(),
             funcs: Vec::new(),
@@ -72,8 +72,8 @@ impl<'a> Ctx<'a> {
             span,
             format!(
                 "mismatched types: expected `{}`, got `{}`",
-                expected.ctx_fmt(self),
-                got.ctx_fmt(self)
+                expected.to_string(self),
+                got.to_string(self)
             ),
         )
         .loc(std::panic::Location::caller())
@@ -99,8 +99,12 @@ impl<'a> Ctx<'a> {
         diag.loc(std::panic::Location::caller())
     }
 
-    pub fn ty_str(&'a self, ty: TyId) -> &'a str {
-        self.tys.ty(ty).as_str(self)
+    pub fn ty_str(&self, ty: TyId) -> String {
+        if ty == TyId::UNIT {
+            String::from("()")
+        } else {
+            self.tys.ty(ty).to_string(self)
+        }
     }
 
     pub fn store_funcs(&mut self, funcs: Vec<Func<'a>>) {
@@ -121,6 +125,10 @@ impl<'a> Ctx<'a> {
     #[track_caller]
     pub fn intern<T>(&self, item: T) -> &'a T {
         self.arena.alloc(item)
+    }
+
+    pub fn intern_str(&self, str: &str) -> &'a str {
+        self.arena.alloc_str(str)
     }
 
     /// Panics if `T` requires drop
@@ -156,18 +164,15 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn store_sigs(&mut self, sigs: Vec<Sig<'a>>) -> Result<(), Diag<'a>> {
-        let mut set = HashSet::<&Sig>::default();
-        for sig in sigs.iter() {
-            if !set.insert(sig) {
-                return Err(self.errors(
-                    "duplicate function names",
-                    [Msg::error(sig.span, "Function is already defined")],
-                ));
-            }
-        }
-
         for sig in sigs.into_iter() {
-            self.sigs.insert(sig.ident, self.intern(sig));
+            if let Some(other) = self.sigs.insert(sig.ident, self.intern(sig)) {
+                return Err(self
+                    .report_error(
+                        sig.span,
+                        format!("`{}` is already defined", sig.ident.to_string(self)),
+                    )
+                    .msg(Msg::help(other.span, "previously defined here")));
+            }
         }
 
         Ok(())
@@ -202,51 +207,57 @@ impl<'a> Buffer<'a> for Ctx<'a> {
 }
 
 pub trait CtxFmt {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str;
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String);
+
+    fn to_string<'a>(&'a self, ctx: &'a Ctx<'a>) -> String {
+        let mut buf = String::new();
+        self.ctx_fmt(ctx, &mut buf);
+        buf
+    }
 }
 
 impl<T> CtxFmt for &T
 where
     T: CtxFmt,
 {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
-        <T as CtxFmt>::ctx_fmt(self, ctx)
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String) {
+        <T as CtxFmt>::ctx_fmt(self, ctx, buf)
     }
 }
 
 impl CtxFmt for &'static str {
-    fn ctx_fmt<'a>(&self, _: &Ctx<'a>) -> &'a str {
-        self
+    fn ctx_fmt<'a>(&self, _: &Ctx<'a>, buf: &mut String) {
+        buf.push_str(self);
     }
 }
 
 impl CtxFmt for String {
-    fn ctx_fmt<'a>(&'a self, _: &Ctx<'a>) -> &'a str {
-        &self
+    fn ctx_fmt<'a>(&'a self, _: &Ctx<'a>, buf: &mut String) {
+        buf.push_str(&self);
     }
 }
 
-impl CtxFmt for Ty {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
-        self.as_str(ctx)
+impl<'s> CtxFmt for Ty<'s> {
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String) {
+        buf.push_str(&self.to_string(ctx));
     }
 }
 
 impl CtxFmt for TyId {
-    fn ctx_fmt<'a>(&self, ctx: &'a Ctx<'a>) -> &'a str {
-        ctx.ty_str(*self)
+    fn ctx_fmt<'a>(&self, ctx: &'a Ctx<'a>, buf: &mut String) {
+        buf.push_str(&ctx.ty_str(*self))
     }
 }
 
 impl CtxFmt for Ident {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
-        ctx.expect_ident(self.id)
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String) {
+        buf.push_str(ctx.expect_ident(self.id));
     }
 }
 
 impl CtxFmt for IdentId {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> &'a str {
-        ctx.expect_ident(*self)
+    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String) {
+        buf.push_str(ctx.expect_ident(*self));
     }
 }
 
@@ -282,17 +293,17 @@ impl SpannedCtx for Ident {
 }
 
 pub trait SpannedCtxFmt: SpannedCtx + CtxFmt {
-    fn spanned_ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> (Span, &'a str);
+    fn spanned_ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> (Span, String);
 }
 
 impl<T> SpannedCtxFmt for T
 where
     T: SpannedCtx + CtxFmt,
 {
-    fn spanned_ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> (Span, &'a str) {
+    fn spanned_ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>) -> (Span, String) {
         (
             <Self as SpannedCtx>::ctx_span(self, ctx),
-            <Self as CtxFmt>::ctx_fmt(self, ctx),
+            <Self as CtxFmt>::to_string(self, ctx),
         )
     }
 }

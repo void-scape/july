@@ -8,13 +8,15 @@ use crate::{
 };
 use std::{marker::PhantomData, panic::Location};
 
-mod block;
 mod attributes;
+mod block;
 mod enom;
+mod konst;
 mod expr;
 mod func;
 mod stmt;
 mod strukt;
+mod types;
 
 #[allow(unused)]
 pub mod prelude {
@@ -25,8 +27,14 @@ pub mod prelude {
     pub use super::func::*;
     pub use super::stmt::*;
     pub use super::strukt::*;
+    pub use super::konst::*;
+    pub use super::types::*;
 }
 
+// TODO: remove buffer because stream already implements `TokenQuery`
+//
+// TODO: remove stack, it is only used for expr parsing, which can be allocated locally anyway
+// since expressions aren't typically too long
 pub trait ParserRule<'a> {
     type Output;
 

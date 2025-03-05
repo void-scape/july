@@ -18,6 +18,7 @@ where
         let kind = T::kind();
         match kind {
             TokenKind::Let
+            | TokenKind::Extern
             | TokenKind::Enum
             | TokenKind::Struct
             | TokenKind::Fn
@@ -42,6 +43,10 @@ where
             | TokenKind::True
             | TokenKind::False
             | TokenKind::Pound
+            | TokenKind::Ampersand
+            | TokenKind::Str
+            | TokenKind::Loop
+            | TokenKind::Const
             | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
             TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
             TokenKind::Ident => format!("expected {}", kind.as_str()),
@@ -165,31 +170,41 @@ macro_rules! impl_tkt {
     };
 }
 
-impl_tkt!(If, TokenKind::If);
-impl_tkt!(Else, TokenKind::Else);
-impl_tkt!(True, TokenKind::True);
-impl_tkt!(False, TokenKind::False);
+macro_rules! impl_tkt_for {
+    ($variant:ident) => {
+        impl_tkt!($variant, TokenKind::$variant);
+    };
+}
 
-impl_tkt!(Enum, TokenKind::Enum);
-impl_tkt!(Fn, TokenKind::Fn);
-impl_tkt!(Struct, TokenKind::Struct);
-impl_tkt!(Ret, TokenKind::Ret);
-impl_tkt!(Let, TokenKind::Let);
-impl_tkt!(Colon, TokenKind::Colon);
-impl_tkt!(Ident, TokenKind::Ident);
-impl_tkt!(Equals, TokenKind::Equals);
-impl_tkt!(Int, TokenKind::Int);
-impl_tkt!(Semi, TokenKind::Semi);
-impl_tkt!(Plus, TokenKind::Plus);
-impl_tkt!(Asterisk, TokenKind::Asterisk);
-impl_tkt!(OpenCurly, TokenKind::OpenCurly);
-impl_tkt!(CloseCurly, TokenKind::CloseCurly);
-impl_tkt!(OpenParen, TokenKind::OpenParen);
-impl_tkt!(CloseParen, TokenKind::CloseParen);
-impl_tkt!(OpenBracket, TokenKind::OpenBracket);
-impl_tkt!(CloseBracket, TokenKind::CloseBracket);
-impl_tkt!(Hyphen, TokenKind::Hyphen);
-impl_tkt!(Greater, TokenKind::Greater);
-impl_tkt!(Comma, TokenKind::Comma);
-impl_tkt!(Dot, TokenKind::Dot);
-impl_tkt!(Pound, TokenKind::Pound);
+impl_tkt_for!(If);
+impl_tkt_for!(Else);
+impl_tkt_for!(True);
+impl_tkt_for!(False);
+impl_tkt_for!(Enum);
+impl_tkt_for!(Fn);
+impl_tkt_for!(Struct);
+impl_tkt_for!(Ret);
+impl_tkt_for!(Let);
+impl_tkt_for!(Colon);
+impl_tkt_for!(Ident);
+impl_tkt_for!(Equals);
+impl_tkt_for!(Int);
+impl_tkt_for!(Semi);
+impl_tkt_for!(Plus);
+impl_tkt_for!(Asterisk);
+impl_tkt_for!(OpenCurly);
+impl_tkt_for!(CloseCurly);
+impl_tkt_for!(OpenParen);
+impl_tkt_for!(CloseParen);
+impl_tkt_for!(OpenBracket);
+impl_tkt_for!(CloseBracket);
+impl_tkt_for!(Hyphen);
+impl_tkt_for!(Greater);
+impl_tkt_for!(Comma);
+impl_tkt_for!(Dot);
+impl_tkt_for!(Pound);
+impl_tkt_for!(Ampersand);
+impl_tkt_for!(Str);
+impl_tkt_for!(Extern);
+impl_tkt_for!(Loop);
+impl_tkt_for!(Const);

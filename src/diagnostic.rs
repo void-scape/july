@@ -145,16 +145,32 @@ impl Msg {
         Self::new(Level::Error, span, label)
     }
 
+    pub fn error_span(span: Span) -> Self {
+        Self::new(Level::Error, span, "")
+    }
+
     pub fn note(span: Span, label: impl Into<String>) -> Self {
         Self::new(Level::Note, span, label)
+    }
+
+    pub fn note_span(span: Span) -> Self {
+        Self::new(Level::Note, span, "")
     }
 
     pub fn info(span: Span, label: impl Into<String>) -> Self {
         Self::new(Level::Info, span, label)
     }
 
+    pub fn info_span(span: Span) -> Self {
+        Self::new(Level::Info, span, "")
+    }
+
     pub fn help(span: Span, label: impl Into<String>) -> Self {
         Self::new(Level::Help, span, label)
+    }
+
+    pub fn help_span(span: Span) -> Self {
+        Self::new(Level::Help, span, "")
     }
 }
 

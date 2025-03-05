@@ -10,6 +10,7 @@ pub struct Sig<'a> {
     pub ident: IdentId,
     pub ty: TyId,
     pub params: &'a [Param],
+    pub linkage: Linkage<'a>,
 }
 
 impl Sig<'_> {
@@ -17,6 +18,22 @@ impl Sig<'_> {
         let mut hash = DefaultHasher::new();
         <Sig as Hash>::hash(self, &mut hash);
         FuncHash(hash.finish())
+    }
+
+    pub fn is_external(&self) -> bool {
+        self.linkage.is_external()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Linkage<'a> {
+    Local,
+    External { link: &'a str },
+}
+
+impl Linkage<'_> {
+    pub fn is_external(&self) -> bool {
+        matches!(self, Self::External { .. })
     }
 }
 

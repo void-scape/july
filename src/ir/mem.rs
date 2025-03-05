@@ -1,15 +1,18 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Layout {
     pub size: usize,
     pub alignment: usize,
 }
 
 impl Layout {
-    pub fn new(size: usize, alignment: usize) -> Self {
+    pub const PTR: Self = Self::splat(8);
+    pub const FAT_PTR: Self = Self::new(16, 8);
+
+    pub const fn new(size: usize, alignment: usize) -> Self {
         Self { size, alignment }
     }
 
-    pub fn splat(n: usize) -> Self {
+    pub const fn splat(n: usize) -> Self {
         Self::new(n, n)
     }
 

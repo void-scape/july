@@ -1,7 +1,7 @@
 use super::matc::{DelimPair, MatchTokenKind};
 use super::PARSE_ERR;
 use crate::diagnostic::{Diag, Msg};
-use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
+use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
 
 impl TokenBuffer<'_> {
@@ -17,6 +17,12 @@ pub struct TokenStream<'a> {
     start: usize,
     end: usize,
     index: usize,
+}
+
+impl<'a> Buffer<'a> for TokenStream<'a> {
+    fn token_buffer(&'a self) -> &'a TokenBuffer<'a> {
+        self.buffer
+    }
 }
 
 impl<'a> TokenStream<'a> {
@@ -82,8 +88,17 @@ impl<'a> TokenStream<'a> {
 
     #[track_caller]
     pub fn error(&self, msg: impl Into<String>) -> Diag<'a> {
-        let span = self.buffer.span(self.prev());
-        self.full_error(PARSE_ERR, span, msg)
+        let prev = self.prev();
+        match self.buffer.next(prev) {
+            Some(next) => {
+                let span = self.buffer.span(next);
+                self.full_error(msg, span, "")
+            }
+            None => {
+                let span = self.buffer.span(prev);
+                self.full_error(msg, span, "")
+            }
+        }
     }
 
     pub fn remaining(&self) -> usize {
@@ -113,6 +128,15 @@ impl<'a> TokenStream<'a> {
             self.index += 1;
             Some(t)
         })
+    }
+
+    // TODO: take slice from buffer
+    pub fn drain(&mut self) -> Vec<TokenId> {
+        let mut tokens = Vec::with_capacity(self.remaining());
+        while let Some(next) = self.next() {
+            tokens.push(next);
+        }
+        tokens
     }
 
     #[track_caller]

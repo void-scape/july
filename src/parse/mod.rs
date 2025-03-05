@@ -1,5 +1,5 @@
 use self::matc::{Any, Colon, Ident, MatchTokenKind};
-use self::rules::prelude::{Enum, Func, Struct};
+use self::rules::prelude::{Const, Enum, ExternFunc, Func, Struct};
 use self::rules::ParserRule;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
@@ -17,6 +17,8 @@ pub enum Item {
     Enum(Enum),
     Struct(Struct),
     Func(Func),
+    Const(Const),
+    Extern(ExternFunc),
 }
 
 pub struct Parser;
@@ -39,6 +41,24 @@ impl Parser {
                 stream.peekn(1).map(|t| buffer.kind(t)),
                 stream.peekn(2).map(|t| buffer.kind(t)),
             ) {
+                (Some(TokenKind::Extern), _, _) => {
+                    match rules::prelude::ExternFnRule::parse(buffer, &mut stream, &mut stack) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(mut f) => {
+                            if let Some(attr) = active_attribute.take() {
+                                for f in f.iter_mut() {
+                                    if let Err(diag) = f.parse_attr(&stream, &attr) {
+                                        diags.push(diag);
+                                    }
+                                }
+                            }
+
+                            items.extend(f.into_iter().map(|f| Item::Extern(f)));
+                        }
+                    }
+                }
                 (Some(TokenKind::Pound), Some(TokenKind::OpenBracket), _) => {
                     match rules::prelude::AttributeRule::parse(buffer, &mut stream, &mut stack) {
                         Err(diag) => {
@@ -92,7 +112,7 @@ impl Parser {
                         }
                         Ok(mut f) => {
                             if let Some(attr) = active_attribute.take() {
-                                if let Err(diag) = f.parse_attr(&stream, attr) {
+                                if let Err(diag) = f.parse_attr(&stream, &attr) {
                                     diags.push(diag);
                                 }
                             }
@@ -100,9 +120,19 @@ impl Parser {
                         }
                     }
                 }
+                (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Const)) => {
+                    match rules::prelude::ConstRule::parse(buffer, &mut stream, &mut stack) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(c) => {
+                            items.push(Item::Const(c));
+                        }
+                    }
+                }
                 (_t1, _t2, _t3) => {
                     // panic!("{_t1:?}, {_t2:?}, {_t3:?}");
-                    diags.push(stream.error("expected a `struct`, `enum`, or `function`"));
+                    diags.push(stream.error("expected an item"));
                     while !Ident::matches(stream.peek().map(|t| buffer.kind(t)))
                         || !Colon::matches(stream.peekn(1).map(|t| buffer.kind(t)))
                         || !Any::<(matc::Enum, matc::Struct, matc::OpenParen)>::matches(

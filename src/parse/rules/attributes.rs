@@ -1,11 +1,12 @@
 use super::{ParserRule, RResult};
-use crate::lex::buffer::{Span, TokenQuery};
+use crate::lex::buffer::{Span, TokenId, TokenQuery};
 use crate::parse::matc::Bracket;
 
-#[derive(Debug)]
+// TODO: parse these suckers
+#[derive(Debug, Clone)]
 pub struct Attribute {
     pub span: Span,
-    pub str: String,
+    pub tokens: Vec<TokenId>,
 }
 
 pub struct AttributeRule;
@@ -24,11 +25,27 @@ impl<'a> ParserRule<'a> for AttributeRule {
         let mut slice = stream.slice(offset);
         stream.eat_n(offset);
         let _bracket = stream.expect();
-        assert_eq!(1, slice.remaining());
-        let attribute = slice.expect();
-        Ok(Attribute {
-            span: buffer.span(attribute),
-            str: buffer.ident(attribute).to_string(),
-        })
+
+        let tokens = slice.drain();
+        match tokens.len() {
+            0 => {
+                return Err(stream.full_error(
+                    "expected atleast one argument in attribute",
+                    buffer.span(stream.prev()),
+                    "",
+                ))
+            }
+            1 => Ok(Attribute {
+                span: buffer.span(tokens[0]),
+                tokens,
+            }),
+            _ => Ok(Attribute {
+                span: Span::from_spans(
+                    buffer.span(tokens[0]),
+                    buffer.span(*tokens.last().unwrap()),
+                ),
+                tokens,
+            }),
+        }
     }
 }

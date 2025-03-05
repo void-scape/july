@@ -11,16 +11,21 @@ use crate::parse::rules::prelude::Attr;
 use bin::*;
 use ctx::*;
 
+use self::data::BssEntry;
+
 mod bin;
 pub mod ctx;
+mod data;
 
 /// Analyzed Intermediate Representation.
 ///
 /// `Air` is a collection of low level instructions that are intended to be easily executable as
 /// byte-code and lowerable in a backend.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Air<'a> {
     Ret,
+
+    // TODO: recursion won't work with the current model, we simply override vars
     Call(&'a Sig<'a>, Args),
 
     /// Swap the A and B registers.
@@ -49,7 +54,7 @@ pub enum Air<'a> {
     Jmp(BlockId),
 
     // TODO: rename Push
-    PushIConst(OffsetVar, IntKind, i64),
+    PushIConst(OffsetVar, IntKind, ConstData),
     PushIReg {
         dst: OffsetVar,
         kind: IntKind,
@@ -69,6 +74,17 @@ pub enum Air<'a> {
 
     /// Exit with code stored in [`Reg::A`].
     Exit,
+    /// The address of `fmt` should be loaded into [`Reg::A`]. The number of characters should be
+    /// loaded into [`Reg::B`].
+    Printf,
+}
+
+pub type Addr = i64;
+
+#[derive(Debug)]
+pub enum ConstData {
+    Int(i64),
+    Ptr(BssEntry),
 }
 
 /// Collection of [`Air`] instructions for a [`crate::ir::Func`].
@@ -196,15 +212,62 @@ pub enum Reg {
 pub struct OffsetVar {
     pub var: Var,
     pub offset: ByteOffset,
+    pub deref: bool,
 }
 
 impl OffsetVar {
-    pub fn new(var: Var, offset: ByteOffset) -> Self {
-        Self { var, offset }
+    pub fn new(var: Var, offset: impl Sized) -> Self {
+        Self {
+            var,
+            offset: offset.size(),
+            deref: false,
+        }
+    }
+
+    pub fn new_deref(var: Var, offset: impl Sized, deref: bool) -> Self {
+        Self {
+            var,
+            offset: offset.size(),
+            deref,
+        }
     }
 
     pub fn zero(var: Var) -> Self {
-        Self { var, offset: 0 }
+        Self::new(var, 0)
+    }
+
+    pub fn zero_deref(var: Var) -> Self {
+        Self::new_deref(var, 0, true)
+    }
+
+    pub fn add(&self, offset: impl Sized) -> Self {
+        Self {
+            var: self.var,
+            offset: self.offset + offset.size(),
+            deref: self.deref,
+        }
+    }
+}
+
+pub trait Sized {
+    fn size(&self) -> usize;
+}
+
+impl Sized for usize {
+    fn size(&self) -> usize {
+        *self
+    }
+}
+
+impl Sized for IntKind {
+    fn size(&self) -> usize {
+        self.size()
+    }
+}
+
+impl Sized for IntTy {
+    fn size(&self) -> usize {
+        self.kind().size()
     }
 }
 
@@ -226,6 +289,7 @@ pub enum IntKind {
 
 impl IntKind {
     pub const BOOL: Self = IntKind::U8;
+    pub const PTR: Self = IntKind::I64;
 
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -233,10 +297,20 @@ impl IntKind {
             Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
+
             Self::U8 => "u8",
             Self::U16 => "u16",
             Self::U32 => "u32",
             Self::U64 => "u64",
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        match self {
+            Self::I8 | Self::U8 => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 => 4,
+            Self::I64 | Self::U64 => 8,
         }
     }
 }
@@ -282,6 +356,8 @@ pub fn lower_func<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a
 pub fn lower_intrinsic<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     match ctx.expect_ident(func.sig.ident) {
         "exit" => exit(ctx, func),
+        "printf" => printf(ctx, func),
+        "read_cstr" => read_cstr(ctx, func),
         _ => unreachable!(),
     }
 }
@@ -294,9 +370,45 @@ pub fn exit<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     }
 
     let var = ctx.expect_var(ident.id);
-    ctx.ins_set(&[
+    ctx.ins_set([
         Air::MovIVar(Reg::A, OffsetVar::zero(var), IntKind::I32),
         Air::Exit,
+    ]);
+    ctx.finish()
+}
+
+pub fn printf<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
+    assert_eq!(func.sig.params.len(), 1);
+    ctx.start(func);
+    let Param { ident, ty, .. } = func.sig.params.iter().next().unwrap();
+    if ctx.get_var(ident.id).is_none() {
+        ctx.new_var_registered_no_salloc(ident.id, *ty);
+    }
+
+    let var = ctx.expect_var(ident.id);
+    ctx.ins_set([
+        Air::MovIVar(Reg::A, OffsetVar::new(var, IntKind::U64), IntKind::PTR),
+        Air::MovIVar(Reg::B, OffsetVar::zero(var), IntKind::U64),
+        Air::Printf,
+        Air::Ret,
+    ]);
+    ctx.finish()
+}
+
+pub fn read_cstr<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
+    assert_eq!(func.sig.params.len(), 1);
+    ctx.start(func);
+    let Param { ident, ty, .. } = func.sig.params.iter().next().unwrap();
+    if ctx.get_var(ident.id).is_none() {
+        ctx.new_var_registered_no_salloc(ident.id, *ty);
+    }
+
+    let var = ctx.expect_var(ident.id);
+    ctx.ins_set([
+        Air::MovIVar(Reg::A, OffsetVar::zero(var), IntKind::PTR),
+        Air::MovIConst(Reg::B, 2),
+        Air::Printf,
+        Air::Ret,
     ]);
     ctx.finish()
 }
@@ -314,7 +426,7 @@ fn air_block<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, block: &'a Block<'a>) {
     match block.end {
         Some(end) => {
             // TODO: ensure that this is always unit
-            eval_expr(ctx, end);
+            eval_expr(ctx, sig, end);
         }
         None => {}
     }
@@ -329,7 +441,7 @@ fn assign_air_block<'a>(
 ) {
     block_stmts(ctx, sig, block.stmts);
     if let Some(end) = &block.end {
-        assign_expr(ctx, dst, ty, end);
+        assign_expr(ctx, sig, dst, ty, end);
     } else {
         // TODO: need analysis of return statements
         //println!("{block:?}");
@@ -341,19 +453,19 @@ fn block_stmts<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, stmts: &'a [Stmt<'a>]
     for stmt in stmts.iter() {
         match stmt {
             Stmt::Semi(stmt) => match stmt {
-                SemiStmt::Let(let_) => air_let_stmt(ctx, let_),
-                SemiStmt::Assign(assign) => air_assign_stmt(ctx, assign),
+                SemiStmt::Let(let_) => air_let_stmt(ctx, sig, let_),
+                SemiStmt::Assign(assign) => air_assign_stmt(ctx, sig, assign),
                 SemiStmt::Ret(ret) => match &ret.expr {
                     Some(expr) => {
-                        air_return(ctx, sig.ty, &expr);
+                        air_return(ctx, sig, sig.ty, &expr);
                     }
                     None => ctx.ins(Air::Ret),
                 },
                 SemiStmt::Expr(expr) => {
-                    eval_expr(ctx, expr);
+                    eval_expr(ctx, sig, expr);
                 }
             },
-            Stmt::Open(_) => unreachable!(),
+            Stmt::Open(expr) => eval_expr(ctx, sig, expr),
         }
     }
 }
@@ -372,7 +484,7 @@ fn air_bin_semi_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
     match &expr {
         Expr::Bin(bin) => air_bin_semi(ctx, bin),
         Expr::Call(call @ Call { sig, .. }) => {
-            let args = generate_args(ctx, call);
+            let args = generate_args(ctx, sig, call);
             ctx.call(sig, args)
         }
         Expr::Lit(_) | Expr::Ident(_) => {}
@@ -380,24 +492,37 @@ fn air_bin_semi_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
     }
 }
 
-fn air_let_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Let) {
+fn air_let_stmt<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, stmt: &'a Let) {
     match stmt.lhs {
         LetTarget::Ident(ident) => {
             let ty = ctx.var_ty(ident.id);
             let dst = ctx.new_var_registered(ident.id, ty);
-            assign_expr(ctx, OffsetVar::zero(dst), ty, &stmt.rhs);
+            assign_expr(ctx, sig, OffsetVar::zero(dst), ty, &stmt.rhs);
         }
     }
 }
 
-fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Expr) {
+fn assign_expr<'a>(
+    ctx: &mut AirCtx<'a>,
+    sig: &'a Sig<'a>,
+    dst: OffsetVar,
+    ty: TyId,
+    expr: &'a Expr,
+) {
     match &expr {
         Expr::Bool(_, val) => {
             ctx.ins(Air::PushIConst(
                 dst,
                 IntKind::BOOL,
-                if *val { 1 } else { 0 },
+                ConstData::Int(if *val { 1 } else { 0 }),
             ));
+        }
+        Expr::Str(_, str) => {
+            let (entry, len) = ctx.str_lit(str);
+            ctx.ins_set([
+                Air::PushIConst(dst, IntKind::U64, ConstData::Int(len as i64)),
+                Air::PushIConst(dst.add(IntKind::U64), IntKind::I64, ConstData::Ptr(entry)),
+            ]);
         }
         Expr::Lit(lit) => {
             assign_lit(ctx, lit, dst, ty);
@@ -406,10 +531,10 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
             assign_bin_op(ctx, dst, ty, bin);
         }
         Expr::Struct(def) => {
-            define_struct(ctx, def, dst);
+            define_struct(ctx, sig, def, dst);
         }
         Expr::Call(call) => {
-            let args = generate_args(ctx, call);
+            let args = generate_args(ctx, sig, call);
             ctx.ins(Air::Call(&call.sig, args));
             match ctx.tys.ty(call.sig.ty) {
                 Ty::Int(ty) => {
@@ -419,9 +544,16 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                         src: Reg::A,
                     });
                 }
+                Ty::Ref(_) => {
+                    ctx.ins(Air::PushIReg {
+                        dst,
+                        kind: IntKind::PTR,
+                        src: Reg::A,
+                    });
+                }
                 Ty::Struct(s) => {
                     let bytes = ctx.tys.struct_layout(s).size;
-                    ctx.ins_set(&[
+                    ctx.ins_set([
                         Air::Addr(Reg::B, dst),
                         Air::MemCpy {
                             dst: Reg::B,
@@ -441,6 +573,9 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                         src: Reg::A,
                     });
                 }
+                Ty::Str => {
+                    panic!("cannot assign to str");
+                }
                 Ty::Unit => todo!(),
             }
         }
@@ -455,9 +590,16 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                         src: other,
                     });
                 }
+                Ty::Ref(_) => {
+                    ctx.ins(Air::PushIVar {
+                        dst,
+                        kind: IntKind::PTR,
+                        src: other,
+                    });
+                }
                 Ty::Struct(id) => {
                     let bytes = ctx.tys.struct_layout(id).size;
-                    ctx.ins_set(&[
+                    ctx.ins_set([
                         Air::Addr(Reg::B, dst),
                         Air::Addr(Reg::A, other),
                         Air::MemCpy {
@@ -474,24 +616,46 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                         src: other,
                     });
                 }
+                Ty::Str => {
+                    panic!("cannot assign to str");
+                }
                 Ty::Unit => todo!(),
             }
         }
         Expr::If(if_) => {
-            assign_if(ctx, dst, ty, if_);
+            assign_if(ctx, sig, dst, ty, if_);
         }
         Expr::Block(_) => todo!(),
         Expr::Enum(_) => {
             todo!()
         }
+        Expr::Ref(ref_) => match ref_.inner {
+            Expr::Ident(ident) => {
+                let var = ctx.expect_var(ident.id);
+                ctx.ins_set([
+                    Air::Addr(Reg::A, OffsetVar::zero(var)),
+                    Air::PushIReg {
+                        dst,
+                        kind: IntKind::PTR,
+                        src: Reg::A,
+                    },
+                ]);
+            }
+            _ => todo!(),
+        },
+        // this means that a loop is the last statement, and in order to leave we must return, so
+        // just ignore this for now
+        Expr::Loop(_) => {
+            eval_expr(ctx, sig, expr);
+        }
     }
 }
 
-fn assign_if<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, if_: &If<'a>) {
+fn assign_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, dst: OffsetVar, ty: TyId, if_: &If<'a>) {
     let bool_ = ctx.tys.bool();
     let condition = OffsetVar::zero(ctx.anon_var(bool_));
 
-    assign_expr(ctx, condition, bool_, if_.condition);
+    assign_expr(ctx, sig, condition, bool_, if_.condition);
     ctx.ins(Air::MovIVar(Reg::A, condition, IntKind::BOOL));
 
     match (if_.block, if_.otherwise) {
@@ -536,11 +700,11 @@ fn assign_if<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, if_: &If<'a>) {
     }
 }
 
-fn eval_if<'a>(ctx: &mut AirCtx<'a>, if_: &If<'a>) {
+fn eval_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, if_: &If<'a>) {
     let bool_ = ctx.tys.bool();
     let condition = OffsetVar::zero(ctx.anon_var(bool_));
 
-    assign_expr(ctx, condition, bool_, if_.condition);
+    assign_expr(ctx, sig, condition, bool_, if_.condition);
     ctx.ins(Air::MovIVar(Reg::A, condition, IntKind::BOOL));
 
     match (if_.block, if_.otherwise) {
@@ -585,31 +749,36 @@ fn eval_if<'a>(ctx: &mut AirCtx<'a>, if_: &If<'a>) {
     }
 }
 
-/// Evaluate an expression for its side effects and throw away the value. The type
-/// of the expression is possibly not known and should be chosen in such cases.
-fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
+fn eval_expr<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, expr: &'a Expr) {
     match &expr {
-        Expr::Lit(_) | Expr::Bool(_, _) | Expr::Ident(_) => {}
+        Expr::Str(_, _) | Expr::Lit(_) | Expr::Bool(_, _) | Expr::Ident(_) => {}
         Expr::Bin(bin) => {
-            eval_bin_op(ctx, bin);
+            eval_bin_op(ctx, sig, bin);
         }
         Expr::Struct(def) => {
             let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
-            define_struct(ctx, def, dst);
+            define_struct(ctx, sig, def, dst);
         }
         Expr::Call(call) => {
-            let args = generate_args(ctx, call);
+            let args = generate_args(ctx, sig, call);
             ctx.ins(Air::Call(&call.sig, args));
         }
         Expr::Enum(_) => {
             todo!()
         }
-        Expr::If(if_) => eval_if(ctx, if_),
+        Expr::If(if_) => eval_if(ctx, sig, if_),
         Expr::Block(_) => todo!(),
+        Expr::Loop(block) => {
+            let loop_ = ctx.new_block();
+            air_block(ctx, sig, block);
+            // TODO: break;
+            ctx.ins(Air::Jmp(loop_));
+        }
+        Expr::Ref(_) => todo!(),
     }
 }
 
-fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
+fn generate_args<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, call: &'a Call) -> Args {
     assert_eq!(call.args.len(), call.sig.params.len());
     if call.args.is_empty() {
         return Args::default();
@@ -634,7 +803,7 @@ fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
             )),
         };
 
-        assign_expr(ctx, the_fn_param, param.ty, expr);
+        assign_expr(ctx, sig, the_fn_param, param.ty, expr);
 
         //let bytes = ctx.tys.ty(param.ty).size(ctx);
         //ctx.ins_set(&[
@@ -653,7 +822,7 @@ fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
     args
 }
 
-fn define_struct<'a>(ctx: &mut AirCtx<'a>, def: &'a StructDef, dst: OffsetVar) {
+fn define_struct<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, def: &'a StructDef, dst: OffsetVar) {
     for field in def.fields.iter() {
         let strukt = ctx.tys.strukt(def.id);
         let field_offset = strukt.field_offset(ctx, field.name.id);
@@ -661,6 +830,7 @@ fn define_struct<'a>(ctx: &mut AirCtx<'a>, def: &'a StructDef, dst: OffsetVar) {
 
         assign_expr(
             ctx,
+            sig,
             OffsetVar::new(dst.var, dst.offset + field_offset as usize),
             ty,
             &field.expr,
@@ -668,7 +838,7 @@ fn define_struct<'a>(ctx: &mut AirCtx<'a>, def: &'a StructDef, dst: OffsetVar) {
     }
 }
 
-fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Assign) {
+fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, stmt: &'a Assign) {
     let (var, ty) = match &stmt.lhs {
         AssignTarget::Ident(ident) => (
             OffsetVar::zero(ctx.expect_var(ident.id)),
@@ -679,7 +849,7 @@ fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Assign) {
 
     match stmt.kind {
         AssignKind::Equals => {
-            assign_expr(ctx, var, ty, &stmt.rhs);
+            assign_expr(ctx, sig, var, ty, &stmt.rhs);
         }
         AssignKind::Add => {
             let tmp = OffsetVar::zero(ctx.anon_var(ty));
@@ -689,7 +859,7 @@ fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Assign) {
                 kind,
                 src: var,
             });
-            assign_expr(ctx, var, ty, &stmt.rhs);
+            assign_expr(ctx, sig, var, ty, &stmt.rhs);
             add!(ctx, kind, var, tmp, var);
         }
     }
@@ -700,20 +870,22 @@ fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
     match ctx.tys.ty(ty) {
         Ty::Int(int_ty) => match lit.kind {
             LitKind::Int(int) => {
-                ctx.ins(Air::PushIConst(var, int_ty.kind(), *int));
+                ctx.ins(Air::PushIConst(var, int_ty.kind(), ConstData::Int(*int)));
             }
             other => panic!("cannot assign int to `{other:?}`"),
         },
         Ty::Bool => panic!("invalid operation"),
         Ty::Unit => panic!("cannot assign lit to unit"),
+        Ty::Ref(_) => panic!("cannot assign lit to ref"),
+        Ty::Str => panic!("cannot assign lit to str"),
         Ty::Struct(_) => panic!("cannot assign lit to struct"),
     }
 }
 
 // TODO: return to optimized return stratedgy
-fn air_return<'a>(ctx: &mut AirCtx<'a>, ty: TyId, end: &'a Expr) {
+fn air_return<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, ty: TyId, end: &'a Expr) {
     let dst = OffsetVar::zero(ctx.anon_var(ty));
-    assign_expr(ctx, dst, ty, end);
+    assign_expr(ctx, sig, dst, ty, end);
     ctx.ret_var(dst, ty);
 
     //match end {

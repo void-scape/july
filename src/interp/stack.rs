@@ -8,6 +8,14 @@ pub struct Stack {
 }
 
 impl Stack {
+    pub fn len(&self) -> usize {
+        self.stack.len()
+    }
+
+    pub fn allocated(&self, var: Var) -> bool {
+        self.vars.contains_key(&var)
+    }
+
     pub fn alloc(&mut self, var: Var, bytes: usize) {
         let lhs = self.stack.len();
         let rhs = self.sp + bytes;
@@ -19,6 +27,9 @@ impl Stack {
 
         self.vars.insert(var, self.sp);
         self.sp += bytes;
+        // keep stack aligned
+        let remainder = 8 - (self.sp % 8);
+        self.sp += remainder;
     }
 
     pub fn sp_mut(&mut self) -> &mut usize {
@@ -29,14 +40,55 @@ impl Stack {
         self.sp
     }
 
-    #[track_caller]
+    /// Vars cannot overlap and their spacing is maintained by sp. Caller must uphold type safety.
+    pub unsafe fn var_ptr_mut(&mut self, var: OffsetVar) -> *mut u8 {
+        if var.deref {
+            self.read_int::<i64>(self.addr(var.var) + var.offset) as *const i64 as *mut u8
+        } else {
+            let offset = self.addr(var.var) + var.offset;
+            unsafe { self.stack.as_mut_ptr().cast::<u8>().add(offset) }
+        }
+    }
+
+    //pub unsafe fn copy_into(&mut self, var: OffsetVar, ptr: *const u8, bytes: usize) {
+    //    let offset = self.addr(var.var) + var.offset;
+    //    let dst = self.stack.as_mut_ptr().cast::<u8>().add(offset);
+    //    std::ptr::copy_nonoverlapping(ptr, dst, bytes);
+    //}
+
     pub fn read_some_int(&self, var: OffsetVar, kind: IntKind) -> i64 {
         let addr = self.addr(var.var) + var.offset;
         match kind {
-            IntKind::U8 => self.read_int::<u8>(addr),
+            IntKind::U8 => {
+                if var.deref {
+                    unsafe {
+                        *(self.read_int::<i64>(self.addr(var.var) + var.offset) as *const u8) as i64
+                    }
+                } else {
+                    self.read_int::<u8>(addr)
+                }
+            }
             IntKind::U16 => self.read_int::<u16>(addr),
-            IntKind::U32 => self.read_int::<u32>(addr),
-            IntKind::U64 => self.read_int::<u64>(addr),
+            IntKind::U32 => {
+                if var.deref {
+                    unsafe {
+                        *(self.read_int::<i64>(self.addr(var.var) + var.offset) as *const u32)
+                            as i64
+                    }
+                } else {
+                    self.read_int::<u32>(addr)
+                }
+            }
+            IntKind::U64 => {
+                if var.deref {
+                    unsafe {
+                        *(self.read_int::<i64>(self.addr(var.var) + var.offset) as *const u64)
+                            as i64
+                    }
+                } else {
+                    self.read_int::<u64>(addr)
+                }
+            }
 
             IntKind::I8 => self.read_int::<i8>(addr),
             IntKind::I16 => self.read_int::<i16>(addr),
@@ -82,11 +134,12 @@ impl Stack {
         *self.vars.get(&var).expect("invalid var")
     }
 
-    pub fn memcpy(&mut self, dst: usize, src: usize, bytes: usize) {
-        unsafe {
-            std::mem::transmute::<&mut [i64], &mut [u8]>(self.stack.as_mut_slice())
-                .copy_within(src..src + bytes, dst)
-        };
+    pub unsafe fn memcpy(&mut self, dst: usize, src: usize, bytes: usize) {
+        unsafe { std::ptr::copy_nonoverlapping(src as *mut u8, dst as *mut u8, bytes) };
+        //unsafe {
+        //    std::mem::transmute::<&mut [i64], &mut [u8]>(self.stack.as_mut_slice())
+        //        .copy_within(src..src + bytes, dst)
+        //};
     }
 
     fn read_int<I: Readable>(&self, addr: usize) -> i64 {

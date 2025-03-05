@@ -18,8 +18,12 @@ impl CompUnit {
         })
     }
 
-    pub fn compile<'a>(&'a self) {
-        fn compile<'a>(buf: &'a TokenBuffer<'a>, items: &'a [Item]) -> Result<(), Vec<Diag<'a>>> {
+    pub fn compile<'a>(&'a self, log: bool) {
+        fn compile<'a>(
+            buf: &'a TokenBuffer<'a>,
+            items: &'a [Item],
+            log: bool,
+        ) -> Result<(), Vec<Diag<'a>>> {
             let (ctx, key) = ir::lower(&buf, items).map_err(|_| Vec::new())?;
             let mut air_ctx = AirCtx::new(&ctx, &key);
             let air_funcs = ctx
@@ -27,7 +31,7 @@ impl CompUnit {
                 .iter()
                 .map(|func| air::lower_func(&mut air_ctx, func))
                 .collect::<Vec<_>>();
-            let exit = interp::run(&ctx, &air_funcs).unwrap();
+            let exit = interp::run(&ctx, &air_funcs, log).unwrap();
             println!("exit: {exit}");
 
             //io::write("out.o", &codegen::codegen(&ctx, &key, &air_funcs)).unwrap();
@@ -43,7 +47,7 @@ impl CompUnit {
                 return;
             }
             Ok(items) => {
-                if let Err(diags) = compile(&buf, &items) {
+                if let Err(diags) = compile(&buf, &items, log) {
                     for diag in diags.into_iter() {
                         diagnostic::report(diag);
                     }

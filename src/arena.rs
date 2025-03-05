@@ -26,6 +26,10 @@ impl BlobArena {
         }
     }
 
+    pub fn alloc_str<'a>(&self, str: &str) -> &'a str {
+        unsafe { std::mem::transmute(self.alloc_slice(str.as_bytes())) }
+    }
+
     #[track_caller]
     pub fn alloc_slice<'a, T>(&self, slice: &[T]) -> &'a mut [T] {
         assert!(!slice.is_empty());
@@ -39,6 +43,27 @@ impl BlobArena {
             mem.copy_from_nonoverlapping(slice.as_ptr(), slice.len());
             self.arena.ptr.set(self.arena.ptr.get().add(layout.size()));
             &mut *slice_from_raw_parts_mut(mem, slice.len())
+        }
+    }
+
+    pub fn alloc_str_ptr<'a>(&self, str: &str) -> *mut u8 {
+        self.alloc_slice_ptr(str.as_bytes())
+    }
+
+    #[track_caller]
+    pub fn alloc_slice_ptr<'a, T>(&self, slice: &[T]) -> *mut T {
+        assert!(!slice.is_empty());
+        assert!(std::mem::size_of::<T>() > 0);
+        assert!(!std::mem::needs_drop::<T>());
+        let layout = Layout::for_value::<[T]>(slice);
+        self.align_grow::<T>(layout);
+
+        let mem = self.arena.ptr.get() as *mut T;
+        unsafe {
+            mem.copy_from_nonoverlapping(slice.as_ptr(), slice.len());
+            self.arena.ptr.set(self.arena.ptr.get().add(layout.size()));
+            mem
+            //&mut *slice_from_raw_parts_mut(mem, slice.len())
         }
     }
 
@@ -171,7 +196,7 @@ impl<T> Chunk<T> {
         if std::mem::needs_drop::<T>() {
             unsafe {
                 let buf = self.buf.as_mut();
-                std::ptr::drop_in_place(MaybeUninit::slice_assume_init_mut(&mut buf[..elems]));
+                std::ptr::drop_in_place(&mut buf[..elems].assume_init_mut());
             }
         }
     }

@@ -201,10 +201,13 @@ impl InferCtx {
 
         if let Some((abs, _)) = abs {
             if let Some(span) = integral {
-                if !ctx.tys.ty(abs).is_int() {
-                    return Err(ctx
-                        .mismatch(self.var_span(var), "an integer", abs)
-                        .msg(Msg::note(span, "due to this binding")));
+                if !ctx.tys.ty(abs).is_int() && !ctx.tys.ty(abs).is_ref() {
+                    return Err(ctx.mismatch(self.var_span(var), "an integer", abs).msg(
+                        Msg::note(
+                            span,
+                            format!("because `{}` is used here", self.var_ident(ctx, var)),
+                        ),
+                    ));
                 }
             }
 
