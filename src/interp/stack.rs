@@ -1,4 +1,4 @@
-use crate::air::{IntKind, OffsetVar, Var};
+use crate::air::{Addr, IntKind, OffsetVar, Var};
 
 #[derive(Debug, Default)]
 pub struct Stack {
@@ -16,7 +16,7 @@ impl Stack {
         self.vars.contains_key(&var)
     }
 
-    pub fn alloc(&mut self, var: Var, bytes: usize) {
+    pub fn anon_alloc(&mut self, bytes: usize) -> Addr {
         let lhs = self.stack.len();
         let rhs = self.sp + bytes;
         if lhs <= rhs {
@@ -25,11 +25,17 @@ impl Stack {
             }
         }
 
-        self.vars.insert(var, self.sp);
+        let sp = self.sp;
         self.sp += bytes;
-        // keep stack aligned
+        // TODO: align less harsh
         let remainder = 8 - (self.sp % 8);
         self.sp += remainder;
+        unsafe { self.stack.as_ptr().cast::<u8>().add(sp).addr() as u64 }
+    }
+
+    pub fn alloc(&mut self, var: Var, bytes: usize) {
+        self.vars.insert(var, self.sp);
+        self.anon_alloc(bytes);
     }
 
     pub fn sp_mut(&mut self) -> &mut usize {

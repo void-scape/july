@@ -227,6 +227,8 @@ where
             Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
             Expr::Str(_, _) | Expr::Block(_) => todo!(),
             Expr::Loop(_) => todo!(),
+
+            Expr::Deref(_) => todo!(),
         }
     }
 }

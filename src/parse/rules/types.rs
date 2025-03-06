@@ -5,7 +5,7 @@ use crate::ir::ident::IdentId;
 use crate::ir::ty::store::TyId;
 use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
-use crate::parse::matc::{Any, CloseParen, Comma, Equals, OpenCurly, Semi};
+use crate::parse::matc::{Any, CloseCurly, CloseParen, Comma, Equals, OpenCurly, Semi};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -58,8 +58,11 @@ impl<'a> ParserRule<'a> for TypeRule {
         _: &mut Vec<crate::lex::buffer::TokenId>,
     ) -> super::RResult<'a, Self::Output> {
         let mut slice =
-            stream.slice(stream.find_offset::<Any<(Semi, Comma, CloseParen, OpenCurly, Equals)>>());
-        stream.eat_until::<Any<(Semi, Comma, CloseParen, OpenCurly, Equals)>>();
+            stream.slice(
+                stream
+                    .find_offset::<Any<(Semi, Comma, CloseParen, OpenCurly, CloseCurly, Equals)>>(),
+            );
+        stream.eat_until::<Any<(Semi, Comma, CloseParen, OpenCurly, CloseCurly, Equals)>>();
 
         match slice.remaining() {
             1 => Ok(PType::Simple(slice.expect())),

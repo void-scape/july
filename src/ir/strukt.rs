@@ -58,6 +58,12 @@ pub struct FieldMap {
     pub fields: HashMap<IdentId, (TyId, ByteOffset)>,
 }
 
+impl FieldMap {
+    pub fn field_ty(&self, field: IdentId) -> Option<TyId> {
+        self.fields.get(&field).map(|(ty, _)| *ty)
+    }
+}
+
 pub type ByteOffset = i32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

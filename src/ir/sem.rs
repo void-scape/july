@@ -49,8 +49,10 @@ impl<'a> SemCtx<'a> {
     pub fn sem_func(&mut self, f: impl Fn(&SemCtx<'a>, &Func) -> Result<(), Diag<'a>>) {
         let mut errs = Vec::new();
         for func in self.funcs.iter() {
-            if let Err(diag) = f(self, func) {
-                errs.push(diag);
+            if !func.is_intrinsic() {
+                if let Err(diag) = f(self, func) {
+                    errs.push(diag);
+                }
             }
         }
         self.diags.extend(errs);

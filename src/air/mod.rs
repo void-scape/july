@@ -75,9 +75,11 @@ pub enum Air<'a> {
     /// The address of `fmt` should be loaded into [`Reg::A`]. The number of characters should be
     /// loaded into [`Reg::B`].
     Printf,
+    /// The address of `fmt` should be loaded into [`Reg::A`].
+    PrintCStr,
 }
 
-pub type Addr = i64;
+pub type Addr = u64;
 
 #[derive(Debug)]
 pub enum ConstData {
@@ -288,6 +290,7 @@ pub enum IntKind {
 impl IntKind {
     pub const BOOL: Self = IntKind::U8;
     pub const PTR: Self = IntKind::I64;
+    pub const USIZE: Self = IntKind::U64;
 
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -355,8 +358,9 @@ pub fn lower_intrinsic<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFu
     match ctx.expect_ident(func.sig.ident) {
         "exit" => exit(ctx, func),
         "printf" => printf(ctx, func),
-        "read_cstr" => read_cstr(ctx, func),
-        _ => unreachable!(),
+        "c_str" => c_str(ctx, func),
+        "print_c_str" => print_c_str(ctx, func),
+        i => unimplemented!("intrinsic: {i}"),
     }
 }
 
@@ -375,6 +379,37 @@ pub fn exit<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.finish()
 }
 
+pub fn c_str<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
+    ctx.start(func);
+    let Param { ident, ty, .. } = func.sig.params.iter().next().unwrap();
+    if ctx.get_var(ident.id).is_none() {
+        ctx.new_var_registered_no_salloc(ident.id, *ty);
+    }
+
+    let var = ctx.expect_var(ident.id);
+    ctx.ins_set([
+        Air::Addr(Reg::A, OffsetVar::new(var, IntKind::USIZE)),
+        Air::Ret,
+    ]);
+    ctx.finish()
+}
+
+pub fn print_c_str<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
+    ctx.start(func);
+    let Param { ident, ty, .. } = func.sig.params.iter().next().unwrap();
+    if ctx.get_var(ident.id).is_none() {
+        ctx.new_var_registered_no_salloc(ident.id, *ty);
+    }
+
+    let var = ctx.expect_var(ident.id);
+    ctx.ins_set([
+        Air::MovIVar(Reg::A, OffsetVar::zero(var), IntKind::PTR),
+        Air::PrintCStr,
+        Air::Ret,
+    ]);
+    ctx.finish()
+}
+
 pub fn printf<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     assert_eq!(func.sig.params.len(), 1);
     ctx.start(func);
@@ -387,24 +422,6 @@ pub fn printf<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.ins_set([
         Air::MovIVar(Reg::A, OffsetVar::new(var, IntKind::U64), IntKind::PTR),
         Air::MovIVar(Reg::B, OffsetVar::zero(var), IntKind::U64),
-        Air::Printf,
-        Air::Ret,
-    ]);
-    ctx.finish()
-}
-
-pub fn read_cstr<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
-    assert_eq!(func.sig.params.len(), 1);
-    ctx.start(func);
-    let Param { ident, ty, .. } = func.sig.params.iter().next().unwrap();
-    if ctx.get_var(ident.id).is_none() {
-        ctx.new_var_registered_no_salloc(ident.id, *ty);
-    }
-
-    let var = ctx.expect_var(ident.id);
-    ctx.ins_set([
-        Air::MovIVar(Reg::A, OffsetVar::zero(var), IntKind::PTR),
-        Air::MovIConst(Reg::B, 2),
         Air::Printf,
         Air::Ret,
     ]);
@@ -589,21 +606,45 @@ fn assign_expr<'a>(
         Expr::If(if_) => {
             assign_if(ctx, sig, dst, ty, if_);
         }
-        Expr::Ref(ref_) => match ref_.inner {
-            Expr::Ident(ident) => {
-                assert!(ctx.tys.ty(ty).is_ref());
-                let var = ctx.expect_var(ident.id);
-                ctx.ins_set([
-                    Air::Addr(Reg::A, OffsetVar::zero(var)),
-                    Air::PushIReg {
-                        dst,
-                        kind: IntKind::PTR,
-                        src: Reg::A,
-                    },
-                ]);
+        Expr::Ref(ref_) => {
+            assert!(ctx.tys.ty(ty).is_ref());
+            match ref_.inner {
+                Expr::Ident(ident) => {
+                    let var = ctx.expect_var(ident.id);
+                    ctx.ins_set([
+                        Air::Addr(Reg::A, OffsetVar::zero(var)),
+                        Air::PushIReg {
+                            dst,
+                            kind: IntKind::PTR,
+                            src: Reg::A,
+                        },
+                    ]);
+                }
+                Expr::Lit(lit) => match lit.kind {
+                    LitKind::Int(int) => {
+                        let Some(Ok(inner_ty)) = ctx.tys.ty(ty).ref_inner_ty(ctx) else {
+                            unreachable!()
+                        };
+
+                        let var = OffsetVar::zero(ctx.anon_var(inner_ty));
+                        ctx.ins_set([
+                            Air::PushIConst(
+                                var,
+                                ctx.tys.ty(inner_ty).expect_int().kind(),
+                                ConstData::Int(*int),
+                            ),
+                            Air::Addr(Reg::A, var),
+                            Air::PushIReg {
+                                dst,
+                                kind: IntKind::PTR,
+                                src: Reg::A,
+                            },
+                        ])
+                    }
+                },
+                _ => todo!(),
             }
-            _ => todo!(),
-        },
+        }
         Expr::Loop(_) => {
             // this means that a loop is the last statement, and in order to leave we must return, so
             // just ignore this for now
@@ -611,6 +652,8 @@ fn assign_expr<'a>(
             eval_expr(ctx, sig, expr);
         }
         Expr::Enum(_) | Expr::Block(_) => todo!(),
+
+        Expr::Deref(_) => todo!(),
     }
 }
 
@@ -684,6 +727,7 @@ fn assign_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, dst: OffsetVar, ty: TyI
 
             let exit = ctx.new_block();
             ctx.ins_in_block(then, Air::Jmp(exit));
+            ctx.ins_in_block(otherwise, Air::Jmp(exit));
         }
         (Expr::Block(then), None) => {
             let enter_block = ctx.active_block();
@@ -691,6 +735,7 @@ fn assign_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, dst: OffsetVar, ty: TyI
                 assign_air_block(ctx, ctx.active_sig(), dst, ty, then);
             });
             let otherwise = ctx.new_block();
+            ctx.ins_in_block(then, Air::Jmp(otherwise));
 
             ctx.ins_in_block(
                 enter_block,
@@ -733,6 +778,7 @@ fn eval_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, if_: &If<'a>) {
 
             let exit = ctx.new_block();
             ctx.ins_in_block(then, Air::Jmp(exit));
+            ctx.ins_in_block(otherwise, Air::Jmp(exit));
         }
         (Expr::Block(then), None) => {
             let enter_block = ctx.active_block();
@@ -749,6 +795,7 @@ fn eval_if<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, if_: &If<'a>) {
                     otherwise,
                 },
             );
+            ctx.ins_in_block(then, Air::Jmp(otherwise));
         }
         _ => unimplemented!(),
     }
@@ -780,6 +827,8 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, expr: &'a Expr) {
             ctx.ins(Air::Jmp(loop_));
         }
         Expr::Ref(_) => todo!(),
+
+        Expr::Deref(_) => todo!(),
     }
 }
 
@@ -863,11 +912,14 @@ fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
             LitKind::Int(int) => {
                 ctx.ins(Air::PushIConst(var, int_ty.kind(), ConstData::Int(*int)));
             }
-            other => panic!("cannot assign int to `{other:?}`"),
+        },
+        Ty::Ref(_) => match lit.kind {
+            LitKind::Int(int) => {
+                ctx.ins(Air::PushIConst(var, IntKind::PTR, ConstData::Int(*int)));
+            }
         },
         Ty::Bool => panic!("invalid operation"),
         Ty::Unit => panic!("cannot assign lit to unit"),
-        Ty::Ref(_) => panic!("cannot assign lit to ref"),
         Ty::Str => panic!("cannot assign lit to str"),
         Ty::Struct(_) => panic!("cannot assign lit to struct"),
     }

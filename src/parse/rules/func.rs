@@ -1,3 +1,5 @@
+use anstream::println;
+
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
 use crate::diagnostic::{Diag, Msg};

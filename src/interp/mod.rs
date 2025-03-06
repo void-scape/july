@@ -7,7 +7,7 @@ use libffi::low::CodePtr;
 use libffi::middle::{Arg, Cif, Type};
 use stack::*;
 use std::collections::{HashMap, HashSet};
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 
 mod stack;
 
@@ -134,7 +134,7 @@ fn entry(
             Air::Ret => match call_stack.stack.last() {
                 Some((LR { func, instr }, stack_frame_size, block)) => {
                     current_func = func;
-                    instrs = func.start().iter();
+                    instrs = func.block(*block).iter();
                     for _ in 0..*instr {
                         instrs.next();
                     }
@@ -184,13 +184,13 @@ fn entry(
 
                         let mut params = Vec::with_capacity(sig.params.len());
                         for param in sig.params.iter() {
-                            params.push(ctx.tys.ty(param.ty).libffi_type())
+                            params.push(ctx.tys.ty(param.ty).libffi_type(ctx))
                         }
 
                         let ty = if sig.ty == ctx.tys.unit() {
                             Type::void()
                         } else {
-                            ctx.tys.ty(sig.ty).libffi_type()
+                            ctx.tys.ty(sig.ty).libffi_type(ctx)
                         };
                         let cif = Cif::new(params.into_iter(), ty);
 
@@ -283,6 +283,12 @@ fn entry(
                                         }
                                         Ty::Ref(Ty::Str) => todo!(),
                                         Ty::Ref(_) => rega.w(result as i64),
+                                        Ty::Struct(id) => {
+                                            let bytes = ctx.tys.struct_layout(id).size;
+                                            let addr = stack.anon_alloc(bytes);
+                                            stack.memcpy(addr as usize, result as usize, bytes);
+                                            rega.w(addr as i64);
+                                        }
                                         _ => todo!(),
                                     }
                                 }
@@ -304,14 +310,19 @@ fn entry(
                 } {
                     current_block = Some(*then);
                     instrs = current_func.block(*then).iter();
+                    instr_num = 0;
                 } else {
                     current_block = Some(*otherwise);
                     instrs = current_func.block(*otherwise).iter();
+                    instr_num = 0;
                 }
+                continue;
             }
             Air::Jmp(block) => {
                 current_block = Some(*block);
                 instrs = current_func.block(*block).iter();
+                instr_num = 0;
+                continue;
             }
 
             Air::SAlloc(var, bytes) => {
@@ -401,6 +412,9 @@ fn entry(
             Air::Printf => unsafe {
                 libc::write(0, rega.r() as *const c_void, regb.r() as usize);
             },
+            Air::PrintCStr => unsafe {
+                libc::printf(rega.r() as *const c_char);
+            },
         }
 
         instr_num += 1;
@@ -452,6 +466,9 @@ fn log_instr(
         Air::Printf => {
             println!(" | printf `{}` characters from `{:#x}`", regb.r(), rega.r());
         }
+        Air::PrintCStr => {
+            println!(" | print_c_str @ `{}`", rega.r());
+        }
         Air::IfElse {
             condition,
             then,
@@ -495,7 +512,7 @@ fn log_instr(
         }
         Air::MovIVar(reg, var, kind) => {
             let int = stack.read_some_int(*var, *kind);
-            println!(" | {reg:?} <- {int}{}", kind.as_str());
+            println!(" | {reg:?} <- {int:#x}{}", kind.as_str());
         }
         Air::Ret => {
             match call_stack.stack.last() {
@@ -543,7 +560,7 @@ fn log_instr(
 }
 
 impl Ty<'_> {
-    pub fn libffi_type(&self) -> Type {
+    pub fn libffi_type(&self, ctx: &Ctx) -> Type {
         match self {
             Ty::Int(ty) => match ty.kind() {
                 IntKind::I8 => Type::i8(),
@@ -559,6 +576,13 @@ impl Ty<'_> {
             Ty::Bool => Type::u8(),
             Ty::Ref(Ty::Str) => Type::structure([Type::u64(), Type::pointer()]),
             Ty::Ref(_) => Type::pointer(),
+            Ty::Struct(id) => Type::structure(
+                ctx.tys
+                    .strukt(*id)
+                    .fields
+                    .iter()
+                    .map(|f| ctx.tys.ty(f.ty).libffi_type(ctx)),
+            ),
             ty => todo!("{ty:?}"),
         }
     }

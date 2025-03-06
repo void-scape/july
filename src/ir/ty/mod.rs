@@ -19,7 +19,7 @@ pub enum Ty<'a> {
     Unit,
 }
 
-impl Ty<'_> {
+impl<'a> Ty<'a> {
     pub const PTR_SIZE: usize = 8;
     pub const FAT_PTR_SIZE: usize = 16;
 
@@ -81,6 +81,13 @@ impl Ty<'_> {
                 (ty, level + 1)
             }
             inner => (inner, 0),
+        }
+    }
+
+    pub fn ref_inner_ty(&self, ctx: &Ctx<'a>) -> Option<Result<TyId, ()>> {
+        match self {
+            Self::Ref(inner) => Some(ctx.tys.get_ty_id(inner).ok_or(())),
+            _ => None,
         }
     }
 }

@@ -109,7 +109,7 @@ macro_rules! impl_match_token {
     };
 }
 
-variadics_please::all_tuples!(impl_match_token, 1, 5, T);
+variadics_please::all_tuples!(impl_match_token, 1, 10, T);
 
 pub trait DelimPair {
     fn matches_open(kind: Option<TokenKind>) -> bool;

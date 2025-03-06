@@ -181,6 +181,7 @@ pub enum Term {
         args: Vec<Expr>,
     },
     Ref(TokenId, Box<Term>),
+    Deref(TokenId, Box<Term>),
 }
 
 impl Term {
@@ -192,6 +193,8 @@ impl Term {
             Self::Bool(bool) => Expr::Bool(bool),
             Self::Call { span, func, args } => Expr::Call { span, func, args },
             Self::Ref(token, term) => Expr::TakeRef(token, Box::new(term.clone().into_expr())),
+            _ => todo!()
+            //Self::Deref(token, term) => Expr::Deref(token, Box::new(term.clone().into_expr())),
         }
     }
 }

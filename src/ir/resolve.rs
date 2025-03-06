@@ -131,7 +131,7 @@ fn constrain_block_to<'a>(
 fn constrain_semi_stmt<'a>(
     ctx: &mut Ctx<'a>,
     infer: &mut InferCtx,
-    stmt: &SemiStmt<'a>,
+    stmt: &'a SemiStmt<'a>,
     sig: &Sig<'a>,
 ) -> Result<(), Diag<'a>> {
     match stmt {
@@ -145,6 +145,7 @@ fn constrain_semi_stmt<'a>(
                     match &let_.rhs {
                         Expr::Struct(def) => {
                             infer.eq(var, ctx.tys.struct_ty_id(def.id), def.span);
+                            constrain_struct_def(ctx, infer, sig, def)?;
                         }
                         Expr::Call(call @ Call { sig, span, .. }) => {
                             infer.eq(var, sig.ty, *span);
@@ -168,7 +169,6 @@ fn constrain_semi_stmt<'a>(
                             LitKind::Int(_) => {
                                 infer.integral(var, lit.span);
                             }
-                            _ => todo!(),
                         },
                         Expr::Bool(span, _) => {
                             infer.eq(var, ctx.tys.bool(), *span);
@@ -181,6 +181,8 @@ fn constrain_semi_stmt<'a>(
                         Expr::If(_) => todo!(),
                         Expr::Block(_) => todo!(),
                         Expr::Loop(_) => todo!(),
+
+                        Expr::Deref(_) => todo!(),
                     }
                 }
             }
@@ -365,7 +367,7 @@ fn constrain_expr<'a>(
     ctx: &mut Ctx<'a>,
     infer: &mut InferCtx,
     sig: &Sig<'a>,
-    expr: &Expr<'a>,
+    expr: &'a Expr<'a>,
     var: TyVar,
 ) -> Result<(), Diag<'a>> {
     match &expr {
@@ -374,6 +376,7 @@ fn constrain_expr<'a>(
         }
         Expr::Struct(def) => {
             infer.eq(var, ctx.tys.struct_ty_id(def.id), def.span);
+            constrain_struct_def(ctx, infer, sig, def)?;
         }
         Expr::Call(call @ Call { sig, span, .. }) => {
             infer.eq(var, sig.ty, *span);
@@ -393,7 +396,6 @@ fn constrain_expr<'a>(
             LitKind::Int(_) => {
                 infer.integral(var, lit.span);
             }
-            _ => todo!(),
         },
         Expr::Bool(span, _) => {
             infer.eq(var, ctx.tys.bool(), *span);
@@ -413,6 +415,30 @@ fn constrain_expr<'a>(
         }
         Expr::Enum(_) => todo!(),
         Expr::Loop(_) => todo!(),
+
+        Expr::Deref(_) => todo!(),
+    }
+
+    Ok(())
+}
+
+fn constrain_struct_def<'a>(
+    ctx: &mut Ctx<'a>,
+    infer: &mut InferCtx,
+    sig: &Sig<'a>,
+    def: &'a StructDef<'a>,
+) -> Result<(), Diag<'a>> {
+    for field_def in def.fields.iter() {
+        let field_map = ctx.tys.fields(def.id);
+        let field_ty = field_map.field_ty(field_def.name.id).unwrap();
+        constrain_expr_to(
+            ctx,
+            infer,
+            &field_def.expr,
+            sig,
+            field_ty,
+            field_def.name.span,
+        )?;
     }
 
     Ok(())
@@ -451,6 +477,8 @@ fn constrain_expr_no_var<'a>(
         Expr::Ref(_) => todo!(),
         Expr::Block(_) => todo!(),
         Expr::Loop(block) => constrain_loop_block(ctx, infer, block, sig)?,
+
+        Expr::Deref(_) => todo!(),
     }
 
     Ok(())
@@ -512,7 +540,6 @@ fn constrain_expr_to<'a>(
                     return Err(ctx.mismatch(lit.span, ty, "an integer"));
                 }
             }
-            _ => todo!(),
         },
         Expr::Bool(span, _) => {
             if ty != ctx.tys.bool() {
@@ -521,7 +548,7 @@ fn constrain_expr_to<'a>(
         }
         Expr::Str(span, _) => {
             if ty != ctx.tys.str_lit() {
-                return Err(ctx.mismatch(*span, ty, "str"));
+                return Err(ctx.mismatch(*span, ty, "&str"));
             }
         }
         Expr::If(if_) => {
@@ -541,6 +568,8 @@ fn constrain_expr_to<'a>(
             //        .msg(Msg::error_span(source)));
             //}
         }
+
+        Expr::Deref(_) => todo!(),
     }
 
     Ok(())
@@ -664,6 +693,7 @@ fn find_ty_var_in_expr<'a>(
         Expr::If(_) => todo!(),
         Expr::Block(_) => todo!(),
         Expr::Loop(_) => todo!(),
+        Expr::Deref(_) => todo!(),
     }
 }
 
@@ -702,6 +732,7 @@ fn find_ty_in_expr<'a>(
         Expr::If(_) => todo!(),
         Expr::Block(_) => todo!(),
         Expr::Loop(_) => todo!(),
+        Expr::Deref(_) => todo!(),
     }
 }
 

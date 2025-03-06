@@ -11,7 +11,7 @@ pub struct Bss {
 impl Bss {
     pub fn str_lit(&mut self, str: &str) -> (BssEntry, usize) {
         let raw = String::from_utf8(str.as_bytes().to_vec()).unwrap();
-        let fmt = raw.replace("\\n", "\n");
+        let fmt = raw.replace("\\n", "\n").replace("\\0", "\0");
         let data = self.data.alloc_str_ptr(&fmt);
         let len = fmt.len();
         (BssEntry::str_lit(data), len)

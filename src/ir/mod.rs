@@ -11,7 +11,6 @@ use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::lex::kind::TokenKind;
 use crate::parse::rules::prelude::{self as rules, Attr, PBinOpKind};
 use crate::parse::Item;
-use anstream::println;
 use enom::{Enum, EnumDef, Variant};
 use ident::IdentId;
 use resolve::resolve_types;
@@ -322,6 +321,10 @@ impl Func<'_> {
         self.sig.hash()
     }
 
+    pub fn is_intrinsic(&self) -> bool {
+        self.has_attr(Attr::Intrinsic)
+    }
+
     pub fn has_attr(&self, attr: Attr) -> bool {
         self.attrs.iter().any(|a| *a == attr)
     }
@@ -589,6 +592,7 @@ pub enum Expr<'a> {
     If(If<'a>),
     Loop(Block<'a>),
     Ref(TakeRef<'a>),
+    Deref(Deref<'a>),
 }
 
 impl Expr<'_> {
@@ -607,15 +611,19 @@ impl Expr<'_> {
             Self::Str(span, _) => *span,
             Self::Ref(ref_) => ref_.span,
             Self::Access(access) => access.span,
+            Self::Deref(deref) => deref.span,
         }
     }
 
     pub fn is_unit(&self, ctx: &Ctx) -> Option<bool> {
         match self {
             Self::Ident(_) => None,
-            Self::Str(_, _) | Self::Struct(_) | Self::Enum(_) | Self::Lit(_) | Self::Bool(_, _) => {
-                Some(false)
-            }
+            Self::Deref(_)
+            | Self::Str(_, _)
+            | Self::Struct(_)
+            | Self::Enum(_)
+            | Self::Lit(_)
+            | Self::Bool(_, _) => Some(false),
             Self::Call(call) => Some(ctx.tys.is_unit(call.sig.ty)),
             Self::If(if_) => {
                 let block = if_.block.is_unit(ctx);
@@ -638,7 +646,7 @@ impl Expr<'_> {
 
     pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
         match self {
-            Self::Access(_) | Self::Ident(_) => None,
+            Self::Deref(_) | Self::Access(_) | Self::Ident(_) => None,
             Self::Lit(lit) => Some(lit.kind.is_int()),
             Self::Call(call) => Some(ctx.tys.ty(call.sig.ty).is_int()),
             Self::Bin(bin) => bin.is_integral(ctx),
@@ -655,6 +663,12 @@ impl Expr<'_> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TakeRef<'a> {
+    pub span: Span,
+    pub inner: &'a Expr<'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Deref<'a> {
     pub span: Span,
     pub inner: &'a Expr<'a>,
 }
@@ -847,6 +861,7 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>
         rules::Expr::Str(str) => Expr::Str(ctx.span(*str), ctx.intern_str(ctx.as_str(*str))),
         rules::Expr::TakeRef(ampersand, inner) => Expr::Ref(take_ref(ctx, *ampersand, inner)?),
         rules::Expr::Loop(blck) => Expr::Loop(block(ctx, blck)?),
+        //rules::Expr::Deref(asterisk, inner) => Expr::Deref(deref(ctx, *asterisk, inner)?),
         _ => todo!(),
     })
 }
@@ -860,6 +875,19 @@ fn take_ref<'a>(
     let inner = ctx.intern(expr);
     Ok(TakeRef {
         span: Span::from_spans(ctx.span(ampersand), inner.span()),
+        inner,
+    })
+}
+
+fn deref<'a>(
+    ctx: &mut Ctx<'a>,
+    asterisk: TokenId,
+    inner: &rules::Expr,
+) -> Result<Deref<'a>, Diag<'a>> {
+    let expr = pexpr(ctx, inner)?;
+    let inner = ctx.intern(expr);
+    Ok(Deref {
+        span: Span::from_spans(ctx.span(asterisk), inner.span()),
         inner,
     })
 }

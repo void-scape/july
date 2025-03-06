@@ -182,19 +182,29 @@ simple_if_then: (condition: bool, x: i32) -> i32 {
     }
 }
 
-// ------------ FFI -------
+// ------------ FFI ------------
 
-#[link("SDL3")]
+#[link("demo/SDL3")]
 extern("C") {
     SDL_Init: (init_code: u32) -> bool;
-    SDL_CreateWindow: (title: u64, width: i32, height: i32, flags: u64) -> &Window;
+    SDL_CreateWindow: (title: CStr, width: i32, height: i32, flags: u64) -> &Window;
 
-    SDL_CreateRenderer: (window: &Window, name: u64) -> &Renderer;
+    SDL_CreateRenderer: (window: &Window, name: CStr) -> &Renderer;
     SDL_RenderClear: (renderer: &Renderer) -> bool;
     SDL_RenderPresent: (renderer: &Renderer) -> bool;
 
+    SDL_LoadBMP: (file: CStr) -> &Surface;
+    SDL_DestroySurface: (surface: &Surface);
+    SDL_CreateTextureFromSurface: (renderer: &Renderer, surface: &Surface) -> &Texture;
+    SDL_RenderTexture: (renderer: &Renderer, texture: &Texture, srcrect: &FRect, dstrect: &FRect) -> bool;
+
     SDL_PollEvent: (event: &Event) -> bool;
     SDL_Delay: (ms: u32);
+    SDL_GetError: () -> &u8;
+}
+
+CStr: struct {
+    str: &u8
 }
 
 // ------------ Demo ------------
@@ -215,20 +225,40 @@ Event: struct {
     d3: u64,
     d4: u64,
 
-    d5: u64,
-    d6: u64,
-    d7: u64,
-    d8: u64,
+    b0: DummyBlock,
+    b1: DummyBlock,
+}
 
-    d9: u64,
-    d10: u64,
-    d11: u64,
-    d12: u64,
+DummyBlock: struct {
+    d0: u64,
+    d1: u64,
+    d2: u64,
+    d3: u64,
+}
 
-    d13: u64,
-    d14: u64,
-    d15: u64,
-    d16: u64,
+Surface: struct {
+    flags: u32,
+    format: i32,
+    width: i32,
+    height: i32,
+    pitch: i32,
+    pixels: &u32,
+
+    // .. incomplete!
+}
+
+Texture: struct {
+    format: i32,
+    width: i32,
+    height: i32,
+
+    // .. incomplete!
+}
+
+FRect: struct {
+    dummy: u32
+
+    // .. incomplete!
 }
 
 // SDL_QUIT     : const u32 = 0x100;
@@ -236,17 +266,29 @@ Event: struct {
 
 game_loop: () -> i32 {
     assert(SDL_Init(69));
-    let window = SDL_CreateWindow(0, 640, 380, 0);
+    let window = SDL_CreateWindow(c_str("July Demo\0"), 640, 380, 0);
     if window == 0 {
-        printf("failed to create window\n");
+        report_error("failed to create window\n");
         return 1;
     }
 
-    let renderer = SDL_CreateRenderer(window, 0);
+    let renderer = SDL_CreateRenderer(window, empty_c_str());
     if renderer == 0 {
-        printf("failed to create renderer\n");
+        report_error("failed to create renderer\n");
         return 1;
     }
+
+    let bmp = SDL_LoadBMP(c_str("./demo/bebop.bmp\0"));
+    if bmp == 0 {
+        report_error("failed to create bebop\n");
+        return 1;
+    }
+    let texture = SDL_CreateTextureFromSurface(renderer, bmp);
+    if texture == 0 {
+        report_error("failed to create bebop texture\n");
+        return 1;
+    }
+    SDL_DestroySurface(bmp);
 
     let event = Event { event_type: 0x100 };
     loop {
@@ -260,10 +302,17 @@ game_loop: () -> i32 {
             }
         }
 
-        if SDL_RenderClear(renderer)   {} else { return 1; }
-        if SDL_RenderPresent(renderer) {} else { return 1; }
+        if SDL_RenderClear(renderer)                  {} else { return 1; }
+        if SDL_RenderTexture(renderer, texture, 0, 0) {} else { return 1; }
+        if SDL_RenderPresent(renderer)                {} else { return 1; }
         SDL_Delay(16);
     }
+}
+
+report_error: (msg: &str) {
+    printf(msg);
+    // TODO: struct return doesn't seem to work
+    print_c_str(SDL_GetError());
 }
 
 main: () -> i32 {
@@ -275,7 +324,19 @@ main: () -> i32 {
 exit: (code: i32) {}
 
 #[intrinsic]
+print_c_str: (str: &u8) {}
+
+#[intrinsic]
 printf: (fmt: &str) {}
+
+#[intrinsic]
+c_str: (str: &str) -> CStr {}
+
+empty_c_str: () -> CStr {
+    CStr {
+        str: 0
+    }
+}
 
 assert: (condition: bool) {
     if condition == false {
@@ -298,3 +359,4 @@ tests: () {
     assert(simple_if_then(true, 4) == 2);
     assert(24 == 24);
 }
+
