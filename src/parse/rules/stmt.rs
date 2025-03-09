@@ -127,8 +127,8 @@ impl<'a> ParserRule<'a> for LoopRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        let (_loop, block) =
+        let (loop_, block) =
             <(Next<Loop>, BlockRules) as ParserRule>::parse(buffer, stream, stack)?;
-        Ok(Expr::Loop(block))
+        Ok(Expr::Loop(loop_, block))
     }
 }

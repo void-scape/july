@@ -1,8 +1,10 @@
-use crate::air::{Air, AirFunc, BlockId, ConstData, IntKind, Reg};
+use crate::air::{Air, AirFunc, Bits, BlockId, ConstData, IntKind, OffsetVar, Reg};
 use crate::ir::ctx::Ctx;
 use crate::ir::sig::{Linkage, Sig};
-use crate::ir::ty::Ty;
+use crate::ir::ty::store::TyId;
+use crate::ir::ty::{FloatTy, Ty, Width};
 use anstream::println;
+use core::str;
 use libffi::low::CodePtr;
 use libffi::middle::{Arg, Cif, Type};
 use stack::*;
@@ -19,7 +21,12 @@ pub enum InterpErr {
     DryStream,
 }
 
-pub fn run<'a>(ctx: &'a Ctx<'a>, air_funcs: &[AirFunc], log: bool) -> Result<i32, InterpErr> {
+pub fn run<'a>(
+    ctx: &'a Ctx<'a>,
+    air_funcs: &[AirFunc],
+    consts: &[Air<'a>],
+    log: bool,
+) -> Result<i32, InterpErr> {
     let libs = load_libraries(ctx.sigs.values().copied());
 
     let main = air_funcs
@@ -27,7 +34,8 @@ pub fn run<'a>(ctx: &'a Ctx<'a>, air_funcs: &[AirFunc], log: bool) -> Result<i32
         .find(|f| ctx.expect_ident(f.func.sig.ident) == "main")
         .ok_or_else(|| InterpErr::NoEntry)?;
     let mut stack = Stack::default();
-    let result = entry(ctx, main, air_funcs, &mut stack, libs, log);
+    eval_consts(consts, &mut stack)?;
+    let result = entry(ctx, main, air_funcs, &mut stack, &libs, log);
     println!("stack_len: {:?}", stack.len());
     result
 }
@@ -74,14 +82,14 @@ pub struct LR<'a> {
 }
 
 #[derive(Default)]
-pub struct Rega(i64);
+pub struct Rega(u64);
 
 impl Rega {
-    pub fn w(&mut self, val: i64) {
+    pub fn w(&mut self, val: u64) {
         self.0 = val;
     }
 
-    pub fn r(&self) -> i64 {
+    pub fn r(&self) -> u64 {
         self.0
     }
 }
@@ -91,7 +99,7 @@ fn entry(
     main: &AirFunc,
     air_funcs: &[AirFunc],
     stack: &mut Stack,
-    libs: HashMap<&str, libloading::Library>,
+    libs: &HashMap<&str, libloading::Library>,
     log: bool,
 ) -> Result<i32, InterpErr> {
     let mut current_func = main;
@@ -173,6 +181,91 @@ fn entry(
                         current_func = func;
                         instrs = func.start().iter();
                         current_block = Some(func.start_block());
+
+                        //&*stack.var_ptr_mut(args.vars.first().unwrap().1),
+                        if ctx.expect_ident(sig.ident) == "printf" {
+                            let (ty, fmt) = args.vars.first().unwrap();
+                            assert_eq!(*ty, TyId::STR_LIT);
+                            let fmt = OffsetVar::zero(*fmt);
+                            let len = stack.read_var::<u64>(fmt);
+                            let addr = stack.read_var::<u64>(fmt.add(Width::W64));
+                            let str =
+                                unsafe { str::from_raw_parts(addr as *const u8, len as usize) };
+
+                            enum Entry {
+                                Char(char),
+                                Arg,
+                            }
+
+                            let mut args = args.vars.iter();
+                            let _fmt = args.next();
+                            let mut buf = String::with_capacity(str.len());
+                            for entry in
+                                str.chars()
+                                    .map(|c| if c == '%' { Entry::Arg } else { Entry::Char(c) })
+                            {
+                                match entry {
+                                    Entry::Char(c) => buf.push(c),
+                                    Entry::Arg => {
+                                        print!("{}", buf);
+                                        buf.clear();
+                                        match args.next() {
+                                            Some((ty, var)) => {
+                                                let var = OffsetVar::zero(*var);
+                                                match ctx.tys.ty(*ty) {
+                                                    Ty::Int(ty) => match ty.kind() {
+                                                        IntKind::U8 => {
+                                                            print!("{}", stack.read_var::<u8>(var))
+                                                        }
+                                                        IntKind::U16 => {
+                                                            print!("{}", stack.read_var::<u16>(var))
+                                                        }
+                                                        IntKind::U32 => {
+                                                            print!("{}", stack.read_var::<u32>(var))
+                                                        }
+                                                        IntKind::U64 => {
+                                                            print!("{}", stack.read_var::<u64>(var))
+                                                        }
+                                                        IntKind::I8 => {
+                                                            print!("{}", stack.read_var::<i8>(var))
+                                                        }
+                                                        IntKind::I16 => {
+                                                            print!("{}", stack.read_var::<i16>(var))
+                                                        }
+                                                        IntKind::I32 => {
+                                                            print!("{}", stack.read_var::<i32>(var))
+                                                        }
+                                                        IntKind::I64 => {
+                                                            print!("{}", stack.read_var::<i64>(var))
+                                                        }
+                                                    },
+                                                    Ty::Float(float) => match float {
+                                                        FloatTy::F32 => {
+                                                            print!("{}", stack.read_var::<f32>(var))
+                                                        }
+                                                        FloatTy::F64 => {
+                                                            print!("{}", stack.read_var::<f64>(var))
+                                                        }
+                                                    },
+                                                    ty => unimplemented!("printf arg: {ty:?}"),
+                                                }
+                                            }
+                                            None => panic!("expected more args in printf"),
+                                        }
+                                    }
+                                }
+                            }
+
+                            assert_eq!(12.4, f32::from_le_bytes((12.4f32).to_le_bytes()));
+
+                            if args.next().is_some() {
+                                panic!("too many args in printf");
+                            }
+
+                            print!("{}", buf);
+                            buf.clear();
+                        }
+
                         continue;
                     }
                     Linkage::External { link } => {
@@ -200,94 +293,71 @@ fn entry(
                             ctx.tys.ty(sig.ty).size(ctx)
                         };
 
+                        let args = args
+                            .vars
+                            .iter()
+                            .map(|(_, v)| {
+                                Arg::new(unsafe { &*stack.var_ptr_mut(OffsetVar::zero(*v)) })
+                            })
+                            .collect::<Vec<_>>();
+
                         unsafe {
                             match size {
-                                0 => cif.call::<()>(
-                                    CodePtr(func.into_raw().as_raw_ptr()),
-                                    &args
-                                        .vars
-                                        .iter()
-                                        .map(|v| Arg::new(&mut *stack.var_ptr_mut(*v)))
-                                        .collect::<Vec<_>>(),
-                                ),
+                                0 => cif.call::<()>(CodePtr(func.into_raw().as_raw_ptr()), &args),
                                 1 => {
-                                    let result = cif.call::<u8>(
-                                        CodePtr(func.into_raw().as_raw_ptr()),
-                                        &args
-                                            .vars
-                                            .iter()
-                                            .map(|v| Arg::new(&mut *stack.var_ptr_mut(*v)))
-                                            .collect::<Vec<_>>(),
-                                    );
+                                    let result = cif
+                                        .call::<u8>(CodePtr(func.into_raw().as_raw_ptr()), &args);
 
                                     match ctx.tys.ty(sig.ty) {
                                         Ty::Bool => {
-                                            rega.w(result as i64);
+                                            rega.w(result as u64);
                                         }
                                         Ty::Ref(Ty::Str) => todo!(),
-                                        Ty::Ref(_) => rega.w(result as i64),
+                                        Ty::Ref(_) => rega.w(result as u64),
                                         _ => todo!(),
                                     }
                                 }
                                 2 => {
-                                    let result = cif.call::<u16>(
-                                        CodePtr(func.into_raw().as_raw_ptr()),
-                                        &args
-                                            .vars
-                                            .iter()
-                                            .map(|v| Arg::new(&mut *stack.var_ptr_mut(*v)))
-                                            .collect::<Vec<_>>(),
-                                    );
+                                    let result = cif
+                                        .call::<u16>(CodePtr(func.into_raw().as_raw_ptr()), &args);
 
                                     match ctx.tys.ty(sig.ty) {
                                         Ty::Bool => {
-                                            rega.w(result as i64);
+                                            rega.w(result as u64);
                                         }
                                         Ty::Ref(Ty::Str) => todo!(),
-                                        Ty::Ref(_) => rega.w(result as i64),
+                                        Ty::Ref(_) => rega.w(result as u64),
                                         _ => todo!(),
                                     }
                                 }
                                 4 => {
-                                    let result = cif.call::<u32>(
-                                        CodePtr(func.into_raw().as_raw_ptr()),
-                                        &args
-                                            .vars
-                                            .iter()
-                                            .map(|v| Arg::new(&mut *stack.var_ptr_mut(*v)))
-                                            .collect::<Vec<_>>(),
-                                    );
+                                    let result = cif
+                                        .call::<u32>(CodePtr(func.into_raw().as_raw_ptr()), &args);
 
                                     match ctx.tys.ty(sig.ty) {
                                         Ty::Bool => {
-                                            rega.w(result as i64);
+                                            rega.w(result as u64);
                                         }
                                         Ty::Ref(Ty::Str) => todo!(),
-                                        Ty::Ref(_) => rega.w(result as i64),
+                                        Ty::Ref(_) => rega.w(result as u64),
                                         _ => todo!(),
                                     }
                                 }
                                 8 => {
-                                    let result = cif.call::<u64>(
-                                        CodePtr(func.into_raw().as_raw_ptr()),
-                                        &args
-                                            .vars
-                                            .iter()
-                                            .map(|v| Arg::new(&mut *stack.var_ptr_mut(*v)))
-                                            .collect::<Vec<_>>(),
-                                    );
+                                    let result = cif
+                                        .call::<u64>(CodePtr(func.into_raw().as_raw_ptr()), &args);
 
                                     match ctx.tys.ty(sig.ty) {
                                         Ty::Bool => {
-                                            rega.w(result as i64);
+                                            rega.w(result);
                                         }
                                         Ty::Ref(Ty::Str) => todo!(),
-                                        Ty::Ref(_) => rega.w(result as i64),
+                                        Ty::Ref(_) => rega.w(result),
                                         Ty::Struct(id) => {
                                             let bytes = ctx.tys.struct_layout(id).size;
                                             let addr = stack.anon_alloc(bytes);
                                             stack.memcpy(addr as usize, result as usize, bytes);
-                                            rega.w(addr as i64);
+                                            rega.w(addr as u64);
                                         }
                                         _ => todo!(),
                                     }
@@ -333,10 +403,169 @@ fn entry(
             }
 
             Air::Addr(reg, var) => {
-                let addr = unsafe { stack.var_ptr_mut(*var).addr() as i64 };
+                let addr = unsafe { stack.var_ptr_mut(*var).addr() as u64 };
                 match reg {
-                    Reg::A => rega.w(addr as i64),
-                    Reg::B => regb.w(addr as i64),
+                    Reg::A => rega.w(addr),
+                    Reg::B => regb.w(addr),
+                }
+            }
+            Air::MemCpy { dst, src, bytes } => {
+                let dst = match dst {
+                    Reg::A => rega.r(),
+                    Reg::B => regb.r(),
+                } as usize;
+                let src = match src {
+                    Reg::A => rega.r(),
+                    Reg::B => regb.r(),
+                } as usize;
+                unsafe { stack.memcpy(dst, src, *bytes) };
+            }
+
+            Air::PushIConst(var, data) => match data {
+                ConstData::Bits(bits) => {
+                    stack.push_some_bits(*var, *bits);
+                }
+                ConstData::Ptr(entry) => {
+                    stack.push_var::<u64>(*var, entry.addr() as u64);
+                }
+            },
+            Air::PushIReg { dst, width, src } => {
+                let reg = match src {
+                    Reg::A => &mut rega,
+                    Reg::B => &mut regb,
+                };
+                let bits = Bits::from_width(reg.r(), *width);
+                stack.push_some_bits(*dst, bits);
+            }
+            Air::PushIVar { dst, width, src } => {
+                let bits = stack.read_some_bits(*src, *width);
+                stack.push_some_bits(*dst, bits);
+            }
+
+            Air::SwapReg => {
+                let tmp = rega.r();
+                rega.w(regb.r());
+                regb.w(tmp);
+            }
+            Air::MovIConst(reg, data) => {
+                let data = match data {
+                    ConstData::Bits(bits) => bits.to_u64(),
+                    ConstData::Ptr(data) => data.addr() as u64,
+                };
+
+                match reg {
+                    Reg::A => rega.w(data),
+                    Reg::B => regb.w(data),
+                }
+            }
+            Air::MovIVar(reg, var, width) => {
+                let int = stack.read_some_bits(*var, *width).to_u64();
+                match reg {
+                    Reg::A => {
+                        rega.w(int);
+                    }
+                    Reg::B => {
+                        regb.w(int);
+                    }
+                }
+            }
+
+            Air::AddAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 + regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 + regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 + regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() + regb.r()),
+            },
+            Air::SubAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 - regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 - regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 - regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() - regb.r()),
+            },
+            Air::MulAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 + regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 + regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 + regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() + regb.r()),
+            },
+            Air::EqAB(_) => {
+                rega.w((rega.r() == regb.r()) as u64);
+            }
+
+            Air::FAddAB(width) => match width {
+                Width::W32 => {
+                    rega.w(
+                        (f32::from_bits(rega.r() as u32) + f32::from_bits(regb.r() as u32))
+                            .to_bits() as u64,
+                    );
+                }
+                Width::W64 => {
+                    rega.w((f64::from_bits(rega.r()) + f64::from_bits(regb.r())).to_bits());
+                }
+                _ => unreachable!(),
+            },
+            Air::FSubAB(width) => match width {
+                Width::W32 => {
+                    rega.w(
+                        (f32::from_bits(rega.r() as u32) - f32::from_bits(regb.r() as u32))
+                            .to_bits() as u64,
+                    );
+                }
+                Width::W64 => {
+                    rega.w((f64::from_bits(rega.r()) - f64::from_bits(regb.r())).to_bits());
+                }
+                _ => unreachable!(),
+            },
+            Air::FMulAB(width) => match width {
+                Width::W32 => {
+                    rega.w(
+                        (f32::from_bits(rega.r() as u32) * f32::from_bits(regb.r() as u32))
+                            .to_bits() as u64,
+                    );
+                }
+                Width::W64 => {
+                    rega.w((f64::from_bits(rega.r()) * f64::from_bits(regb.r())).to_bits());
+                }
+                _ => unreachable!(),
+            },
+
+            Air::Exit => {
+                break;
+            }
+            Air::PrintCStr => unsafe {
+                libc::printf(rega.r() as *const c_char);
+            },
+        }
+
+        instr_num += 1;
+        total_instr_num += 1;
+    }
+
+    Ok(rega.r() as i32)
+}
+
+fn eval_consts(consts: &[Air], stack: &mut Stack) -> Result<(), InterpErr> {
+    let mut instrs = consts.iter();
+    let mut rega = Rega::default();
+    let mut regb = Rega::default();
+
+    loop {
+        let Some(instr) = instrs.next() else {
+            return Ok(());
+        };
+
+        match instr {
+            Air::SAlloc(var, bytes) => {
+                if !stack.allocated(*var) {
+                    stack.alloc(*var, *bytes);
+                }
+            }
+
+            Air::Addr(reg, var) => {
+                let addr = unsafe { stack.var_ptr_mut(*var).addr() as u64 };
+                match reg {
+                    Reg::A => rega.w(addr),
+                    Reg::B => regb.w(addr),
                 }
             }
 
@@ -352,24 +581,25 @@ fn entry(
                 unsafe { stack.memcpy(dst, src, *bytes) };
             }
 
-            Air::PushIConst(var, kind, data) => match data {
-                ConstData::Int(int) => {
-                    stack.push_some_int(*var, *kind, *int);
+            Air::PushIConst(var, data) => match data {
+                ConstData::Bits(bits) => {
+                    stack.push_some_bits(*var, *bits);
                 }
                 ConstData::Ptr(entry) => {
-                    stack.push_some_int(*var, *kind, entry.addr() as i64);
+                    stack.push_var::<u64>(*var, entry.addr() as u64);
                 }
             },
-            Air::PushIReg { dst, kind, src } => {
+            Air::PushIReg { dst, width, src } => {
                 let reg = match src {
                     Reg::A => &mut rega,
                     Reg::B => &mut regb,
                 };
-                stack.push_some_int(*dst, *kind, reg.r());
+                let bits = Bits::from_width(reg.r(), *width);
+                stack.push_some_bits(*dst, bits);
             }
-            Air::PushIVar { dst, kind, src } => {
-                let int = stack.read_some_int(*src, *kind);
-                stack.push_some_int(*dst, *kind, int);
+            Air::PushIVar { dst, width, src } => {
+                let bits = stack.read_some_bits(*src, *width);
+                stack.push_some_bits(*dst, bits);
             }
 
             Air::SwapReg => {
@@ -377,12 +607,19 @@ fn entry(
                 rega.w(regb.r());
                 regb.w(tmp);
             }
-            Air::MovIConst(reg, int) => match reg {
-                Reg::A => rega.w(*int),
-                Reg::B => regb.w(*int),
-            },
-            Air::MovIVar(reg, var, kind) => {
-                let int = stack.read_some_int(*var, *kind);
+            Air::MovIConst(reg, data) => {
+                let data = match data {
+                    ConstData::Bits(bits) => bits.to_u64(),
+                    ConstData::Ptr(data) => data.addr() as u64,
+                };
+
+                match reg {
+                    Reg::A => rega.w(data),
+                    Reg::B => regb.w(data),
+                }
+            }
+            Air::MovIVar(reg, var, width) => {
+                let int = stack.read_some_bits(*var, *width).to_u64();
                 match reg {
                     Reg::A => {
                         rega.w(int);
@@ -393,35 +630,31 @@ fn entry(
                 }
             }
 
-            Air::AddAB => {
-                rega.w(rega.r() + regb.r());
-            }
-            Air::SubAB => {
-                rega.w(rega.r() - regb.r());
-            }
-            Air::MulAB => {
-                rega.w(rega.r() * regb.r());
-            }
-            Air::EqAB => {
-                rega.w((rega.r() == regb.r()) as i64);
+            Air::AddAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 + regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 + regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 + regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() + regb.r()),
+            },
+            Air::SubAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 - regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 - regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 - regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() - regb.r()),
+            },
+            Air::MulAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 + regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 + regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 + regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() + regb.r()),
+            },
+            Air::EqAB(_) => {
+                rega.w((rega.r() == regb.r()) as u64);
             }
 
-            Air::Exit => {
-                break;
-            }
-            Air::Printf => unsafe {
-                libc::write(0, rega.r() as *const c_void, regb.r() as usize);
-            },
-            Air::PrintCStr => unsafe {
-                libc::printf(rega.r() as *const c_char);
-            },
+            instr => panic!("cannot {:?} functions in const eval", instr),
         }
-
-        instr_num += 1;
-        total_instr_num += 1;
     }
-
-    Ok(rega.r() as i32)
 }
 
 fn log_instr(
@@ -441,30 +674,18 @@ fn log_instr(
     );
 
     match instr {
-        Air::PushIConst(_, _, _)
-        | Air::Exit
-        | Air::Jmp(_)
-        | Air::SwapReg
-        | Air::MovIConst(_, _) => {}
-        Air::PushIVar { dst, kind, src } => {
-            println!(
-                " | {dst:?} <- {:#x}{}",
-                stack.read_some_int(*src, *kind),
-                kind.as_str()
-            );
+        Air::PushIConst(_, _) | Air::Exit | Air::Jmp(_) | Air::SwapReg | Air::MovIConst(_, _) => {}
+        Air::PushIVar { dst, width, src } => {
+            println!(" | {dst:?} <- {:?}", stack.read_some_bits(*src, *width));
         }
-        Air::PushIReg { dst, kind, src } => {
+        Air::PushIReg { dst, width, src } => {
             println!(
-                " | {dst:?} <- {:#x}{}",
+                " | {dst:?} <- {:#x} @ {width:?}",
                 match src {
                     Reg::A => rega.r(),
                     Reg::B => regb.r(),
                 },
-                kind.as_str()
             );
-        }
-        Air::Printf => {
-            println!(" | printf `{}` characters from `{:#x}`", regb.r(), rega.r());
         }
         Air::PrintCStr => {
             println!(" | print_c_str @ `{}`", rega.r());
@@ -510,9 +731,9 @@ fn log_instr(
             println!(" | Addr({:?}) = {:#x}", var.var, addr);
             println!(" | Offset({})", var.offset);
         }
-        Air::MovIVar(reg, var, kind) => {
-            let int = stack.read_some_int(*var, *kind);
-            println!(" | {reg:?} <- {int:#x}{}", kind.as_str());
+        Air::MovIVar(reg, var, width) => {
+            let int = stack.read_some_bits(*var, *width);
+            println!(" | {reg:?} <- {int:?}");
         }
         Air::Ret => {
             match call_stack.stack.last() {
@@ -537,24 +758,41 @@ fn log_instr(
             println!(
                 " | call proc [{}({:?})]",
                 ctx.expect_ident(sig.ident),
-                &args.vars
+                &args
+                    .vars
+                    .iter()
+                    .map(|(ty, var)| (ctx.ty_str(*ty), var))
+                    .collect::<Vec<_>>(),
             );
         }
-        Air::AddAB => {
+        Air::AddAB(_) => {
             let result = rega.r() + regb.r();
             println!(" | A <- {} <- A({}) + B({})", result, rega.r(), regb.r());
         }
-        Air::SubAB => {
+        Air::SubAB(_) => {
             let result = rega.r() - regb.r();
             println!(" | A <- {} <- A({}) - B({})", result, rega.r(), regb.r());
         }
-        Air::MulAB => {
+        Air::MulAB(_) => {
             let result = rega.r() * regb.r();
             println!(" | A <- {} <- A({}) * B({})", result, rega.r(), regb.r());
         }
-        Air::EqAB => {
+        Air::EqAB(_) => {
             let result = rega.r() == regb.r();
             println!(" | A <- {} <- A({}) == B({})", result, rega.r(), regb.r());
+        }
+
+        Air::FAddAB(_) => {
+            let result = rega.r() + regb.r();
+            println!(" | A <- {} <- A({}) + B({})", result, rega.r(), regb.r());
+        }
+        Air::FSubAB(_) => {
+            let result = rega.r() - regb.r();
+            println!(" | A <- {} <- A({}) - B({})", result, rega.r(), regb.r());
+        }
+        Air::FMulAB(_) => {
+            let result = rega.r() * regb.r();
+            println!(" | A <- {} <- A({}) * B({})", result, rega.r(), regb.r());
         }
     }
 }
@@ -571,6 +809,10 @@ impl Ty<'_> {
                 IntKind::U32 => Type::u32(),
                 IntKind::I64 => Type::i64(),
                 IntKind::U64 => Type::u64(),
+            },
+            Ty::Float(ty) => match ty {
+                FloatTy::F32 => Type::f32(),
+                FloatTy::F64 => Type::f64(),
             },
             Ty::Str => Type::pointer(),
             Ty::Bool => Type::u8(),

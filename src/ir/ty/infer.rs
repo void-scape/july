@@ -45,22 +45,34 @@ impl InferCtx {
 
     #[track_caller]
     pub fn new_var(&mut self, ident: Ident) -> TyVar {
-        let idx = self.var_index;
-        self.var_index += 1;
-        self.vars
-            .insert(self.var(ident.id), (TyVar(idx), ident.span));
-        self.constraints
-            .insert(TyVar(idx), (self.var(ident.id), Vec::new()));
-        TyVar(idx)
+        let var = self.init_var(self.var(ident.id));
+        self.vars.insert(self.var(ident.id), (var, ident.span));
+        var
+    }
+
+    pub fn register_const(&mut self, ident: Ident, ty: TyId, source: Span) {
+        let var = self.init_var(self.konst(ident.id));
+        self.vars.insert(self.konst(ident.id), (var, ident.span));
+        self.eq(var, ty, source);
     }
 
     pub fn get_var(&self, ident: IdentId) -> Option<TyVar> {
         self.vars.get(&self.var(ident)).map(|(var, _)| *var)
     }
 
+    pub fn get_const(&self, ident: IdentId) -> Option<TyVar> {
+        self.vars.get(&self.konst(ident)).map(|(var, _)| *var)
+    }
+
     #[track_caller]
     pub fn var_ident<'a>(&self, ctx: &Ctx<'a>, var: TyVar) -> &'a str {
-        ctx.expect_ident(self.constraints.get(&var).expect("invalid ty var").0.ident)
+        ctx.expect_ident(
+            self.constraints
+                .get(&var)
+                .expect("invalid ty var")
+                .0
+                .ident(),
+        )
     }
 
     #[track_caller]
@@ -263,6 +275,17 @@ impl InferCtx {
     #[track_caller]
     fn var(&self, ident: IdentId) -> VarHash {
         let func = self.fn_hash();
-        VarHash { ident, func }
+        VarHash::Func { ident, func }
+    }
+
+    fn konst(&self, ident: IdentId) -> VarHash {
+        VarHash::Const(ident)
+    }
+
+    fn init_var(&mut self, hash: VarHash) -> TyVar {
+        let idx = self.var_index;
+        self.var_index += 1;
+        self.constraints.insert(TyVar(idx), (hash, Vec::new()));
+        TyVar(idx)
     }
 }

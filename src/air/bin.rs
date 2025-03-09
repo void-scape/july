@@ -1,10 +1,10 @@
 use super::ctx::AirCtx;
-use super::{eval_expr, IntKind, OffsetVar};
+use super::{eval_expr, OffsetVar};
+use crate::air::Bits;
 use crate::air::{generate_args, Air, ConstData, Reg};
 use crate::ir::lit::LitKind;
-use crate::ir::sig::Sig;
 use crate::ir::ty::store::TyId;
-use crate::ir::ty::Ty;
+use crate::ir::ty::{Ty, Width};
 use crate::ir::*;
 
 /// Evaluate `bin` and assign to `dst`.
@@ -14,42 +14,55 @@ use crate::ir::*;
 ///     `bin` does not evaluate to `ty`
 pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'a BinOp) {
     let ty = ctx.tys.ty(ty);
-    let kind = ty.expect_int().kind();
+    match ty {
+        Ty::Int(_) | Ty::Bool => {
+            let width = ty.expect_int().width();
+            match bin.kind {
+                BinOpKind::Add => visit(Add(width), ctx, dst, bin),
+                BinOpKind::Mul => visit(Mul(width), ctx, dst, bin),
+                BinOpKind::Sub => visit(Sub(width), ctx, dst, bin),
+                BinOpKind::Eq => {
+                    let mut eq = Eq {
+                        input: Width::BOOL,
+                        output: Width::BOOL,
+                    };
 
-    match bin.kind {
-        BinOpKind::Add => Add(kind).visit(ctx, dst, bin),
-        BinOpKind::Mul => Mul(kind).visit(ctx, dst, bin),
-        BinOpKind::Sub => Sub(kind).visit(ctx, dst, bin),
-        BinOpKind::Eq => {
-            let mut eq = Eq {
-                input: IntKind::BOOL,
-                output: IntKind::BOOL,
-            };
-
-            let (lhs, lhs_ty) = eq.prepare_expr(ctx, bin.lhs);
-            let (rhs, rhs_ty) = eq.prepare_expr(ctx, bin.rhs);
-            match (lhs_ty, rhs_ty) {
-                (Some(lhs), Some(rhs)) => {
-                    assert_eq!(lhs, rhs);
-                    eq.input = ctx.tys.ty(lhs).expect_int().kind();
-                }
-                (Some(ty), None) | (None, Some(ty)) => {
-                    eq.input = ctx.tys.ty(ty).expect_int().kind();
-                }
-                (None, None) => {
-                    // both are int literals
-                    eq.input = IntKind::I64;
+                    let (lhs, lhs_ty) = prepare_expr(ctx, bin.lhs);
+                    let (rhs, rhs_ty) = prepare_expr(ctx, bin.rhs);
+                    match (lhs_ty, rhs_ty) {
+                        (Some(lhs), Some(rhs)) => {
+                            assert_eq!(lhs, rhs);
+                            eq.input = ctx.tys.ty(lhs).expect_int().width();
+                        }
+                        (Some(ty), None) | (None, Some(ty)) => {
+                            eq.input = ctx.tys.ty(ty).expect_int().width();
+                        }
+                        (None, None) => {
+                            // both are int literals
+                            eq.input = Width::W64;
+                        }
+                    }
+                    eq.visit_with(ctx, dst, lhs, rhs);
                 }
             }
-            eq.visit_with(ctx, dst, lhs, rhs);
         }
+        Ty::Float(float_ty) => {
+            let width = float_ty.width();
+            match bin.kind {
+                BinOpKind::Add => visit(FloatAdd(width), ctx, dst, bin),
+                BinOpKind::Mul => visit(FloatMul(width), ctx, dst, bin),
+                BinOpKind::Sub => visit(FloatSub(width), ctx, dst, bin),
+                BinOpKind::Eq => panic!("invalid op"),
+            }
+        }
+        ty => panic!("invalid type: {ty:#?}"),
     }
 }
 
 /// Evaluate `bin` for its side effects then throw away.
-pub fn eval_bin_op<'a>(ctx: &mut AirCtx<'a>, sig: &'a Sig<'a>, bin: &'a BinOp) {
-    eval_expr(ctx, sig, &bin.lhs);
-    eval_expr(ctx, sig, &bin.rhs);
+pub fn eval_bin_op<'a>(ctx: &mut AirCtx<'a>, bin: &'a BinOp) {
+    eval_expr(ctx, &bin.lhs);
+    eval_expr(ctx, &bin.rhs);
 }
 
 pub fn aquire_accessor_field(ctx: &AirCtx, access: &Access) -> (OffsetVar, TyId) {
@@ -87,11 +100,9 @@ pub fn aquire_accessor_field(ctx: &AirCtx, access: &Access) -> (OffsetVar, TyId)
                 offset += field_offset;
                 strukt = ctx.tys.strukt(id);
             }
-            Ty::Ref(_) => todo!(),
-            Ty::Str => todo!(),
-            Ty::Int(t) => panic!("{t:?} has not fields"),
-            Ty::Bool => panic!("bool has no fields"),
-            Ty::Unit => panic!("structs cannot contain unit fields"),
+            Ty::Ref(_) | Ty::Str | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit => {
+                panic!("cannot access field on {ty:?}")
+            }
         }
     }
     unreachable!()
@@ -101,9 +112,9 @@ macro_rules! impl_op {
     ($name:ident, $strukt:ident) => {
         #[macro_export]
         macro_rules! $name {
-            ($ctx:ident, $kind:ident, $dst:ident, $lhs:expr, $rhs:expr) => {{
+            ($ctx:ident, $width:ident, $dst:ident, $lhs:expr, $rhs:expr) => {{
                 use crate::air::bin::BinOpLeaf;
-                crate::air::bin::$strukt($kind).visit_leaf($ctx, $dst, $lhs, $rhs);
+                crate::air::bin::$strukt($width).visit_leaf($ctx, $dst, $lhs, $rhs);
             }};
         }
         #[allow(unused)]
@@ -115,121 +126,219 @@ impl_op!(add, Add);
 impl_op!(sub, Sub);
 impl_op!(mul, Mul);
 
-pub struct Add(pub IntKind);
-crate::impl_prim_bin_op_visitor!(Add, AddAB, +, 0, 0);
+pub struct Add(pub Width);
+crate::impl_agnostic_bin_op_visitor!(Add, AddAB, 0, 0);
+crate::impl_prim_bin_op_visitor!(Add, AddAB, +);
 
-pub struct Sub(pub IntKind);
-crate::impl_prim_bin_op_visitor!(Sub, SubAB, -, 0, 0);
+pub struct Sub(pub Width);
+crate::impl_agnostic_bin_op_visitor!(Sub, SubAB, 0, 0);
+crate::impl_prim_bin_op_visitor!(Sub, SubAB, -);
 
-pub struct Mul(pub IntKind);
-crate::impl_prim_bin_op_visitor!(Mul, MulAB, *, 0, 0);
+pub struct Mul(pub Width);
+crate::impl_agnostic_bin_op_visitor!(Mul, MulAB, 0, 0);
+crate::impl_prim_bin_op_visitor!(Mul, MulAB, *);
 
 pub struct Eq {
-    pub input: IntKind,
-    pub output: IntKind,
+    pub input: Width,
+    pub output: Width,
 }
-crate::impl_prim_bin_op_visitor!(Eq, EqAB, ==, input, output);
+crate::impl_agnostic_bin_op_visitor!(Eq, EqAB, input, output);
+crate::impl_prim_bin_op_visitor!(Eq, EqAB, ==);
+
+pub struct FloatAdd(pub Width);
+crate::impl_agnostic_bin_op_visitor!(FloatAdd, FAddAB, 0, 0);
+crate::impl_float_bin_op_visitor!(FloatAdd, FAddAB, +);
+
+pub struct FloatSub(pub Width);
+crate::impl_agnostic_bin_op_visitor!(FloatSub, FSubAB, 0, 0);
+crate::impl_float_bin_op_visitor!(FloatSub, FSubAB, -);
+
+pub struct FloatMul(pub Width);
+crate::impl_agnostic_bin_op_visitor!(FloatMul, FMulAB, 0, 0);
+crate::impl_float_bin_op_visitor!(FloatMul, FMulAB, *);
 
 enum BinOpArg {
     Var(OffsetVar),
-    Lit(i64),
+    Int(i64),
+    Float(f64),
 }
 
-trait BinOpVisitor
-where
-    Self: AllBinOpLeaves,
-{
-    fn visit<'a>(&mut self, ctx: &mut AirCtx<'a>, dst: OffsetVar, bin: &'a BinOp<'a>) {
-        let (lhs, lhs_ty) = self.prepare_expr(ctx, bin.lhs);
-        let (rhs, rhs_ty) = self.prepare_expr(ctx, bin.rhs);
-        match (lhs_ty, rhs_ty) {
-            (Some(lhs), Some(rhs)) => assert_eq!(lhs, rhs),
-            _ => {}
-        }
-        self.visit_with(ctx, dst, lhs, rhs);
+fn visit<'a>(op: impl BinOpVisitWith, ctx: &mut AirCtx<'a>, dst: OffsetVar, bin: &'a BinOp<'a>) {
+    let (lhs, lhs_ty) = prepare_expr(ctx, bin.lhs);
+    let (rhs, rhs_ty) = prepare_expr(ctx, bin.rhs);
+    match (lhs_ty, rhs_ty) {
+        (Some(lhs), Some(rhs)) => assert_eq!(lhs, rhs),
+        _ => {}
     }
+    op.visit_with(ctx, dst, lhs, rhs);
+}
 
-    fn visit_with<'a>(
-        &mut self,
-        ctx: &mut AirCtx<'a>,
-        dst: OffsetVar,
-        lhs: BinOpArg,
-        rhs: BinOpArg,
-    ) {
-        match (lhs, rhs) {
-            (BinOpArg::Var(var), BinOpArg::Lit(lit)) => {
-                self.visit_leaf(ctx, dst, var, lit);
-            }
-            (BinOpArg::Lit(lit), BinOpArg::Var(var)) => {
-                self.visit_leaf(ctx, dst, var, lit);
-            }
-            (BinOpArg::Lit(rhs), BinOpArg::Lit(lhs)) => {
-                self.visit_leaf(ctx, dst, lhs, rhs);
-            }
-            (BinOpArg::Var(rhs), BinOpArg::Var(lhs)) => {
-                self.visit_leaf(ctx, dst, lhs, rhs);
-            }
+fn prepare_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) -> (BinOpArg, Option<TyId>) {
+    match expr {
+        Expr::Lit(lit) => match lit.kind {
+            LitKind::Int(lhs_lit) => (BinOpArg::Int(*lhs_lit), None),
+            LitKind::Float(lhs_float) => (BinOpArg::Float(*lhs_float), None),
+        },
+        Expr::Ident(ident) => {
+            let var = OffsetVar::zero(ctx.expect_var(ident.id));
+            (BinOpArg::Var(var), Some(ctx.var_ty(ident.id)))
         }
-    }
-
-    fn prepare_expr<'a>(&self, ctx: &mut AirCtx<'a>, expr: &'a Expr) -> (BinOpArg, Option<TyId>) {
-        match expr {
-            Expr::Lit(lit) => match lit.kind {
-                LitKind::Int(lhs_lit) => (BinOpArg::Lit(*lhs_lit), None),
-                _ => unreachable!(),
-            },
+        Expr::Call(call @ Call { sig, .. }) => {
+            let args = generate_args(ctx, call);
+            ctx.ins(Air::Call(sig, args));
+            let result = OffsetVar::zero(ctx.anon_var(sig.ty));
+            ctx.ins(Air::PushIReg {
+                dst: result,
+                width: ctx.tys.ty(sig.ty).expect_int().width(),
+                src: Reg::A,
+            });
+            (BinOpArg::Var(result), Some(sig.ty))
+        }
+        Expr::Bool(bool) => (BinOpArg::Int(bool.val as i64), Some(TyId::BOOL)),
+        Expr::Ref(ref_) => match ref_.inner {
             Expr::Ident(ident) => {
                 let var = OffsetVar::zero(ctx.expect_var(ident.id));
-                (BinOpArg::Var(var), Some(ctx.var_ty(ident.id)))
-            }
-            Expr::Call(call @ Call { sig, .. }) => {
-                let args = generate_args(ctx, sig, call);
-                ctx.ins(Air::Call(sig, args));
-                let result = OffsetVar::zero(ctx.anon_var(sig.ty));
+                ctx.ins(Air::Addr(Reg::A, var));
+                let var_ty = ctx.var_ty(ident.id);
+                let result = OffsetVar::zero(ctx.anon_var(var_ty));
                 ctx.ins(Air::PushIReg {
                     dst: result,
-                    kind: ctx.tys.ty(sig.ty).expect_int().kind(),
+                    width: Width::PTR,
                     src: Reg::A,
                 });
-                (BinOpArg::Var(result), Some(sig.ty))
-            }
-            Expr::Bool(_, val) => (BinOpArg::Lit(*val as i64), Some(TyId::BOOL)),
-            Expr::Ref(ref_) => match ref_.inner {
-                Expr::Ident(ident) => {
-                    let var = OffsetVar::zero(ctx.expect_var(ident.id));
-                    ctx.ins(Air::Addr(Reg::A, var));
-                    let var_ty = ctx.var_ty(ident.id);
-                    let result = OffsetVar::zero(ctx.anon_var(var_ty));
-                    ctx.ins(Air::PushIReg {
-                        dst: result,
-                        kind: IntKind::PTR,
-                        src: Reg::A,
-                    });
 
-                    let inner = ctx.tys.ty(var_ty);
-                    (
-                        BinOpArg::Var(result),
-                        Some(ctx.tys.get_ty_id(&Ty::Ref(&inner)).unwrap()),
-                    )
-                }
-                _ => todo!(),
-            },
-            Expr::Bin(_bin) => {
-                todo!()
-                //let dst = OffsetVar::zero(ctx.anon_var(ty));
-                //self.visit(ctx, kind, dst, bin);
-                //(BinOpArg::Var(dst),)
+                let inner = ctx.tys.ty(var_ty);
+                (
+                    BinOpArg::Var(result),
+                    Some(ctx.tys.get_ty_id(&Ty::Ref(&inner)).unwrap()),
+                )
             }
-            Expr::Access(access) => {
-                let (var, accessor_ty) = aquire_accessor_field(ctx, access);
-                (BinOpArg::Var(var), Some(accessor_ty))
-            }
-            Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
-            Expr::Str(_, _) | Expr::Block(_) => todo!(),
-            Expr::Loop(_) => todo!(),
-
-            Expr::Deref(_) => todo!(),
+            _ => todo!(),
+        },
+        Expr::Bin(_bin) => {
+            todo!()
+            //let dst = OffsetVar::zero(ctx.anon_var(ty));
+            //self.visit(ctx, kind, dst, bin);
+            //(BinOpArg::Var(dst),)
         }
+        Expr::Access(access) => {
+            let (var, accessor_ty) = aquire_accessor_field(ctx, access);
+            (BinOpArg::Var(var), Some(accessor_ty))
+        }
+        Expr::Struct(_) | Expr::Enum(_) | Expr::If(_) => unimplemented!(),
+        Expr::Str(_) | Expr::Block(_) => todo!(),
+        Expr::Loop(_) => todo!(),
+
+        Expr::Deref(_) => todo!(),
+    }
+}
+
+trait BinOpVisitWith {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg);
+}
+
+pub trait FloatAlgebra: AgnosticBinOpLeaves + AllFloatBinOpLeaves {}
+impl FloatAlgebra for FloatAdd {}
+impl FloatAlgebra for FloatSub {}
+impl FloatAlgebra for FloatMul {}
+
+impl BinOpVisitWith for FloatAdd {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_float(self, ctx, dst, lhs, rhs);
+    }
+}
+
+impl BinOpVisitWith for FloatSub {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_float(self, ctx, dst, lhs, rhs);
+    }
+}
+
+impl BinOpVisitWith for FloatMul {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_float(self, ctx, dst, lhs, rhs);
+    }
+}
+
+fn visit_float<'a>(
+    op: &impl FloatAlgebra,
+    ctx: &mut AirCtx<'a>,
+    dst: OffsetVar,
+    lhs: BinOpArg,
+    rhs: BinOpArg,
+) {
+    match (lhs, rhs) {
+        (BinOpArg::Var(var), BinOpArg::Float(lit)) => {
+            op.visit_leaf(ctx, dst, var, lit);
+        }
+        (BinOpArg::Float(lit), BinOpArg::Var(var)) => {
+            op.visit_leaf(ctx, dst, var, lit);
+        }
+        (BinOpArg::Float(rhs), BinOpArg::Float(lhs)) => {
+            op.visit_leaf(ctx, dst, lhs, rhs);
+        }
+        (BinOpArg::Var(rhs), BinOpArg::Var(lhs)) => {
+            op.visit_leaf(ctx, dst, lhs, rhs);
+        }
+
+        _ => panic!("invalid op"),
+    }
+}
+
+pub trait Algebra: AgnosticBinOpLeaves + AllPrimBinOpLeaves {}
+impl Algebra for Add {}
+impl Algebra for Sub {}
+impl Algebra for Mul {}
+
+// TODO: comparison trait?
+impl Algebra for Eq {}
+
+impl BinOpVisitWith for Add {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_int(self, ctx, dst, lhs, rhs);
+    }
+}
+
+impl BinOpVisitWith for Sub {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_int(self, ctx, dst, lhs, rhs);
+    }
+}
+
+impl BinOpVisitWith for Mul {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_int(self, ctx, dst, lhs, rhs);
+    }
+}
+
+impl BinOpVisitWith for Eq {
+    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
+        visit_int(self, ctx, dst, lhs, rhs);
+    }
+}
+
+fn visit_int<'a>(
+    op: &impl Algebra,
+    ctx: &mut AirCtx<'a>,
+    dst: OffsetVar,
+    lhs: BinOpArg,
+    rhs: BinOpArg,
+) {
+    match (lhs, rhs) {
+        (BinOpArg::Var(var), BinOpArg::Int(lit)) => {
+            op.visit_leaf(ctx, dst, var, lit);
+        }
+        (BinOpArg::Int(lit), BinOpArg::Var(var)) => {
+            op.visit_leaf(ctx, dst, var, lit);
+        }
+        (BinOpArg::Int(rhs), BinOpArg::Int(lhs)) => {
+            op.visit_leaf(ctx, dst, lhs, rhs);
+        }
+        (BinOpArg::Var(rhs), BinOpArg::Var(lhs)) => {
+            op.visit_leaf(ctx, dst, lhs, rhs);
+        }
+
+        _ => panic!("invalid op"),
     }
 }
 
@@ -238,73 +347,48 @@ pub trait BinOpLeaf<L, R> {
 }
 
 pub trait BinOpIOKind {
-    fn input(&self) -> IntKind;
-    fn output(&self) -> IntKind;
+    fn input(&self) -> Width;
+    fn output(&self) -> Width;
 }
 
-trait AllBinOpLeaves:
-    BinOpLeaf<i64, i64>
-    + BinOpLeaf<i64, OffsetVar>
-    + BinOpLeaf<OffsetVar, i64>
-    + BinOpLeaf<OffsetVar, OffsetVar>
+pub trait AgnosticBinOpLeaves:
+    BinOpLeaf<OffsetVar, OffsetVar>
     + BinOpLeaf<Reg, OffsetVar>
     + BinOpLeaf<OffsetVar, Reg>
-    + BinOpLeaf<Reg, i64>
-    + BinOpLeaf<i64, Reg>
     + BinOpLeaf<Reg, Reg>
 {
 }
 
-#[macro_export]
-macro_rules! impl_prim_bin_op_visitor {
-    ($name:ident, $instr:ident, $op:tt, $input:tt, $output:tt) => {
-        impl BinOpVisitor for $name {}
+pub trait AllPrimBinOpLeaves:
+    BinOpLeaf<i64, i64>
+    + BinOpLeaf<i64, OffsetVar>
+    + BinOpLeaf<OffsetVar, i64>
+    + BinOpLeaf<Reg, i64>
+    + BinOpLeaf<i64, Reg>
+{
+}
 
-        impl AllBinOpLeaves for $name {}
+pub trait AllFloatBinOpLeaves:
+    BinOpLeaf<f64, f64>
+    + BinOpLeaf<f64, OffsetVar>
+    + BinOpLeaf<OffsetVar, f64>
+    + BinOpLeaf<Reg, f64>
+    + BinOpLeaf<f64, Reg>
+{
+}
+
+#[macro_export]
+macro_rules! impl_agnostic_bin_op_visitor {
+    ($name:ident, $instr:ident, $input:tt, $output:tt) => {
+        impl AgnosticBinOpLeaves for $name {}
 
         impl BinOpIOKind for $name {
-            fn input(&self) -> IntKind {
+            fn input(&self) -> Width {
                 self.$input
             }
 
-            fn output(&self) -> IntKind {
+            fn output(&self) -> Width {
                 self.$output
-            }
-        }
-
-        impl BinOpLeaf<i64, i64> for $name {
-            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: i64, rhs: i64) {
-                ctx.ins(Air::PushIConst(dst, self.output(), ConstData::Int((lhs $op rhs) as i64)));
-            }
-        }
-
-        impl BinOpLeaf<i64, OffsetVar> for $name {
-            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: i64, rhs: OffsetVar) {
-                ctx.ins_set([
-                    Air::MovIVar(Reg::A, rhs, self.input()),
-                    Air::MovIConst(Reg::B, lhs),
-                    Air::$instr,
-                    Air::PushIReg {
-                        dst,
-                        kind: self.output(),
-                        src: Reg::A,
-                    },
-                ]);
-            }
-        }
-
-        impl BinOpLeaf<OffsetVar, i64> for $name {
-            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: OffsetVar, rhs: i64) {
-                ctx.ins_set([
-                    Air::MovIVar(Reg::A, lhs, self.input()),
-                    Air::MovIConst(Reg::B, rhs),
-                    Air::$instr,
-                    Air::PushIReg {
-                        dst,
-                        kind: self.output(),
-                        src: Reg::A,
-                    },
-                ]);
             }
         }
 
@@ -313,67 +397,13 @@ macro_rules! impl_prim_bin_op_visitor {
                 ctx.ins_set([
                     Air::MovIVar(Reg::A, rhs, self.input()),
                     Air::MovIVar(Reg::B, lhs, self.input()),
-                    Air::$instr,
+                    Air::$instr(self.input()),
                     Air::PushIReg {
                         dst,
-                        kind: self.output(),
+                        width: self.output(),
                         src: Reg::A,
                     },
                 ]);
-            }
-        }
-
-        impl BinOpLeaf<Reg, i64> for $name {
-            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: Reg, rhs: i64) {
-                if lhs == Reg::A {
-                    ctx.ins_set([
-                        Air::SwapReg,
-                        Air::MovIConst(Reg::A, rhs),
-                        Air::$instr,
-                        Air::PushIReg {
-                            dst,
-                            kind: self.output(),
-                            src: Reg::A,
-                        },
-                    ]);
-                } else {
-                    ctx.ins_set([
-                        Air::MovIConst(Reg::A, rhs),
-                        Air::$instr,
-                        Air::PushIReg {
-                            dst,
-                            kind: self.output(),
-                            src: Reg::A,
-                        },
-                    ]);
-                }
-            }
-        }
-
-        impl BinOpLeaf<i64, Reg> for $name {
-            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: i64, rhs: Reg) {
-                if rhs == Reg::B {
-                    ctx.ins_set([
-                        Air::SwapReg,
-                        Air::MovIConst(Reg::B, lhs),
-                        Air::$instr,
-                        Air::PushIReg {
-                            dst,
-                            kind: self.output(),
-                            src: Reg::A,
-                        },
-                    ]);
-                } else {
-                    ctx.ins_set([
-                        Air::MovIConst(Reg::B, lhs),
-                        Air::$instr,
-                        Air::PushIReg {
-                            dst,
-                            kind: self.output(),
-                            src: Reg::A,
-                        },
-                    ]);
-                }
             }
         }
 
@@ -385,10 +415,10 @@ macro_rules! impl_prim_bin_op_visitor {
 
                 ctx.ins_set([
                     Air::MovIVar(Reg::A, rhs, self.input()),
-                    Air::$instr,
+                    Air::$instr(self.input()),
                     Air::PushIReg {
                         dst,
-                        kind: self.output(),
+                        width: self.output(),
                         src: Reg::A,
                     },
                 ]);
@@ -398,27 +428,18 @@ macro_rules! impl_prim_bin_op_visitor {
         impl BinOpLeaf<OffsetVar, Reg> for $name {
             fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: OffsetVar, rhs: Reg) {
                 if rhs == Reg::B {
-                    ctx.ins_set([
-                        Air::SwapReg,
-                        Air::MovIVar(Reg::B, lhs, self.input()),
-                        Air::$instr,
-                        Air::PushIReg {
-                            dst,
-                            kind: self.output(),
-                            src: Reg::A,
-                        },
-                    ]);
-                } else {
-                    ctx.ins_set([
-                        Air::MovIVar(Reg::B, lhs, self.input()),
-                        Air::$instr,
-                        Air::PushIReg {
-                            dst,
-                            kind: self.output(),
-                            src: Reg::A,
-                        },
-                    ]);
+                    ctx.ins(Air::SwapReg);
                 }
+
+                ctx.ins_set([
+                    Air::MovIVar(Reg::B, lhs, self.input()),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
             }
         }
 
@@ -430,10 +451,213 @@ macro_rules! impl_prim_bin_op_visitor {
                 }
 
                 ctx.ins_set([
-                    Air::$instr,
+                    Air::$instr(self.input()),
                     Air::PushIReg {
                         dst,
-                        kind: self.output(),
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_prim_bin_op_visitor {
+    ($name:ident, $instr:ident, $op:tt) => {
+        impl AllPrimBinOpLeaves for $name {}
+
+        impl BinOpLeaf<i64, i64> for $name {
+            fn visit_leaf(&self, _ctx: &mut AirCtx, _dst: OffsetVar, _lhs: i64, _rhs: i64) {
+                todo!();
+                //let result = match self.input() {
+                //    Width::W32 => { f64::from_bits((f32::from_bits(lhs.to_bits() as u32) $op f32::from_bits(rhs.to_bits() as u32)).to_bits() as u64) }
+                //    Width::W64 => { lhs $op rhs }
+                //    _ => unreachable!(),
+                //};
+
+                //ctx.ins(Air::PushIConst(dst, ConstData::Bits(Bits::from_width(result as u64, self.output()))));
+            }
+        }
+
+        impl BinOpLeaf<i64, OffsetVar> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: i64, rhs: OffsetVar) {
+                ctx.ins_set([
+                    Air::MovIVar(Reg::A, rhs, self.input()),
+                    Air::MovIConst(
+                        Reg::B,
+                        ConstData::Bits(Bits::from_width(lhs as u64, self.input())),
+                    ),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+
+        impl BinOpLeaf<OffsetVar, i64> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: OffsetVar, rhs: i64) {
+                ctx.ins_set([
+                    Air::MovIVar(Reg::A, lhs, self.input()),
+                    Air::MovIConst(
+                        Reg::B,
+                        ConstData::Bits(Bits::from_width(rhs as u64, self.input())),
+                    ),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+
+        impl BinOpLeaf<Reg, i64> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: Reg, rhs: i64) {
+                if lhs == Reg::A {
+                    ctx.ins(Air::SwapReg);
+                }
+
+                ctx.ins_set([
+                    Air::MovIConst(
+                        Reg::A,
+                        ConstData::Bits(Bits::from_width(rhs as u64, self.input())),
+                    ),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+
+        impl BinOpLeaf<i64, Reg> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: i64, rhs: Reg) {
+                if rhs == Reg::B {
+                    ctx.ins(Air::SwapReg);
+                }
+
+                ctx.ins_set([
+                    Air::MovIConst(
+                        Reg::B,
+                        ConstData::Bits(Bits::from_width(lhs as u64, self.input())),
+                    ),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_float_bin_op_visitor {
+    ($name:ident, $instr:ident, $op:tt) => {
+        impl AllFloatBinOpLeaves for $name {}
+
+        impl BinOpLeaf<f64, f64> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: f64, rhs: f64) {
+                let result = match self.0 {
+                    Width::W32 => { f64::from_bits((f32::from_bits(lhs.to_bits() as u32) $op f32::from_bits(rhs.to_bits() as u32)).to_bits() as u64) }
+                    Width::W64 => { lhs $op rhs }
+                    _ => unreachable!(),
+                };
+
+                ctx.ins(Air::PushIConst(dst, ConstData::Bits(Bits::from_width_float(result, self.0))));
+            }
+        }
+
+        impl BinOpLeaf<f64, OffsetVar> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: f64, rhs: OffsetVar) {
+                ctx.ins(Air::MovIConst(
+                    Reg::B,
+                    ConstData::Bits(Bits::from_width_float(lhs, self.0)),
+                ));
+
+                ctx.ins_set([
+                    Air::MovIVar(Reg::A, rhs, self.input()),
+                    //Air::MovIConst(Reg::B, unsafe { std::mem::transmute(lhs) }),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+
+        impl BinOpLeaf<OffsetVar, f64> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: OffsetVar, rhs: f64) {
+                ctx.ins(Air::MovIConst(
+                    Reg::B,
+                    ConstData::Bits(Bits::from_width_float(rhs, self.0)),
+                ));
+
+                ctx.ins_set([
+                    Air::MovIVar(Reg::A, lhs, self.input()),
+                    //Air::MovIConst(Reg::B, unsafe { std::mem::transmute(rhs) }),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+
+        impl BinOpLeaf<Reg, f64> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: Reg, rhs: f64) {
+                if lhs == Reg::A {
+                    ctx.ins(Air::SwapReg);
+                }
+
+                ctx.ins(Air::MovIConst(
+                    Reg::A,
+                    ConstData::Bits(Bits::from_width_float(rhs, self.0)),
+                ));
+
+                ctx.ins_set([
+                    //Air::MovIConst(Reg::A, unsafe { std::mem::transmute(rhs) }),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
+                        src: Reg::A,
+                    },
+                ]);
+            }
+        }
+
+        impl BinOpLeaf<f64, Reg> for $name {
+            fn visit_leaf(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: f64, rhs: Reg) {
+                if rhs == Reg::B {
+                    ctx.ins(Air::SwapReg);
+                }
+
+                ctx.ins(Air::MovIConst(
+                    Reg::B,
+                    ConstData::Bits(Bits::from_width_float(lhs, self.0)),
+                ));
+
+                ctx.ins_set([
+                    //Air::MovIConst(Reg::B, unsafe { std::mem::transmute(lhs) }),
+                    Air::$instr(self.input()),
+                    Air::PushIReg {
+                        dst,
+                        width: self.output(),
                         src: Reg::A,
                     },
                 ]);

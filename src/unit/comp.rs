@@ -24,14 +24,18 @@ impl CompUnit {
             items: &'a [Item],
             log: bool,
         ) -> Result<(), Vec<Diag<'a>>> {
-            let (ctx, key) = ir::lower(&buf, items).map_err(|_| Vec::new())?;
+            let (ctx, key, const_eval_order) = ir::lower(&buf, items).map_err(|_| Vec::new())?;
             let mut air_ctx = AirCtx::new(&ctx, &key);
+            let consts = const_eval_order
+                .into_iter()
+                .flat_map(|id| air::lower_const(&mut air_ctx, ctx.tys.get_const(id).unwrap()))
+                .collect::<Vec<_>>();
             let air_funcs = ctx
                 .funcs
                 .iter()
                 .map(|func| air::lower_func(&mut air_ctx, func))
                 .collect::<Vec<_>>();
-            let exit = interp::run(&ctx, &air_funcs, log).unwrap();
+            let exit = interp::run(&ctx, &air_funcs, &consts, log).unwrap();
             println!("exit: {exit}");
 
             //io::write("out.o", &codegen::codegen(&ctx, &key, &air_funcs)).unwrap();

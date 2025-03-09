@@ -44,8 +44,10 @@ pub enum TokenKind {
     OpenCurly,
     /// `}`
     CloseCurly,
-    /// `0`..`9`
+    /// [`0`..`9` .. ]
     Int,
+    /// [`0`..`9` .. [.] .. ]
+    Float,
     /// `"I am a string literal!"`
     Str,
     /// `<a..z | A..Z>[a..z | A..Z | 0..9]`
@@ -105,8 +107,9 @@ impl TokenKind {
             Self::True => "true",
             Self::False => "false",
 
-            Self::Int => "integer literal",
-            Self::Str => "string literal",
+            Self::Int => "integer",
+            Self::Float => "float",
+            Self::Str => "string",
             Self::Ident => "identifier",
         }
     }

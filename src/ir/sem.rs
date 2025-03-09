@@ -68,12 +68,19 @@ impl<'a> Deref for SemCtx<'a> {
 }
 
 fn entry<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
-    if !ctx
+    if let Some(func) = ctx
         .funcs
         .iter()
         .find(|f| ctx.expect_ident(f.sig.ident) == "main")
-        .is_some()
     {
+        if func.sig.params.len() > 0 {
+            Err(ctx.report_error(func.sig.span, "`main` cannot have any parameters"))
+        } else if func.sig.ty != ctx.tys.get_ty_id(&Ty::Int(IntTy::new_32(Sign::I))).unwrap() {
+            Err(ctx.report_error(func.sig.span, "`main` must return `i32`"))
+        } else {
+            Ok(())
+        }
+    } else {
         let help = "consider adding a `main: () [-> i32]` function";
         let error = "could not find entry point `main`";
 
@@ -86,8 +93,6 @@ fn entry<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
                 .report_error(Span::empty(), error)
                 .wrap(ctx.report_help(ctx.token_buffer().last().unwrap(), help)))
         }
-    } else {
-        Ok(())
     }
 }
 

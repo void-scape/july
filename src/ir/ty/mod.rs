@@ -1,3 +1,5 @@
+use crate::air::IntKind;
+
 use self::store::TyId;
 use super::ctx::Ctx;
 use super::ident::IdentId;
@@ -12,6 +14,7 @@ pub mod store;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ty<'a> {
     Int(IntTy),
+    Float(FloatTy),
     Struct(StructId),
     Ref(&'a Ty<'a>),
     Bool,
@@ -32,6 +35,7 @@ impl<'a> Ty<'a> {
                 _ => Self::PTR_SIZE,
             },
             Self::Int(int) => int.size(),
+            Self::Float(float) => float.size(),
             Self::Str => panic!("size of str is unknown"),
             Self::Struct(id) => ctx.tys.struct_layout(*id).size,
         }
@@ -39,6 +43,10 @@ impl<'a> Ty<'a> {
 
     pub fn is_int(&self) -> bool {
         matches!(self, Self::Int(_))
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::Float(_))
     }
 
     pub fn is_ref(&self) -> bool {
@@ -51,7 +59,7 @@ impl<'a> Ty<'a> {
             Self::Int(ty) => *ty,
             Self::Bool => IntTy::BOOL,
             Self::Ref(_) => IntTy::PTR,
-            ty => panic!("expected int, got {:?}", ty),
+            _ => panic!("expected int, got {:?}", self),
         }
     }
 
@@ -70,6 +78,7 @@ impl<'a> Ty<'a> {
             Self::Ref(inner) => format!("&{}", inner.to_string(ctx)),
             Self::Str => "str".to_string(),
             Self::Int(int) => int.as_str().to_string(),
+            Self::Float(float) => float.as_str().to_string(),
             Self::Struct(s) => ctx.expect_ident(ctx.tys.strukt(*s).name.id).to_string(),
         }
     }
@@ -94,32 +103,33 @@ impl<'a> Ty<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntTy {
-    pub sign: Sign,
-    pub width: IWidth,
+    sign: Sign,
+    width: Width,
 }
 
 impl IntTy {
     pub const BOOL: Self = IntTy::new_8(Sign::U);
     pub const PTR: Self = IntTy::new_64(Sign::I);
+    pub const ISIZE: Self = IntTy::new_64(Sign::I);
 
-    pub const fn new(sign: Sign, width: IWidth) -> Self {
+    pub const fn new(sign: Sign, width: Width) -> Self {
         Self { sign, width }
     }
 
     pub const fn new_8(sign: Sign) -> Self {
-        Self::new(sign, IWidth::W8)
+        Self::new(sign, Width::W8)
     }
 
     pub const fn new_16(sign: Sign) -> Self {
-        Self::new(sign, IWidth::W16)
+        Self::new(sign, Width::W16)
     }
 
     pub const fn new_32(sign: Sign) -> Self {
-        Self::new(sign, IWidth::W32)
+        Self::new(sign, Width::W32)
     }
 
     pub const fn new_64(sign: Sign) -> Self {
-        Self::new(sign, IWidth::W64)
+        Self::new(sign, Width::W64)
     }
 
     pub const fn size(&self) -> usize {
@@ -130,19 +140,27 @@ impl IntTy {
         Layout::splat(self.size())
     }
 
+    pub const fn width(&self) -> Width {
+        self.width
+    }
+
+    pub const fn sign(&self) -> Sign {
+        self.sign
+    }
+
     pub const fn as_str(&self) -> &'static str {
         match self.sign {
             Sign::I => match self.width {
-                IWidth::W8 => "i8",
-                IWidth::W16 => "i16",
-                IWidth::W32 => "i32",
-                IWidth::W64 => "i64",
+                Width::W8 => "i8",
+                Width::W16 => "i16",
+                Width::W32 => "i32",
+                Width::W64 => "i64",
             },
             Sign::U => match self.width {
-                IWidth::W8 => "u8",
-                IWidth::W16 => "u16",
-                IWidth::W32 => "u32",
-                IWidth::W64 => "u64",
+                Width::W8 => "u8",
+                Width::W16 => "u16",
+                Width::W32 => "u32",
+                Width::W64 => "u64",
             },
         }
     }
@@ -155,20 +173,56 @@ pub enum Sign {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IWidth {
+pub enum Width {
     W8,
     W16,
     W32,
     W64,
 }
 
-impl IWidth {
+impl Width {
+    pub const BOOL: Self = Self::W8;
+    pub const PTR: Self = Self::W64;
+
     pub const fn bytes(&self) -> usize {
         match self {
             Self::W8 => 1,
             Self::W16 => 2,
             Self::W32 => 4,
             Self::W64 => 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FloatTy {
+    F32,
+    F64,
+}
+
+impl FloatTy {
+    pub const fn size(&self) -> usize {
+        match self {
+            Self::F32 => 4,
+            Self::F64 => 8,
+        }
+    }
+
+    pub const fn layout(&self) -> Layout {
+        Layout::splat(self.size())
+    }
+
+    pub const fn width(&self) -> Width {
+        match self {
+            Self::F32 => Width::W32,
+            Self::F64 => Width::W64,
+        }
+    }
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
         }
     }
 }
@@ -183,9 +237,18 @@ pub struct TypeKey {
 
 // TODO: rename to VarPath
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VarHash {
-    ident: IdentId,
-    func: FuncHash,
+pub enum VarHash {
+    Func { ident: IdentId, func: FuncHash },
+    Const(IdentId),
+}
+
+impl VarHash {
+    pub fn ident(&self) -> IdentId {
+        match self {
+            Self::Func { ident, .. } => *ident,
+            Self::Const(id) => *id,
+        }
+    }
 }
 
 impl TypeKey {
@@ -197,7 +260,8 @@ impl TypeKey {
     pub fn ty(&self, ident: IdentId, func: FuncHash) -> TyId {
         *self
             .key
-            .get(&VarHash { ident, func })
+            .get(&VarHash::Func { ident, func })
+            .or_else(|| self.key.get(&VarHash::Const(ident)))
             .expect("variable is not keyed")
     }
 }

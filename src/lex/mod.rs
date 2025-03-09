@@ -1,7 +1,9 @@
 use crate::unit::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
+use winnow::ascii::{dec_int, float, hex_digit1};
 use winnow::combinator::{delimited, preceded};
+use winnow::error::ContextError;
 use winnow::stream::Stream;
 use winnow::{combinator::alt, stream::AsChar, token::take_while, LocatingSlice, PResult, Parser};
 
@@ -115,14 +117,14 @@ fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 }
 
 fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (_, span) = alt((
-        preceded("0x", take_while(1.., AsChar::is_dec_digit)),
-        take_while(1.., AsChar::is_dec_digit),
+    let (kind, span) = alt((
+        preceded("0x", take_while(1.., AsChar::is_hex_digit)).map(|_| TokenKind::Int),
+        float.map(|_: f64| TokenKind::Float),
     ))
     .with_span()
     .parse_next(input)?;
 
-    Ok(Token::new(TokenKind::Int, Span::from_range(span)))
+    Ok(Token::new(kind, Span::from_range(span)))
 }
 
 fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {

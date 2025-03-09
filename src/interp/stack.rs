@@ -1,4 +1,6 @@
-use crate::air::{Addr, IntKind, OffsetVar, Var};
+use crate::air::{Addr, Bits, OffsetVar, Var};
+use crate::ir::ty::Width;
+use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct Stack {
@@ -49,106 +51,60 @@ impl Stack {
     /// Vars cannot overlap and their spacing is maintained by sp. Caller must uphold type safety.
     pub unsafe fn var_ptr_mut(&mut self, var: OffsetVar) -> *mut u8 {
         if var.deref {
-            self.read_int::<i64>(self.addr(var.var) + var.offset) as *const i64 as *mut u8
+            panic!();
+            //self.read_var::<u64>(var) as *const u64 as *mut u8
         } else {
             let offset = self.addr(var.var) + var.offset;
             unsafe { self.stack.as_mut_ptr().cast::<u8>().add(offset) }
         }
     }
 
-    //pub unsafe fn copy_into(&mut self, var: OffsetVar, ptr: *const u8, bytes: usize) {
-    //    let offset = self.addr(var.var) + var.offset;
-    //    let dst = self.stack.as_mut_ptr().cast::<u8>().add(offset);
-    //    std::ptr::copy_nonoverlapping(ptr, dst, bytes);
-    //}
-
-    pub fn read_some_int(&self, var: OffsetVar, kind: IntKind) -> i64 {
-        let addr = self.addr(var.var) + var.offset;
-        match kind {
-            IntKind::U8 => {
-                if var.deref {
-                    unsafe {
-                        *(self.read_int::<i64>(self.addr(var.var) + var.offset) as *const u8) as i64
-                    }
-                } else {
-                    self.read_int::<u8>(addr)
-                }
-            }
-            IntKind::U16 => self.read_int::<u16>(addr),
-            IntKind::U32 => {
-                if var.deref {
-                    unsafe {
-                        *(self.read_int::<i64>(self.addr(var.var) + var.offset) as *const u32)
-                            as i64
-                    }
-                } else {
-                    self.read_int::<u32>(addr)
-                }
-            }
-            IntKind::U64 => {
-                if var.deref {
-                    unsafe {
-                        *(self.read_int::<i64>(self.addr(var.var) + var.offset) as *const u64)
-                            as i64
-                    }
-                } else {
-                    self.read_int::<u64>(addr)
-                }
-            }
-
-            IntKind::I8 => self.read_int::<i8>(addr),
-            IntKind::I16 => self.read_int::<i16>(addr),
-            IntKind::I32 => self.read_int::<i32>(addr),
-            IntKind::I64 => self.read_int::<i64>(addr),
-        }
-    }
-
-    #[track_caller]
-    pub fn push_some_int(&mut self, var: OffsetVar, kind: IntKind, int: i64) {
-        let addr = self.addr(var.var) + var.offset;
-        match kind {
-            IntKind::U8 => {
-                self.push_int(int as u8, addr);
-            }
-            IntKind::U16 => {
-                self.push_int(int as u16, addr);
-            }
-            IntKind::U32 => {
-                self.push_int(int as u32, addr);
-            }
-            IntKind::U64 => {
-                self.push_int(int as u64, addr);
-            }
-
-            IntKind::I8 => {
-                self.push_int(int as i8, addr);
-            }
-            IntKind::I16 => {
-                self.push_int(int as i16, addr);
-            }
-            IntKind::I32 => {
-                self.push_int(int as i32, addr);
-            }
-            IntKind::I64 => {
-                self.push_int(int as i64, addr);
-            }
-        }
-    }
-
     #[track_caller]
     pub fn addr(&self, var: Var) -> usize {
-        *self.vars.get(&var).expect("invalid var")
+        *self
+            .vars
+            .get(&var)
+            .unwrap_or_else(|| panic!("invalid var: {var:?}"))
     }
 
     pub unsafe fn memcpy(&mut self, dst: usize, src: usize, bytes: usize) {
         unsafe { std::ptr::copy_nonoverlapping(src as *mut u8, dst as *mut u8, bytes) };
-        //unsafe {
-        //    std::mem::transmute::<&mut [i64], &mut [u8]>(self.stack.as_mut_slice())
-        //        .copy_within(src..src + bytes, dst)
-        //};
     }
 
-    fn read_int<I: Readable>(&self, addr: usize) -> i64 {
+    #[track_caller]
+    pub fn read_some_bits(&self, var: OffsetVar, width: Width) -> Bits {
+        if var.deref {
+            unimplemented!();
+        }
+
+        let addr = self.addr(var.var) + var.offset;
+        match width {
+            Width::W8 => self.read_bits::<u8>(addr),
+            Width::W16 => self.read_bits::<u16>(addr),
+            Width::W32 => self.read_bits::<u32>(addr),
+            Width::W64 => self.read_bits::<u64>(addr),
+        }
+    }
+
+    pub fn push_some_bits(&mut self, var: OffsetVar, bits: Bits) {
+        let addr = self.addr(var.var) + var.offset;
+        match bits {
+            Bits::B8(bits) => self.push::<u8>(bits, addr),
+            Bits::B16(bits) => self.push::<u16>(bits, addr),
+            Bits::B32(bits) => self.push::<u32>(bits, addr),
+            Bits::B64(bits) => self.push::<u64>(bits, addr),
+        }
+    }
+
+    pub fn read_var<I: Read>(&self, var: OffsetVar) -> I {
+        self.read(self.addr(var.var) + var.offset)
+    }
+
+    pub fn push_var<I: StackBits>(&mut self, var: OffsetVar, bits: I) {
+        self.push(bits, self.addr(var.var) + var.offset);
+    }
+
+    fn read<I: Read>(&self, addr: usize) -> I {
         assert!(addr < self.stack.len(), "invalid stack memory");
         I::read(
             unsafe { std::mem::transmute::<&[i64], &[u8]>(self.stack.as_slice()) },
@@ -156,7 +112,15 @@ impl Stack {
         )
     }
 
-    fn push_int<I: Stackable>(&mut self, int: I, addr: usize) {
+    fn read_bits<I: ReadBits>(&self, addr: usize) -> Bits {
+        assert!(addr < self.stack.len(), "invalid stack memory");
+        I::read_bits(
+            unsafe { std::mem::transmute::<&[i64], &[u8]>(self.stack.as_slice()) },
+            addr,
+        )
+    }
+
+    fn push<I: StackBits>(&mut self, bits: I, addr: usize) {
         let size = std::mem::size_of::<I>();
         if addr + size >= self.stack.len() {
             for _ in self.stack.len()..(addr + size) {
@@ -164,123 +128,93 @@ impl Stack {
             }
         }
 
-        int.stack(
+        bits.stack_bits(
             unsafe { std::mem::transmute::<&mut [i64], &mut [u8]>(self.stack.as_mut_slice()) },
             addr,
         );
     }
 }
 
-trait Readable {
-    fn read(stack: &[u8], addr: usize) -> i64;
+pub trait Read {
+    fn read(stack: &[u8], addr: usize) -> Self;
 }
 
-impl Readable for u8 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        (stack[addr] as u64) as i64
-    }
-}
-
-impl Readable for u16 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        unsafe {
-            (std::mem::transmute::<[u8; 2], u16>(stack[addr..addr + 2].try_into().unwrap()) as u64)
-                as i64
-        }
-    }
-}
-
-impl Readable for u32 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        unsafe {
-            (std::mem::transmute::<[u8; 4], u32>(stack[addr..addr + 4].try_into().unwrap()) as u64)
-                as i64
-        }
-    }
-}
-
-impl Readable for u64 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        unsafe {
-            std::mem::transmute::<[u8; 8], u64>(stack[addr..addr + 8].try_into().unwrap()) as i64
-        }
-    }
-}
-
-impl Readable for i8 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        stack[addr] as i64
-    }
-}
-
-impl Readable for i16 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        unsafe {
-            std::mem::transmute::<[u8; 2], i16>(stack[addr..addr + 2].try_into().unwrap()) as i64
-        }
-    }
-}
-
-impl Readable for i32 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        unsafe {
-            std::mem::transmute::<[u8; 4], i32>(stack[addr..addr + 4].try_into().unwrap()) as i64
-        }
-    }
-}
-
-impl Readable for i64 {
-    fn read(stack: &[u8], addr: usize) -> i64 {
-        unsafe { std::mem::transmute::<[u8; 8], i64>(stack[addr..addr + 8].try_into().unwrap()) }
-    }
-}
-
-trait Stackable {
-    fn stack(&self, stack: &mut [u8], addr: usize);
-}
-
-use std::collections::HashMap;
-
-use crate::impl_stackable;
-impl_stackable!(u8, u16, u32, u64);
-impl_stackable!(i8, i16, i32, i64);
-
-#[macro_export]
-macro_rules! impl_stackable {
-    ($ty8:ident, $ty16:ident, $ty32:ident, $ty64:ident) => {
-        impl Stackable for $ty8 {
-            fn stack(&self, stack: &mut [u8], addr: usize) {
-                stack[addr] = *self as u8;
-            }
-        }
-
-        impl Stackable for $ty16 {
-            fn stack(&self, stack: &mut [u8], addr: usize) {
-                stack[addr] = *self as u8;
-                stack[addr + 1] = (*self >> 8) as u8;
-            }
-        }
-
-        impl Stackable for $ty32 {
-            fn stack(&self, stack: &mut [u8], addr: usize) {
-                stack[addr] = *self as u8;
-                stack[addr + 1] = (*self >> 8) as u8;
-                stack[addr + 2] = (*self >> 16) as u8;
-                stack[addr + 3] = (*self >> 24) as u8;
-            }
-        }
-
-        impl Stackable for $ty64 {
-            fn stack(&self, stack: &mut [u8], addr: usize) {
-                stack[addr] = *self as u8;
-                stack[addr + 1] = (*self >> 8) as u8;
-                stack[addr + 2] = (*self >> 16) as u8;
-                stack[addr + 3] = (*self >> 24) as u8;
-                stack[addr + 4] = (*self >> 32) as u8;
-                stack[addr + 5] = (*self >> 40) as u8;
-                stack[addr + 6] = (*self >> 48) as u8;
-                stack[addr + 7] = (*self >> 56) as u8;
+macro_rules! impl_read {
+    ($ty:ident) => {
+        impl Read for $ty {
+            fn read(stack: &[u8], addr: usize) -> Self {
+                $ty::from_le_bytes(
+                    stack[addr..addr + std::mem::size_of::<$ty>()]
+                        .try_into()
+                        .unwrap(),
+                )
             }
         }
     };
 }
+
+impl_read!(u8);
+impl_read!(u16);
+impl_read!(u32);
+impl_read!(u64);
+impl_read!(i8);
+impl_read!(i16);
+impl_read!(i32);
+impl_read!(i64);
+impl_read!(f32);
+impl_read!(f64);
+
+trait ReadBits {
+    fn read_bits(stack: &[u8], addr: usize) -> Bits;
+}
+
+macro_rules! impl_readable {
+    ($ty:ident, Bits::$bits:ident) => {
+        impl ReadBits for $ty {
+            fn read_bits(stack: &[u8], addr: usize) -> Bits {
+                Bits::$bits(unsafe {
+                    std::mem::transmute::<[u8; std::mem::size_of::<$ty>()], $ty>(
+                        stack[addr..addr + std::mem::size_of::<$ty>()]
+                            .try_into()
+                            .unwrap(),
+                    )
+                })
+            }
+        }
+    };
+}
+
+impl_readable!(u8, Bits::B8);
+impl_readable!(u16, Bits::B16);
+impl_readable!(u32, Bits::B32);
+impl_readable!(u64, Bits::B64);
+
+pub trait StackBits {
+    fn stack_bits(&self, stack: &mut [u8], addr: usize);
+}
+
+#[macro_export]
+macro_rules! impl_stack_bits {
+    ($ty:ident) => {
+        impl StackBits for $ty {
+            fn stack_bits(&self, stack: &mut [u8], addr: usize) {
+                let bytes = self.to_le_bytes();
+                for i in 0..std::mem::size_of::<$ty>() {
+                    //println!("addr: {} = byte: {}", addr + i, bytes[i]);
+                    stack[addr + i] = bytes[i];
+                }
+            }
+        }
+    };
+}
+
+impl_stack_bits!(u8);
+impl_stack_bits!(u16);
+impl_stack_bits!(u32);
+impl_stack_bits!(u64);
+impl_stack_bits!(i8);
+impl_stack_bits!(i16);
+impl_stack_bits!(i32);
+impl_stack_bits!(i64);
+impl_stack_bits!(f32);
+impl_stack_bits!(f64);

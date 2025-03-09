@@ -17,42 +17,33 @@ pub enum Expr {
     Lit(TokenId),
     Str(TokenId),
     Bool(TokenId),
-    Bin(PBinOp, Box<Expr>, Box<Expr>),
+    Bin(BinOpKind, Box<Expr>, Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
     StructDef(StructDef),
     EnumDef(EnumDef),
     TakeRef(TokenId, Box<Expr>),
+    Access {
+        span: Span,
+        lhs: Box<Expr>,
+        field: TokenId,
+    },
     Call {
         span: Span,
         func: TokenId,
         args: Vec<Expr>,
     },
     If(TokenId, Box<Expr>, Block, Option<Block>),
-    Loop(Block),
+    Loop(TokenId, Block),
 }
 
-/// A parser `BinOp` can either be a true `BinOp` or a field accessor.
-#[derive(Debug, Clone, Copy)]
-pub struct PBinOp {
-    pub span: Span,
-    pub kind: PBinOpKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PBinOpKind {
-    Bin(BinOpKind),
-    Accessor,
-}
-
-impl From<BinOpTokens> for PBinOpKind {
+impl From<BinOpTokens> for BinOpKind {
     fn from(value: BinOpTokens) -> Self {
         match value {
-            BinOpTokens::Plus(_) => Self::Bin(BinOpKind::Add),
-            BinOpTokens::Hyphen(_) => Self::Bin(BinOpKind::Sub),
-            BinOpTokens::Asterisk(_) => Self::Bin(BinOpKind::Mul),
-            BinOpTokens::DoubleEquals(_) => Self::Bin(BinOpKind::Eq),
-            BinOpTokens::Field(_) => Self::Accessor,
+            BinOpTokens::Plus(_) => BinOpKind::Add,
+            BinOpTokens::Hyphen(_) => BinOpKind::Sub,
+            BinOpTokens::Asterisk(_) => BinOpKind::Mul,
+            BinOpTokens::DoubleEquals(_) => BinOpKind::Eq,
             _ => panic!(),
         }
     }
@@ -77,7 +68,6 @@ pub enum BinOpTokens {
     OpenParen(TokenId),
     CloseParen(TokenId),
     DoubleEquals(TokenId),
-    Field(TokenId),
 }
 
 impl BinOpTokens {
@@ -87,7 +77,6 @@ impl BinOpTokens {
             | Self::Plus(t)
             | Self::Asterisk(t)
             | Self::OpenParen(t)
-            | Self::Field(t)
             | Self::DoubleEquals(t)
             | Self::CloseParen(t) => buffer.span(*t),
         }
@@ -107,7 +96,6 @@ impl Precedence for BinOpTokens {
             | Self::OpenParen(_)
             | Self::CloseParen(_) => 1,
             Self::Asterisk(_) => 2,
-            Self::Field(_) => 3,
         }
     }
 }
@@ -157,7 +145,6 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
             Some(TokenKind::Asterisk) => Ok(BinOpTokens::Asterisk(stream.expect())),
             Some(TokenKind::OpenParen) => Ok(BinOpTokens::OpenParen(stream.expect())),
             Some(TokenKind::CloseParen) => Ok(BinOpTokens::CloseParen(stream.expect())),
-            Some(TokenKind::Dot) => Ok(BinOpTokens::Field(stream.expect())),
             kind => Err(stream.error(format!(
                 "expected binary operator, got `{}`",
                 kind.map(|k| k.as_str()).unwrap_or("???")
@@ -175,6 +162,11 @@ pub enum Term {
     Str(TokenId),
     Ident(TokenId),
     Bool(TokenId),
+    Access {
+        span: Span,
+        lhs: Box<Expr>,
+        field: TokenId,
+    },
     Call {
         span: Span,
         func: TokenId,
@@ -193,8 +185,8 @@ impl Term {
             Self::Bool(bool) => Expr::Bool(bool),
             Self::Call { span, func, args } => Expr::Call { span, func, args },
             Self::Ref(token, term) => Expr::TakeRef(token, Box::new(term.clone().into_expr())),
-            _ => todo!()
-            //Self::Deref(token, term) => Expr::Deref(token, Box::new(term.clone().into_expr())),
+            Self::Access { span, lhs, field } => Expr::Access { span, lhs, field },
+            _ => todo!(), //Self::Deref(token, term) => Expr::Deref(token, Box::new(term.clone().into_expr())),
         }
     }
 }
@@ -210,7 +202,11 @@ impl<'a> ParserRule<'a> for TermRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        match stream.peek_kind() {
+        let Some(start_span) = stream.peek().map(|t| stream.span(t)) else {
+            return Err(stream.error("expected expression term"));
+        };
+
+        let term = match stream.peek_kind() {
             Some(TokenKind::Ident) => {
                 let ident = Next::<Ident>::parse(buffer, stream, stack)?;
                 match stream.peek_kind() {
@@ -276,7 +272,7 @@ impl<'a> ParserRule<'a> for TermRule {
                     _ => Ok(Term::Ident(ident)),
                 }
             }
-            Some(TokenKind::Int) => Ok(Term::Lit(stream.expect())),
+            Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Term::Lit(stream.expect())),
             Some(TokenKind::True) | Some(TokenKind::False) => Ok(Term::Bool(stream.expect())),
             Some(TokenKind::Str) => Ok(Term::Str(stream.expect())),
             Some(TokenKind::Ampersand) => Ok(Term::Ref(
@@ -291,7 +287,30 @@ impl<'a> ParserRule<'a> for TermRule {
                     kind.map(|k| k.as_str()).unwrap_or("???")
                 ),
             )),
+        };
+
+        let mut term_result = term?;
+        while stream.match_peek::<Dot>() {
+            let dot = stream.expect();
+
+            if !stream.match_peek::<Ident>() {
+                return Err(stream.full_error(
+                    "malformed field access",
+                    buffer.span(dot),
+                    "expected identifier after `.`",
+                ));
+            }
+
+            let field = stream.expect();
+            let expr = term_result.into_expr();
+            term_result = Term::Access {
+                span: Span::from_spans(start_span, buffer.span(field)),
+                lhs: Box::new(expr),
+                field,
+            };
         }
+
+        Ok(term_result)
     }
 }
 
@@ -385,8 +404,7 @@ impl<'a> ParserRule<'a> for ExprRule {
         while stream.match_peek::<Not<Any<(Semi, CloseCurly, Comma, OpenCurly)>>>() {
             if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
                 match op {
-                    BinOpTokens::Field(_)
-                    | BinOpTokens::DoubleEquals(_)
+                    BinOpTokens::DoubleEquals(_)
                     | BinOpTokens::Hyphen(_)
                     | BinOpTokens::Plus(_)
                     | BinOpTokens::Asterisk(_) => {
@@ -466,20 +484,14 @@ impl<'a> ParserRule<'a> for ExprRule {
                 Item::Op(op) => match accum_op {
                     Some(acop) => {
                         accum_op = Some(Expr::Bin(
-                            PBinOp {
-                                span: op.span(buffer),
-                                kind: PBinOpKind::from(op),
-                            },
+                            BinOpKind::from(op),
                             Box::new(terms.pop().unwrap()),
                             Box::new(acop),
                         ));
                     }
                     None => {
                         accum_op = Some(Expr::Bin(
-                            PBinOp {
-                                span: op.span(buffer),
-                                kind: PBinOpKind::from(op),
-                            },
+                            BinOpKind::from(op),
                             Box::new(terms.pop().unwrap()),
                             Box::new(terms.pop().unwrap()),
                         ));

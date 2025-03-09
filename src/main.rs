@@ -1,4 +1,5 @@
 #![feature(maybe_uninit_slice)]
+#![feature(str_from_raw_parts)]
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 

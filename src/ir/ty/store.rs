@@ -1,10 +1,11 @@
-use super::{IntTy, Sign, VarHash};
+use super::{FloatTy, IntTy, Sign, VarHash};
 use crate::diagnostic::Diag;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::ir::mem::Layout;
 use crate::ir::strukt::{FieldMap, Struct, StructId};
 use crate::ir::ty::Ty;
+use crate::ir::Const;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +56,8 @@ pub struct TyStore<'a> {
     ty_map: HashMap<Ty<'a>, TyId>,
     tys: Vec<Ty<'a>>,
 
+    const_map: HashMap<IdentId, &'a Const<'a>>,
+
     struct_map: HashMap<IdentId, StructId>,
     struct_ty_map: HashMap<StructId, TyId>,
     structs: Vec<Struct>,
@@ -70,6 +73,8 @@ impl<'a> TyStore<'a> {
         slf.store_ty(Ty::Unit);
         slf.store_ty(Ty::Bool);
         slf.store_ty(Ty::Ref(&Ty::Str));
+        slf.store_ty(Ty::Float(FloatTy::F32));
+        slf.store_ty(Ty::Float(FloatTy::F64));
         slf.store_ty(Ty::Int(IntTy::new_8(Sign::U)));
         slf.store_ty(Ty::Int(IntTy::new_16(Sign::U)));
         slf.store_ty(Ty::Int(IntTy::new_32(Sign::U)));
@@ -99,6 +104,10 @@ impl<'a> TyStore<'a> {
         StructId(idx)
     }
 
+    pub fn store_const(&mut self, konst: &'a Const<'a>) {
+        self.const_map.insert(konst.name.id, konst);
+    }
+
     pub fn bool(&self) -> TyId {
         TyId::BOOL
     }
@@ -116,9 +125,10 @@ impl<'a> TyStore<'a> {
     }
 
     /// Used during the construction of types, where [`Ty`]s are not easily accessible.
-    pub fn builtin(&self, ident: &str) -> bool {
+    pub fn is_builtin(&self, ident: &str) -> bool {
         match ident {
-            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "bool" | "str" => true,
+            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
+            | "bool" | "str" => true,
             _ => false,
         }
     }
@@ -138,6 +148,19 @@ impl<'a> TyStore<'a> {
 
     pub fn get_ty_id(&self, ty: &Ty<'a>) -> Option<TyId> {
         self.ty_map.get(ty).copied()
+    }
+
+    #[track_caller]
+    pub fn builtin(&self, ty: Ty<'a>) -> TyId {
+        self.get_ty_id(&ty).expect("invalid builtin type")
+    }
+
+    pub fn get_const(&self, id: IdentId) -> Option<&Const> {
+        self.const_map.get(&id).copied()
+    }
+
+    pub fn consts(&self) -> impl Iterator<Item = &&'a Const<'a>> {
+        self.const_map.values()
     }
 
     #[track_caller]
@@ -256,6 +279,9 @@ impl<'a> TyStore<'a> {
                 }
                 Ty::Int(int) => {
                     struct_layouts.push(int.layout());
+                }
+                Ty::Float(float) => {
+                    struct_layouts.push(float.layout());
                 }
                 Ty::Bool => {
                     struct_layouts.push(Layout::splat(1));

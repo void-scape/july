@@ -1,5 +1,3 @@
-use anstream::println;
-
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
 use crate::diagnostic::{Diag, Msg};
@@ -10,7 +8,6 @@ use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*};
 use crate::parse_help;
 use std::panic::Location;
 
-/// Function that takes a set of parameters and optionally returns a value.
 #[derive(Debug)]
 pub struct Func {
     pub span: Span,
@@ -44,17 +41,14 @@ pub enum Attr {
     Intrinsic,
 }
 
-/// Function that is externally defined, using `extern`.
 #[derive(Debug)]
 pub struct ExternFunc {
     pub span: Span,
     pub name: TokenId,
-    //pub attributes: Vec<Attr>,
     pub ty: Option<PType>,
     pub params: Vec<Param>,
     pub convention: TokenId,
     pub link: Option<TokenId>,
-    //pub block: Block,
 }
 
 impl ExternFunc {
@@ -95,16 +89,12 @@ impl<'a> ParserRule<'a> for FnRule {
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
         match Spanned::<(
-            //Reported<Next<Fn>, MissingFn>,
             Next<Ident>,
             Next<Colon>,
             ParamsRule,
-            //Next<OpenParen>,
-            //Next<CloseParen>,
             XNor<(
                 Reported<Next<Hyphen>, FnType>,
                 Reported<Next<Greater>, FnType>,
-                //Reported<Next<Colon>, DoubleColon>,
                 Reported<TypeRule, MissingType>,
             )>,
         )>::parse(buffer, stream, stack)
@@ -177,7 +167,6 @@ impl<'a> ParserRule<'a> for ExternFnRule {
                     XNor<(
                         Reported<Next<Hyphen>, FnType>,
                         Reported<Next<Greater>, FnType>,
-                        //Reported<Next<Colon>, DoubleColon>,
                         Reported<TypeRule, MissingType>,
                     )>,
                     Next<Semi>,
@@ -195,7 +184,6 @@ impl<'a> ParserRule<'a> for ExternFnRule {
                         let (name, _, params, ty, _) = spanned.into_inner();
                         ExternFunc {
                             ty: ty.map(|(_, _, t)| t),
-                            //attributes: Vec::new(),
                             params,
                             span,
                             name,
@@ -293,69 +281,3 @@ parse_help!(
     "expected a type binding for parameter",
     "consider adding `: <type>`"
 );
-
-//struct TyParamsRule;
-//
-//impl<'a> ParserRule<'a> for TyParamsRule {
-//    type Output = Vec<PType>;
-//
-//    fn parse(
-//        buffer: &'a TokenBuffer<'a>,
-//        stream: &mut TokenStream<'a>,
-//        stack: &mut Vec<TokenId>,
-//    ) -> RResult<'a, Self::Output> {
-//        let str = *stream;
-//        match Next::<OpenParen>::parse(buffer, stream, stack) {
-//            Err(err) => {
-//                *stream = str;
-//                return Err(err);
-//            }
-//            Ok(_) => {}
-//        }
-//        if !stream.match_peek::<CloseParen>() {
-//            let index = stream.find_matched_delim_offset::<Paren>();
-//            let mut slice = stream.slice(index);
-//            let params =
-//                match While::<NextToken<Not<CloseParen>>, (TypeRule, Opt<Next<Comma>>)>::parse(
-//                    buffer, &mut slice, stack,
-//                ) {
-//                    Err(err) => {
-//                        *stream = str;
-//                        return Err(err);
-//                    }
-//                    Ok(args) => args,
-//                };
-//
-//            stream.eat_until_consume::<CloseParen>();
-//            if params.len() > 1 {
-//                for (i, (ty, comma)) in params.iter().enumerate() {
-//                    if i < params.len() - 1 {
-//                        if comma.is_none() {
-//                            return Err(Diag::sourced(
-//                                PARSE_ERR,
-//                                buffer.source(),
-//                                Msg::error(
-//                                    ty.span(buffer),
-//                                    "expected comma after parameter, before next parameter",
-//                                ),
-//                            )
-//                            .loc(Location::caller()));
-//                        }
-//                    }
-//                }
-//            }
-//
-//            Ok(params.into_iter().map(|(ty, _)| ty).collect())
-//        } else {
-//            match Next::<CloseParen>::parse(buffer, stream, stack) {
-//                Err(err) => {
-//                    *stream = str;
-//                    return Err(err);
-//                }
-//                Ok(_) => {}
-//            };
-//
-//            Ok(Vec::new())
-//        }
-//    }
-//}

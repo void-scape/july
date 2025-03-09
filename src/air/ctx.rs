@@ -1,10 +1,10 @@
 use super::data::{Bss, BssEntry};
-use super::{Air, AirFunc, AirFuncBuilder, Args, BlockId, IntKind, OffsetVar, Reg, Var};
+use super::{Air, AirFunc, AirFuncBuilder, Args, BlockId, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::ir::sig::Sig;
 use crate::ir::ty::store::TyId;
-use crate::ir::ty::{Ty, TypeKey};
+use crate::ir::ty::{Ty, TypeKey, VarHash, Width};
 use crate::ir::{self, *};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -17,11 +17,11 @@ pub struct AirCtx<'a> {
     ctx: &'a Ctx<'a>,
     key: &'a TypeKey,
     var_index: usize,
-    var_map: HashMap<(FuncHash, IdentId), Var>,
+    var_map: HashMap<VarHash, Var>,
     ty_map: HashMap<Var, TyId>,
     bss: Bss,
     func: Option<FuncHash>,
-    func_builder: Option<AirFuncBuilder<'a>>,
+    instr_builder: InstrBuilder<'a>,
 }
 
 impl<'a> AirCtx<'a> {
@@ -34,49 +34,75 @@ impl<'a> AirCtx<'a> {
             ty_map: HashMap::default(),
             bss: Bss::default(),
             func: None,
-            func_builder: None,
+            instr_builder: InstrBuilder::Const(Vec::new()),
         }
     }
 
     #[track_caller]
     pub fn active_sig(&self) -> &'a Sig<'a> {
-        self.func_builder.as_ref().expect("no active func").func.sig
+        match &self.instr_builder {
+            InstrBuilder::Func(b) => b.func.sig,
+            InstrBuilder::Const(_) => panic!("cannot call function in const setting"),
+        }
     }
 
-    pub fn start(&mut self, func: &'a ir::Func) -> BlockId {
+    pub fn start_func(&mut self, func: &'a ir::Func) -> BlockId {
         self.func = Some(func.hash());
         let mut builder = AirFuncBuilder::new(func);
         let id = builder.new_block();
-        self.func_builder = Some(builder);
+        self.instr_builder = InstrBuilder::Func(builder);
         id
     }
 
+    pub fn start_const(&mut self) {
+        self.func = None;
+        self.instr_builder = InstrBuilder::Const(Vec::new());
+    }
+
     #[track_caller]
-    pub fn finish(&mut self) -> AirFunc<'a> {
-        self.func_builder
-            .take()
-            .expect("cannot finish with no builder")
-            .build()
+    pub fn finish_func(&mut self) -> AirFunc<'a> {
+        match &mut self.instr_builder {
+            InstrBuilder::Func(b) => b.build(),
+            InstrBuilder::Const(_) => panic!("called `finish_func` with const builder"),
+        }
+    }
+
+    #[track_caller]
+    pub fn finish_const(&mut self) -> Vec<Air<'a>> {
+        match &mut self.instr_builder {
+            InstrBuilder::Const(instrs) => std::mem::take(instrs),
+            InstrBuilder::Func(_) => panic!("called `finish_const` with func builder"),
+        }
+    }
+
+    #[track_caller]
+    fn expect_func_builder(&'a self) -> &'a AirFuncBuilder<'a> {
+        match &self.instr_builder {
+            InstrBuilder::Func(b) => b,
+            InstrBuilder::Const(_) => panic!("called `expect_func_builder` with const builder"),
+        }
+    }
+
+    #[track_caller]
+    fn expect_func_builder_mut(&mut self) -> &mut AirFuncBuilder<'a> {
+        match &mut self.instr_builder {
+            InstrBuilder::Func(b) => b,
+            InstrBuilder::Const(_) => panic!("called `expect_func_builder` with const builder"),
+        }
     }
 
     #[track_caller]
     pub fn new_block(&mut self) -> BlockId {
-        self.func_builder
-            .as_mut()
-            .expect("init func builder")
-            .new_block()
+        self.expect_func_builder_mut().new_block()
     }
 
     pub fn ins_in_block(&mut self, block: BlockId, ins: Air<'a>) {
-        self.func_builder
-            .as_mut()
-            .expect("init func builder")
-            .insert(block, ins);
+        self.expect_func_builder_mut().insert(block, ins);
     }
 
     #[track_caller]
     pub fn active_block(&self) -> BlockId {
-        let builder = self.func_builder.as_ref().expect("init func builder");
+        let builder = self.expect_func_builder();
 
         if builder.instrs.is_empty() {
             panic!("expected an active block");
@@ -99,26 +125,37 @@ impl<'a> AirCtx<'a> {
         ty: TyId,
     ) -> Var {
         let var = self.anon_var(ty);
-        assert!(self.var_map.get(&(hash, ident)).is_none());
-        self.var_map.insert((hash, ident), var);
+        let hash = VarHash::Func { func: hash, ident };
+        assert!(self.var_map.get(&hash).is_none());
+        self.var_map.insert(hash, var);
         var
     }
 
     pub fn new_var_registered_no_salloc(&mut self, ident: IdentId, ty: TyId) -> Var {
         let func = self.func.expect("AirCtx func hash not set is `lower_func`");
         let var = self.anon_var_no_salloc(ty);
-        assert!(self.var_map.get(&(func, ident)).is_none());
-        self.var_map.insert((func, ident), var);
+        let hash = VarHash::Func { func, ident };
+        assert!(self.var_map.get(&hash).is_none());
+        self.var_map.insert(hash, var);
         var
     }
 
     #[track_caller]
     pub fn new_var_registered(&mut self, ident: IdentId, ty: TyId) -> Var {
-        let func = self.func.expect("AirCtx func hash not set is `lower_func`");
-        let var = self.anon_var(ty);
-        assert!(self.var_map.get(&(func, ident)).is_none());
-        self.var_map.insert((func, ident), var);
-        var
+        if matches!(self.instr_builder, InstrBuilder::Func(_)) {
+            let func = self.func.expect("AirCtx func hash not set is `lower_func`");
+            let var = self.anon_var(ty);
+            let hash = VarHash::Func { func, ident };
+            assert!(self.var_map.get(&hash).is_none());
+            self.var_map.insert(hash, var);
+            var
+        } else {
+            let var = self.anon_var(ty);
+            let hash = VarHash::Const(ident);
+            assert!(self.var_map.get(&hash).is_none());
+            self.var_map.insert(hash, var);
+            var
+        }
     }
 
     pub fn anon_var_no_salloc(&mut self, ty: TyId) -> Var {
@@ -143,13 +180,19 @@ impl<'a> AirCtx<'a> {
         )
     }
 
-    pub fn get_var_with_hash(&self, ident: IdentId, hash: FuncHash) -> Option<Var> {
-        self.var_map.get(&(hash, ident)).copied()
+    pub fn get_const(&self, ident: IdentId) -> Option<Var> {
+        self.var_map.get(&VarHash::Const(ident)).copied()
+    }
+
+    pub fn get_var_with_hash(&self, ident: IdentId, func: FuncHash) -> Option<Var> {
+        self.var_map.get(&VarHash::Func { func, ident }).copied()
     }
 
     #[track_caller]
     pub fn expect_var(&self, ident: IdentId) -> Var {
-        self.get_var(ident).expect("invalid var ident")
+        self.get_var(ident)
+            .or_else(|| self.get_const(ident))
+            .expect("invalid var ident")
     }
 
     #[track_caller]
@@ -174,37 +217,33 @@ pub const RET_REG: Reg = Reg::A;
 
 impl<'a> AirCtx<'a> {
     pub fn ins(&mut self, instr: Air<'a>) {
-        self.func_builder
-            .as_mut()
-            .expect("init func builder")
-            .insert_active(instr);
+        match &mut self.instr_builder {
+            InstrBuilder::Const(instrs) => instrs.push(instr),
+            InstrBuilder::Func(b) => b.insert_active(instr),
+        }
     }
 
     pub fn ins_set(&mut self, instrs: impl IntoIterator<Item = Air<'a>>) {
-        self.func_builder
-            .as_mut()
-            .expect("init func builder")
-            .insert_active_set(instrs);
+        match &mut self.instr_builder {
+            InstrBuilder::Const(konst) => konst.extend(instrs),
+            InstrBuilder::Func(b) => b.insert_active_set(instrs),
+        }
     }
 
     pub fn ret_var(&mut self, var: OffsetVar, ty: TyId) {
         match self.tys.ty(ty) {
-            Ty::Bool => self.ret_ivar(var, IntKind::I64),
-            Ty::Int(ty) => self.ret_ivar(var, ty.kind()),
-            Ty::Ref(_) => self.ret_ivar(var, IntKind::PTR),
+            Ty::Bool => self.ret_ivar(var, Width::BOOL),
+            Ty::Int(ty) => self.ret_ivar(var, ty.width()),
+            Ty::Float(ty) => self.ret_ivar(var, ty.width()),
+            Ty::Ref(_) => self.ret_ivar(var, Width::PTR),
             Ty::Struct(_) => self.ret_ptr(var),
             Ty::Unit => panic!("cannot return unit"),
             Ty::Str => panic!("cannot return str"),
         }
     }
 
-    pub fn ret_iconst(&mut self, val: i64) {
-        self.ins(Air::MovIConst(RET_REG, val));
-        self.ins(Air::Ret);
-    }
-
-    pub fn ret_ivar(&mut self, var: OffsetVar, kind: IntKind) {
-        self.ins(Air::MovIVar(RET_REG, var, kind));
+    pub fn ret_ivar(&mut self, var: OffsetVar, width: Width) {
+        self.ins(Air::MovIVar(RET_REG, var, width));
         self.ins(Air::Ret);
     }
 
@@ -224,4 +263,9 @@ impl<'a> Deref for AirCtx<'a> {
     fn deref(&self) -> &Self::Target {
         &self.ctx
     }
+}
+
+enum InstrBuilder<'a> {
+    Func(AirFuncBuilder<'a>),
+    Const(Vec<Air<'a>>),
 }

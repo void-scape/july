@@ -1,3 +1,4 @@
+use super::expr::{Expr, ExprRule};
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
 use crate::lex::buffer::*;
@@ -10,7 +11,7 @@ pub struct Const {
     pub span: Span,
     pub name: TokenId,
     pub ty: PType,
-    pub expr: TokenId,
+    pub expr: Expr,
 }
 
 /// <ident> : const <type> = <const-expr>;
@@ -32,7 +33,7 @@ impl<'a> ParserRule<'a> for ConstRule {
             Next<matc::Const>,
             TypeRule,
             Next<Equals>,
-            Next<Int>,
+            ExprRule,
             Next<Semi>,
         )>::parse(buffer, stream, stack)?;
         let span = spanned.span();

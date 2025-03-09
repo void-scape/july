@@ -16,41 +16,7 @@ where
 
     fn expect() -> String {
         let kind = T::kind();
-        match kind {
-            TokenKind::Let
-            | TokenKind::Extern
-            | TokenKind::Enum
-            | TokenKind::Struct
-            | TokenKind::Fn
-            | TokenKind::Ret
-            | TokenKind::Semi
-            | TokenKind::Colon
-            | TokenKind::Equals
-            | TokenKind::OpenParen
-            | TokenKind::CloseParen
-            | TokenKind::OpenBracket
-            | TokenKind::CloseBracket
-            | TokenKind::OpenCurly
-            | TokenKind::CloseCurly
-            | TokenKind::Plus
-            | TokenKind::Slash
-            | TokenKind::Hyphen
-            | TokenKind::Greater
-            | TokenKind::Comma
-            | TokenKind::Dot
-            | TokenKind::If
-            | TokenKind::Else
-            | TokenKind::True
-            | TokenKind::False
-            | TokenKind::Pound
-            | TokenKind::Ampersand
-            | TokenKind::Str
-            | TokenKind::Loop
-            | TokenKind::Const
-            | TokenKind::Asterisk => format!("expected `{}`", kind.as_str()),
-            TokenKind::Int => format!("expected {} (e.g. `14`)", kind.as_str()),
-            TokenKind::Ident => format!("expected {}", kind.as_str()),
-        }
+        format!("expected `{}`", kind.as_str())
     }
 }
 

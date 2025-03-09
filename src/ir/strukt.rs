@@ -39,14 +39,14 @@ pub struct Field {
     pub ty: TyId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct StructDef<'a> {
     pub span: Span,
     pub id: StructId,
     pub fields: &'a [FieldDef<'a>],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct FieldDef<'a> {
     pub span: Span,
     pub name: Ident,

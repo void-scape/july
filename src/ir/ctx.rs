@@ -8,7 +8,7 @@ use crate::arena::BlobArena;
 use crate::diagnostic::{Diag, Msg, Sourced};
 use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use annotate_snippets::Level;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Ctx<'a> {
