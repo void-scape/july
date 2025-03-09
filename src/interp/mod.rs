@@ -10,6 +10,7 @@ use libffi::middle::{Arg, Cif, Type};
 use stack::*;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_void};
+use std::ops::BitXor;
 
 mod stack;
 
@@ -247,6 +248,9 @@ fn entry(
                                                             print!("{}", stack.read_var::<f64>(var))
                                                         }
                                                     },
+                                                    Ty::Bool => {
+                                                        print!("{}", stack.read_var::<u8>(var) == 1)
+                                                    }
                                                     ty => unimplemented!("printf arg: {ty:?}"),
                                                 }
                                             }
@@ -356,7 +360,11 @@ fn entry(
                                         Ty::Struct(id) => {
                                             let bytes = ctx.tys.struct_layout(id).size;
                                             let addr = stack.anon_alloc(bytes);
-                                            stack.memcpy(addr as usize, result as usize, bytes);
+                                            stack.memcpy(
+                                                addr as usize,
+                                                &result as *const u64 as usize,
+                                                bytes,
+                                            );
                                             rega.w(addr as u64);
                                         }
                                         _ => todo!(),
@@ -483,14 +491,17 @@ fn entry(
                 Width::W64 => rega.w(rega.r() - regb.r()),
             },
             Air::MulAB(width) => match width {
-                Width::W8 => rega.w((rega.r() as u8 + regb.r() as u8) as u64),
-                Width::W16 => rega.w((rega.r() as u16 + regb.r() as u16) as u64),
-                Width::W32 => rega.w((rega.r() as u32 + regb.r() as u32) as u64),
-                Width::W64 => rega.w(rega.r() + regb.r()),
+                Width::W8 => rega.w((rega.r() as u8 * regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 * regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 * regb.r() as u32) as u64),
+                Width::W64 => rega.w(rega.r() * regb.r()),
             },
-            Air::EqAB(_) => {
-                rega.w((rega.r() == regb.r()) as u64);
-            }
+            Air::EqAB(width) => match width {
+                Width::W8 => rega.w((rega.r() as u8 == regb.r() as u8) as u64),
+                Width::W16 => rega.w((rega.r() as u16 == regb.r() as u16) as u64),
+                Width::W32 => rega.w((rega.r() as u32 == regb.r() as u32) as u64),
+                Width::W64 => rega.w((rega.r() == regb.r()) as u64),
+            },
 
             Air::FAddAB(width) => match width {
                 Width::W32 => {
@@ -528,12 +539,28 @@ fn entry(
                 }
                 _ => unreachable!(),
             },
+            Air::FEqAB(width) => match width {
+                Width::W32 => {
+                    rega.w(
+                        (f32::from_bits(rega.r() as u32) == f32::from_bits(regb.r() as u32)) as u64,
+                    );
+                }
+                Width::W64 => {
+                    rega.w((f64::from_bits(rega.r()) == f64::from_bits(regb.r())) as u64);
+                }
+                _ => unreachable!(),
+            },
+
+            Air::XOR(mask) => {
+                rega.w(mask.bitxor(rega.r()));
+            }
 
             Air::Exit => {
                 break;
             }
             Air::PrintCStr => unsafe {
                 libc::printf(rega.r() as *const c_char);
+                libc::printf("\n\0".as_ptr() as *const c_char);
             },
         }
 
@@ -675,6 +702,14 @@ fn log_instr(
 
     match instr {
         Air::PushIConst(_, _) | Air::Exit | Air::Jmp(_) | Air::SwapReg | Air::MovIConst(_, _) => {}
+        Air::XOR(mask) => {
+            println!(
+                " | Reg(A) <- {:#x} <- {:#x} XOR {:#x}",
+                mask.bitxor(rega.r()),
+                rega.r(),
+                mask
+            );
+        }
         Air::PushIVar { dst, width, src } => {
             println!(" | {dst:?} <- {:?}", stack.read_some_bits(*src, *width));
         }
@@ -783,16 +818,28 @@ fn log_instr(
         }
 
         Air::FAddAB(_) => {
-            let result = rega.r() + regb.r();
-            println!(" | A <- {} <- A({}) + B({})", result, rega.r(), regb.r());
+            let lhs = rega.r();
+            let rhs = regb.r();
+            let result = f64::from_bits(lhs) + f64::from_bits(rhs);
+            println!(" | A <- {} <- A({}) + B({})", result, lhs, rhs);
         }
         Air::FSubAB(_) => {
-            let result = rega.r() - regb.r();
-            println!(" | A <- {} <- A({}) - B({})", result, rega.r(), regb.r());
+            let lhs = rega.r();
+            let rhs = regb.r();
+            let result = f64::from_bits(lhs) - f64::from_bits(rhs);
+            println!(" | A <- {} <- A({}) - B({})", result, lhs, rhs);
         }
         Air::FMulAB(_) => {
-            let result = rega.r() * regb.r();
-            println!(" | A <- {} <- A({}) * B({})", result, rega.r(), regb.r());
+            let lhs = rega.r();
+            let rhs = regb.r();
+            let result = f64::from_bits(lhs) * f64::from_bits(rhs);
+            println!(" | A <- {} <- A({}) * B({})", result, lhs, rhs);
+        }
+        Air::FEqAB(_) => {
+            let lhs = rega.r();
+            let rhs = regb.r();
+            let result = f64::from_bits(lhs) == f64::from_bits(rhs);
+            println!(" | A <- {} <- A({}) == B({})", result, lhs, rhs);
         }
     }
 }

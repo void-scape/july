@@ -70,6 +70,8 @@ pub enum TokenKind {
     Pound,
     /// `&`
     Ampersand,
+    /// `!`
+    Bang,
 }
 
 impl TokenKind {
@@ -99,6 +101,7 @@ impl TokenKind {
             Self::Dot => ".",
             Self::Pound => "#",
             Self::Ampersand => "&",
+            Self::Bang => "!",
 
             Self::Const => "const",
             Self::Loop => "loop",

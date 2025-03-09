@@ -236,9 +236,8 @@ impl<'a> AirCtx<'a> {
             Ty::Int(ty) => self.ret_ivar(var, ty.width()),
             Ty::Float(ty) => self.ret_ivar(var, ty.width()),
             Ty::Ref(_) => self.ret_ivar(var, Width::PTR),
-            Ty::Struct(_) => self.ret_ptr(var),
-            Ty::Unit => panic!("cannot return unit"),
-            Ty::Str => panic!("cannot return str"),
+            Ty::Array(_, _) | Ty::Struct(_) => self.ret_ptr(var),
+            ty @ Ty::Unit | ty @ Ty::Str => panic!("cannot return {:?}", ty),
         }
     }
 

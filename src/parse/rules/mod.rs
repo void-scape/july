@@ -11,9 +11,9 @@ use std::{marker::PhantomData, panic::Location};
 mod attributes;
 mod block;
 mod enom;
-mod konst;
 mod expr;
 mod func;
+mod konst;
 mod stmt;
 mod strukt;
 mod types;
@@ -25,9 +25,9 @@ pub mod prelude {
     pub use super::enom::*;
     pub use super::expr::*;
     pub use super::func::*;
+    pub use super::konst::*;
     pub use super::stmt::*;
     pub use super::strukt::*;
-    pub use super::konst::*;
     pub use super::types::*;
 }
 
@@ -35,6 +35,10 @@ pub mod prelude {
 //
 // TODO: remove stack, it is only used for expr parsing, which can be allocated locally anyway
 // since expressions aren't typically too long
+//
+// TODO: errors should recover better. There are places like stmt parsing where an `Alt` parser will fail
+// with one parser half way through, reset, and try the next instead of reporting an unrecoverable error and
+// consuming the stream until a recoverable point.
 pub trait ParserRule<'a> {
     type Output;
 

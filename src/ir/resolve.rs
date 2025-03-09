@@ -1,3 +1,4 @@
+use super::ty::infer::Integral;
 use super::Stmt;
 use super::*;
 use crate::diagnostic::{Diag, Msg};
@@ -170,8 +171,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Block(block) => block.constrain(ctx, infer, sig),
             Self::If(if_) => if_.constrain(ctx, infer, sig),
             Self::Loop(loop_) => loop_.constrain(ctx, infer, sig),
-            Self::Ref(ref_) => ref_.constrain(ctx, infer, sig),
-            Self::Deref(deref) => deref.constrain(ctx, infer, sig),
+            Self::Unary(unary) => unary.constrain(ctx, infer, sig),
         }
     }
 
@@ -197,8 +197,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Block(block) => block.ty_constrain(ctx, infer, sig, ty, source),
             Self::If(if_) => if_.ty_constrain(ctx, infer, sig, ty, source),
             Self::Loop(loop_) => loop_.ty_constrain(ctx, infer, sig, ty, source),
-            Self::Ref(ref_) => ref_.ty_constrain(ctx, infer, sig, ty, source),
-            Self::Deref(deref) => deref.ty_constrain(ctx, infer, sig, ty, source),
+            Self::Unary(unary) => unary.ty_constrain(ctx, infer, sig, ty, source),
         }
     }
 
@@ -223,8 +222,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Block(block) => block.apply_constraint(ctx, infer, sig, var),
             Self::If(if_) => if_.apply_constraint(ctx, infer, sig, var),
             Self::Loop(loop_) => loop_.apply_constraint(ctx, infer, sig, var),
-            Self::Ref(ref_) => ref_.apply_constraint(ctx, infer, sig, var),
-            Self::Deref(deref) => deref.apply_constraint(ctx, infer, sig, var),
+            Self::Unary(unary) => unary.apply_constraint(ctx, infer, sig, var),
         }
     }
 }
@@ -276,7 +274,7 @@ impl<'a> BinOp<'a> {
         source: Span,
     ) -> Result<(), Diag<'a>> {
         if self.kind == BinOpKind::Eq && ty == TyId::BOOL {
-            constrain_unbounded_bin_op(ctx, infer, sig, self)
+            Ok(())
         } else {
             self.lhs.ty_constrain(ctx, infer, sig, ty, source)?;
             self.rhs.ty_constrain(ctx, infer, sig, ty, source)
@@ -311,9 +309,9 @@ fn constrain_unbounded_bin_op<'a>(
     } else if let Some((span, ty)) = find_ty_in_bin_op(ctx, infer, bin)? {
         bin.bin_ty_constrain(ctx, infer, sig, ty, span)?;
     } else {
-        if bin.is_integral(ctx).is_none_or(|i| !i) {
-            return Err(ctx.report_error(bin.span, "expected every term to be an integer"));
-        }
+        //if bin.is_integral(ctx).is_none_or(|i| !i) {
+        //    return Err(ctx.report_error(bin.span, "expected every term to be an integer"));
+        //}
     }
     Ok(())
 }
@@ -346,12 +344,11 @@ fn find_ty_var_in_expr<'a>(
         Expr::Bin(bin) => find_ty_var_in_bin_op(ctx, infer, bin),
         Expr::Call(_) | Expr::Struct(_) | Expr::Enum(_) | Expr::Lit(_) => Ok(None),
         Expr::Access(_) | Expr::Str(_) | Expr::Bool(_) => Ok(None),
-        Expr::Ref(_) => todo!(),
         //Expr::Ref(inner) => find_ty_var_in_expr(ctx, infer, inner.inner),
         Expr::If(_) => todo!(),
         Expr::Block(_) => todo!(),
         Expr::Loop(_) => todo!(),
-        Expr::Deref(_) => todo!(),
+        Expr::Unary(_) => todo!(),
     }
 }
 
@@ -380,17 +377,17 @@ fn find_ty_in_expr<'a>(
         Expr::Ident(_) | Expr::Lit(_) => Ok(None),
         Expr::Str(str) => Ok(Some((str.span, ctx.tys.str_lit()))),
         Expr::Access(access) => Ok(Some(aquire_access_ty(ctx, infer, access)?)),
-        Expr::Ref(ref_) => Ok(find_ty_in_expr(ctx, infer, ref_.inner)?.map(|(_, ty)| {
-            (
-                ref_.span,
-                ctx.tys.ty_id(&Ty::Ref(ctx.intern(ctx.tys.ty(ty)))),
-            )
-        })),
+        //Expr::Ref(ref_) => Ok(find_ty_in_expr(ctx, infer, ref_.inner)?.map(|(_, ty)| {
+        //    (
+        //        ref_.span,
+        //        ctx.tys.ty_id(&Ty::Ref(ctx.intern(ctx.tys.ty(ty)))),
+        //    )
+        //})),
         Expr::Enum(_) => unimplemented!(),
         Expr::If(_) => todo!(),
         Expr::Block(_) => todo!(),
         Expr::Loop(_) => todo!(),
-        Expr::Deref(_) => todo!(),
+        Expr::Unary(_) => todo!(),
     }
 }
 
@@ -672,52 +669,6 @@ impl<'a> Constrain<'a> for If<'a> {
     }
 }
 
-impl<'a> Constrain<'a> for TakeRef<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig<'a>,
-    ) -> Result<(), Diag<'a>> {
-        self.inner.constrain(ctx, infer, sig)
-    }
-
-    fn ty_constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig<'a>,
-        ty: TyId,
-        source: Span,
-    ) -> Result<(), Diag<'a>> {
-        self.constrain(ctx, infer, sig)?;
-
-        let ty = ctx.tys.ty(ty);
-        match ty {
-            Ty::Ref(ty) => {
-                let ty = ctx.tys.ty_id(ty);
-                self.inner.ty_constrain(ctx, infer, sig, ty, source)?;
-            }
-            inner => {
-                return Err(ctx.mismatch(self.span, Ty::Ref(&ty), inner));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn apply_constraint(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig<'a>,
-        var: TyVar,
-    ) -> Result<(), Diag<'a>> {
-        self.constrain(ctx, infer, sig)?;
-        self.inner.apply_constraint(ctx, infer, sig, var)
-    }
-}
-
 impl<'a> Constrain<'a> for Loop<'a> {
     fn constrain(
         &self,
@@ -777,6 +728,144 @@ fn validate_loop_block<'a>(
     Ok(())
 }
 
+impl<'a> Constrain<'a> for Unary<'a> {
+    fn constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+    ) -> Result<(), Diag<'a>> {
+        match self.kind {
+            UOpKind::Ref => Ref {
+                span: self.span,
+                inner: self.inner,
+            }
+            .constrain(ctx, infer, sig),
+            UOpKind::Deref => Deref {
+                span: self.span,
+                inner: self.inner,
+            }
+            .constrain(ctx, infer, sig),
+            UOpKind::Not => Not {
+                span: self.span,
+                inner: self.inner,
+            }
+            .constrain(ctx, infer, sig),
+        }
+    }
+
+    fn ty_constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+        ty: TyId,
+        source: Span,
+    ) -> Result<(), Diag<'a>> {
+        match self.kind {
+            UOpKind::Ref => Ref {
+                span: self.span,
+                inner: self.inner,
+            }
+            .ty_constrain(ctx, infer, sig, ty, source),
+            UOpKind::Deref => Deref {
+                span: self.span,
+                inner: self.inner,
+            }
+            .ty_constrain(ctx, infer, sig, ty, source),
+            UOpKind::Not => Not {
+                span: self.span,
+                inner: self.inner,
+            }
+            .ty_constrain(ctx, infer, sig, ty, source),
+        }
+    }
+
+    fn apply_constraint(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+        var: TyVar,
+    ) -> Result<(), Diag<'a>> {
+        match self.kind {
+            UOpKind::Ref => Ref {
+                span: self.span,
+                inner: self.inner,
+            }
+            .apply_constraint(ctx, infer, sig, var),
+            UOpKind::Deref => Deref {
+                span: self.span,
+                inner: self.inner,
+            }
+            .apply_constraint(ctx, infer, sig, var),
+            UOpKind::Not => Not {
+                span: self.span,
+                inner: self.inner,
+            }
+            .apply_constraint(ctx, infer, sig, var),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct Ref<'a> {
+    pub span: Span,
+    pub inner: &'a Expr<'a>,
+}
+
+impl<'a> Constrain<'a> for Ref<'a> {
+    fn constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+    ) -> Result<(), Diag<'a>> {
+        self.inner.constrain(ctx, infer, sig)
+    }
+
+    fn ty_constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+        ty: TyId,
+        source: Span,
+    ) -> Result<(), Diag<'a>> {
+        self.constrain(ctx, infer, sig)?;
+
+        let ty = ctx.tys.ty(ty);
+        match ty {
+            Ty::Ref(ty) => {
+                let ty = ctx.tys.ty_id(ty);
+                self.inner.ty_constrain(ctx, infer, sig, ty, source)?;
+            }
+            inner => {
+                return Err(ctx.mismatch(self.span, Ty::Ref(&ty), inner));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply_constraint(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+        var: TyVar,
+    ) -> Result<(), Diag<'a>> {
+        self.constrain(ctx, infer, sig)?;
+        self.inner.apply_constraint(ctx, infer, sig, var)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct Deref<'a> {
+    pub span: Span,
+    pub inner: &'a Expr<'a>,
+}
+
 impl<'a> Constrain<'a> for Deref<'a> {
     fn constrain(
         &self,
@@ -785,6 +874,61 @@ impl<'a> Constrain<'a> for Deref<'a> {
         _sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
         todo!();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct Not<'a> {
+    pub span: Span,
+    pub inner: &'a Expr<'a>,
+}
+
+impl<'a> Constrain<'a> for Not<'a> {
+    fn constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+    ) -> Result<(), Diag<'a>> {
+        self.inner.constrain(ctx, infer, sig)
+    }
+
+    fn ty_constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+        ty: TyId,
+        source: Span,
+    ) -> Result<(), Diag<'a>> {
+        match ctx.tys.ty(ty) {
+            Ty::Int(_) | Ty::Bool => {}
+            ty => {
+                return Err(ctx.report_error(
+                    self.span,
+                    format!(
+                        "cannot apply unary operator `!` to type `{}`",
+                        ty.to_string(ctx)
+                    ),
+                ))
+            }
+        }
+
+        self.constrain(ctx, infer, sig)?;
+        self.inner.ty_constrain(ctx, infer, sig, ty, source)?;
+
+        Ok(())
+    }
+
+    fn apply_constraint(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+        var: TyVar,
+    ) -> Result<(), Diag<'a>> {
+        self.constrain(ctx, infer, sig)?;
+        self.inner.apply_constraint(ctx, infer, sig, var)
     }
 }
 
@@ -843,11 +987,19 @@ impl<'a> Constrain<'a> for Ident {
         _: &Sig<'a>,
         var: TyVar,
     ) -> Result<(), Diag<'a>> {
-        let other_ty = infer
-            .get_var(self.id)
-            .or_else(|| infer.get_const(self.id))
-            .ok_or_else(|| ctx.undeclared(self))?;
-        infer.var_eq(ctx, var, other_ty);
+        if ctx.expect_ident(self.id) == "NULL" || infer.var_ident(ctx, var) == "NULL"
+        //&& infer
+        //    .guess_var_ty(ctx, var)
+        //    .is_some_and(|ty| ctx.tys.ty(ty).is_ref())
+        {
+            // hard coded special case for null atm
+        } else {
+            let other_ty = infer
+                .get_var(self.id)
+                .or_else(|| infer.get_const(self.id))
+                .ok_or_else(|| ctx.undeclared(self))?;
+            infer.var_eq(ctx, var, other_ty);
+        }
         Ok(())
     }
 }
@@ -896,7 +1048,10 @@ impl<'a> Constrain<'a> for Lit<'a> {
         _: &Sig<'a>,
         var: TyVar,
     ) -> Result<(), Diag<'a>> {
-        infer.integral(var, self.span);
+        match self.kind {
+            LitKind::Int(_) => infer.integral(Integral::Int, var, self.span),
+            LitKind::Float(_) => infer.integral(Integral::Float, var, self.span),
+        }
         Ok(())
     }
 }
@@ -1000,7 +1155,13 @@ pub fn aquire_access_ty<'a>(
 
     let id = match ty.peel_refs().0 {
         Ty::Struct(id) => id,
-        Ty::Int(_) | Ty::Unit | Ty::Bool | Ty::Ref(_) | Ty::Str | Ty::Float(_) => {
+        Ty::Array(_, _)
+        | Ty::Int(_)
+        | Ty::Unit
+        | Ty::Bool
+        | Ty::Ref(_)
+        | Ty::Str
+        | Ty::Float(_) => {
             return Err(ctx.report_error(
                 access.lhs.span(),
                 format!(
@@ -1016,8 +1177,19 @@ pub fn aquire_access_ty<'a>(
     };
     let mut strukt = ctx.tys.strukt(*id);
 
-    for (i, acc) in access.accessors.iter().enumerate() {
-        let ty = strukt.field_ty(acc.id);
+    for (i, acc) in access.accessors.iter().rev().enumerate() {
+        let Some(ty) = strukt.get_field_ty(acc.id) else {
+            return Err(ctx.report_error(
+                //Span::from_spans(acc.span, access.accessors.last().unwrap().span),
+                acc.span,
+                format!(
+                    "invalid access: `{}` has no field `{}`",
+                    ctx.expect_ident(strukt.name.id),
+                    ctx.expect_ident(acc.id)
+                ),
+            ));
+        };
+
         if i == access.accessors.len() - 1 {
             return Ok((access.span, ty));
         }
@@ -1026,19 +1198,26 @@ pub fn aquire_access_ty<'a>(
             Ty::Struct(id) => {
                 strukt = ctx.tys.strukt(id);
             }
-            Ty::Int(_) | Ty::Unit | Ty::Bool | Ty::Ref(_) | Ty::Str | Ty::Float(_) => {
+            Ty::Array(_, _)
+            | Ty::Int(_)
+            | Ty::Unit
+            | Ty::Bool
+            | Ty::Ref(_)
+            | Ty::Str
+            | Ty::Float(_) => {
+                let access = access.accessors[i];
                 return Err(ctx.report_error(
-                    acc,
+                    access.span,
                     format!(
-                        "invalid field access, `{}` is of type `{}`, which has no fields",
+                        "invalid access: `{}` is of type `{}`, which has no field `{}`",
                         acc.to_string(ctx),
-                        ty.to_string(ctx)
+                        ty.to_string(ctx),
+                        access.to_string(ctx),
                     ),
                 ));
             }
         }
     }
 
-    // there must be atleast one access, since bin is of type field
     unreachable!()
 }

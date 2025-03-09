@@ -1,5 +1,3 @@
-use crate::air::IntKind;
-
 use self::store::TyId;
 use super::ctx::Ctx;
 use super::ident::IdentId;
@@ -15,8 +13,10 @@ pub mod store;
 pub enum Ty<'a> {
     Int(IntTy),
     Float(FloatTy),
+    /// TODO: store struct in Ty itself?
     Struct(StructId),
     Ref(&'a Ty<'a>),
+    Array(usize, &'a Ty<'a>),
     Bool,
     Str,
     Unit,
@@ -38,6 +38,7 @@ impl<'a> Ty<'a> {
             Self::Float(float) => float.size(),
             Self::Str => panic!("size of str is unknown"),
             Self::Struct(id) => ctx.tys.struct_layout(*id).size,
+            Self::Array(len, inner) => inner.size(ctx) * len,
         }
     }
 
@@ -51,6 +52,23 @@ impl<'a> Ty<'a> {
 
     pub fn is_ref(&self) -> bool {
         matches!(self, Self::Ref(_))
+    }
+
+    pub fn layout(&self, ctx: &Ctx) -> Layout {
+        match self {
+            Self::Unit => Layout::new(0, 1),
+            Self::Bool => Layout::splat(1),
+            Self::Int(int) => int.layout(),
+            Self::Float(float) => float.layout(),
+            Self::Ref(&Self::Str) => Layout::FAT_PTR,
+            Self::Str | Self::Ref(_) => Layout::PTR,
+            Self::Array(len, inner) => inner.layout(ctx).to_array(*len),
+            Self::Struct(id) => ctx.tys.struct_layout(*id),
+        }
+    }
+
+    pub fn is_sized(&self) -> bool {
+        !matches!(self, Self::Str)
     }
 
     #[track_caller]
@@ -80,6 +98,7 @@ impl<'a> Ty<'a> {
             Self::Int(int) => int.as_str().to_string(),
             Self::Float(float) => float.as_str().to_string(),
             Self::Struct(s) => ctx.expect_ident(ctx.tys.strukt(*s).name.id).to_string(),
+            Self::Array(len, inner) => format!("[{}] {}", len, inner.to_string(ctx)),
         }
     }
 

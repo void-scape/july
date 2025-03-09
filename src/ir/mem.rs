@@ -16,6 +16,13 @@ impl Layout {
         Self::new(n, n)
     }
 
+    pub fn to_array(self, len: usize) -> Self {
+        Self {
+            size: self.size * len,
+            alignment: self.alignment,
+        }
+    }
+
     pub fn align_shift(&self) -> u8 {
         match self.alignment {
             1 => 0,

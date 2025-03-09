@@ -36,20 +36,7 @@ Renderer: struct {
 
 Event: struct {
     event_type: u32,
-    d1: u32,
-    d2: u64,
-    d3: u64,
-    d4: u64,
-
-    b0: DummyBlock,
-    b1: DummyBlock,
-}
-
-DummyBlock: struct {
-    d0: u64,
-    d1: u64,
-    d2: u64,
-    d3: u64,
+    padding: [124] u8,
 }
 
 Surface: struct {
@@ -84,6 +71,10 @@ SDL_KEY_DOWN   : const u32 = 0x300;
 
 SDLK_A         : const u32 = 0x00000061;
 
+WIDTH          : const i32 = 640;
+HEIGHT         : const i32 = 380;
+DELAY_MS       : const u32 = 16;
+
 XForm: struct {
     trans: Vec2,
     scale: Vec2,
@@ -96,32 +87,39 @@ Vec2: struct {
 }
 
 main: () -> i32 {
-    assert(SDL_Init(SDL_INIT_VIDEO));
-    let window = SDL_CreateWindow(cs("Invaders\0"), 640, 380, 0);
-    if window == 0 {
+    if !SDL_Init(SDL_INIT_VIDEO) {
+        report_error("failed to init SDL\n");
+        return 1;
+    }
+
+    let window = SDL_CreateWindow(cs("Invaders\0"), WIDTH, HEIGHT, 0);
+    if window == NULL {
         report_error("failed to create window\n");
         return 1;
     }
 
     let renderer = SDL_CreateRenderer(window, empty_cs());
-    if renderer == 0 {
+    if renderer == NULL {
         report_error("failed to create renderer\n");
         return 1;
     }
 
     let bmp = SDL_LoadBMP(cs("./demo/bebop.bmp\0"));
-    if bmp == 0 {
+    if bmp == NULL {
         report_error("failed to create bebop\n");
         return 1;
     }
     let texture = SDL_CreateTextureFromSurface(renderer, bmp);
-    if texture == 0 {
+    if texture == NULL {
         report_error("failed to create bebop texture\n");
         return 1;
     }
     SDL_DestroySurface(bmp);
 
-    let pos = Vec2 { x: 0., y: 0. };
+    // let textures = [&Texture; 2];
+
+    let pos = Vec2 { x: 0.4, y: 0. };
+    assert(pos.x == 0.4);
 
     let event = Event {};
     loop {
@@ -135,20 +133,32 @@ main: () -> i32 {
             }
         }
 
-        if SDL_RenderClear(renderer)   {} else { return 1; }
-        if SDL_RenderTexture(renderer,
-                            texture,
-                            NULL,
-                            NULL)      {} else { return 1; }
-        if SDL_RenderPresent(renderer) {} else { return 1; }
-        SDL_Delay(16);
+        if !SDL_RenderClear(renderer)   { return 1; }
+        if !SDL_RenderTexture(renderer,
+                              texture,
+                              NULL,
+                              NULL)     { return 1; }
+        if !SDL_RenderPresent(renderer) { return 1; }
+        SDL_Delay(DELAY_MS);
     }
 }
 
 report_error: (msg: &str) {
     printf(msg);
-    // TODO: struct return doesn't seem to work
     print_cs(SDL_GetError());
+}
+
+empty_cs: () -> CStr {
+    CStr {
+        str: NULL
+    }
+}
+
+assert: (condition: bool) {
+    if !condition {
+        printf("failed assert\n");
+        exit(1);
+    }
 }
 
 #[intrinsic]
@@ -162,15 +172,3 @@ print_cs: (str: CStr) {}
 
 #[intrinsic]
 cs: (str: &str) -> CStr {}
-
-empty_cs: () -> CStr {
-    CStr {
-        str: NULL
-    }
-}
-
-assert: (condition: bool) {
-    if condition == false {
-        exit(1);
-    }
-}

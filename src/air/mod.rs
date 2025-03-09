@@ -77,6 +77,10 @@ pub enum Air<'a> {
     FAddAB(Width),
     FMulAB(Width),
     FSubAB(Width),
+    FEqAB(Width),
+
+    /// Bitwise operations read from, evaluate, then load back into [`Reg::A`].
+    XOR(Mask),
 
     /// Exit with code stored in [`Reg::A`].
     Exit,
@@ -85,6 +89,7 @@ pub enum Air<'a> {
 }
 
 pub type Addr = u64;
+pub type Mask = u64;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Bits {
@@ -681,6 +686,21 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                         src: Reg::A,
                     });
                 }
+                Ty::Array(len, inner) => {
+                    let bytes = inner.size(ctx) * len;
+                    ctx.ins_set([
+                        Air::Addr(Reg::B, dst),
+                        Air::MemCpy {
+                            dst: Reg::B,
+                            src: {
+                                // the destination is supplied by the callee
+                                const _: () = assert!(matches!(RET_REG, Reg::A));
+                                Reg::A
+                            },
+                            bytes,
+                        },
+                    ]);
+                }
                 Ty::Struct(s) => {
                     let bytes = ctx.tys.struct_layout(s).size;
                     ctx.ins_set([
@@ -721,55 +741,74 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
         Expr::If(if_) => {
             assign_if(ctx, dst, ty, if_);
         }
-        Expr::Ref(ref_) => {
-            assert!(ctx.tys.ty(ty).is_ref());
-            match ref_.inner {
-                Expr::Ident(ident) => {
-                    let var = ctx.expect_var(ident.id);
-                    ctx.ins_set([
-                        Air::Addr(Reg::A, OffsetVar::zero(var)),
-                        Air::PushIReg {
-                            dst,
-                            width: Width::PTR,
-                            src: Reg::A,
-                        },
-                    ]);
-                }
-                Expr::Lit(lit) => match lit.kind {
-                    LitKind::Int(int) => {
-                        let Some(Ok(inner_ty)) = ctx.tys.ty(ty).ref_inner_ty(ctx) else {
-                            unreachable!()
-                        };
-
-                        let var = OffsetVar::zero(ctx.anon_var(inner_ty));
-                        let width = ctx.tys.ty(inner_ty).expect_int().width();
-                        ctx.ins_set([
-                            Air::PushIConst(
-                                var,
-                                ConstData::Bits(Bits::from_width(*int as u64, width)),
-                            ),
-                            Air::Addr(Reg::A, var),
-                            Air::PushIReg {
-                                dst,
-                                width: Width::PTR,
-                                src: Reg::A,
-                            },
-                        ])
-                    }
-                    LitKind::Float(_) => panic!("invalid op"),
-                },
-                _ => todo!(),
-            }
-        }
         Expr::Loop(_) => {
             // this means that a loop is the last statement, and in order to leave we must return, so
             // just ignore this for now
             //assert_eq!(ty, TyId::UNIT);
             eval_expr(ctx, expr);
         }
-        Expr::Enum(_) | Expr::Block(_) => todo!(),
+        Expr::Unary(unary) => match unary.kind {
+            UOpKind::Ref => {
+                assert!(ctx.tys.ty(ty).is_ref());
+                match unary.inner {
+                    Expr::Ident(ident) => {
+                        let var = ctx.expect_var(ident.id);
+                        ctx.ins_set([
+                            Air::Addr(Reg::A, OffsetVar::zero(var)),
+                            Air::PushIReg {
+                                dst,
+                                width: Width::PTR,
+                                src: Reg::A,
+                            },
+                        ]);
+                    }
+                    Expr::Lit(lit) => match lit.kind {
+                        LitKind::Int(int) => {
+                            let Some(Ok(inner_ty)) = ctx.tys.ty(ty).ref_inner_ty(ctx) else {
+                                unreachable!()
+                            };
 
-        Expr::Deref(_) => todo!(),
+                            let var = OffsetVar::zero(ctx.anon_var(inner_ty));
+                            let width = ctx.tys.ty(inner_ty).expect_int().width();
+                            ctx.ins_set([
+                                Air::PushIConst(
+                                    var,
+                                    ConstData::Bits(Bits::from_width(*int as u64, width)),
+                                ),
+                                Air::Addr(Reg::A, var),
+                                Air::PushIReg {
+                                    dst,
+                                    width: Width::PTR,
+                                    src: Reg::A,
+                                },
+                            ])
+                        }
+                        LitKind::Float(_) => panic!("invalid op"),
+                    },
+                    _ => todo!(),
+                }
+            }
+            UOpKind::Not => {
+                let (width, mask) = match ctx.tys.ty(ty) {
+                    Ty::Bool => (Width::BOOL, 1),
+                    Ty::Int(ty) => (ty.width(), u64::MAX),
+                    _ => unreachable!(),
+                };
+                let result = OffsetVar::zero(ctx.anon_var(ty));
+                assign_expr(ctx, result, ty, unary.inner);
+                ctx.ins_set([
+                    Air::MovIVar(Reg::A, result, width),
+                    Air::XOR(mask),
+                    Air::PushIReg {
+                        dst,
+                        width,
+                        src: Reg::A,
+                    },
+                ]);
+            }
+            _ => todo!(),
+        },
+        Expr::Enum(_) | Expr::Block(_) => todo!(),
     }
 }
 
@@ -828,6 +867,17 @@ fn assign_var_other<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, other: OffsetVar, 
                 width: Width::BOOL,
                 src: other,
             });
+        }
+        Ty::Array(len, inner) => {
+            ctx.ins_set([
+                Air::Addr(Reg::B, other),
+                Air::Addr(Reg::A, dst),
+                Air::MemCpy {
+                    dst: Reg::A,
+                    src: Reg::B,
+                    bytes: inner.size(ctx) * len,
+                },
+            ]);
         }
         Ty::Str => {
             panic!("cannot assign to str");
@@ -963,9 +1013,7 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
             // TODO: break;
             ctx.ins(Air::Jmp(loop_block));
         }
-        Expr::Ref(_) => todo!(),
-
-        Expr::Deref(_) => todo!(),
+        Expr::Unary(_) => todo!(),
     }
 }
 
@@ -1012,10 +1060,9 @@ fn printf_generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
 
     for expr in call.args.iter() {
         let ty = match expr.infer(ctx) {
-            Ok(InferTy::Int) => ctx.tys.builtin(Ty::Int(IntTy::ISIZE)),
-            Ok(InferTy::Float) => ctx.tys.builtin(Ty::Float(FloatTy::F64)),
-            Ok(InferTy::Ty(ty)) => ty,
-            Err(_) => unreachable!(),
+            InferTy::Int => ctx.tys.builtin(Ty::Int(IntTy::ISIZE)),
+            InferTy::Float => ctx.tys.builtin(Ty::Float(FloatTy::F64)),
+            InferTy::Ty(ty) => ty,
         };
 
         // just load them on the stack, handle this case manually
@@ -1100,7 +1147,9 @@ fn assign_lit(ctx: &mut AirCtx, lit: &Lit, var: OffsetVar, ty: TyId) {
             }
             LitKind::Float(_) => panic!("invalid op"),
         },
-        Ty::Bool | Ty::Unit | Ty::Str | Ty::Struct(_) => panic!("cannot assign lit to {ty:?}"),
+        Ty::Array(_, _) | Ty::Bool | Ty::Unit | Ty::Str | Ty::Struct(_) => {
+            panic!("cannot assign lit to {ty:?}")
+        }
     }
 }
 

@@ -1,9 +1,8 @@
 use crate::unit::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
-use winnow::ascii::{dec_int, float, hex_digit1};
+use winnow::ascii::float;
 use winnow::combinator::{delimited, preceded};
-use winnow::error::ContextError;
 use winnow::stream::Stream;
 use winnow::{combinator::alt, stream::AsChar, token::take_while, LocatingSlice, PResult, Parser};
 
@@ -78,7 +77,7 @@ fn str_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 }
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">", "#", "&"))
+    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">", "#", "&", "!"))
         .with_span()
         .parse_next(input)?;
     let token = match sym {
@@ -93,6 +92,7 @@ fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         ">" => TokenKind::Greater,
         "#" => TokenKind::Pound,
         "&" => TokenKind::Ampersand,
+        "!" => TokenKind::Bang,
         _ => unreachable!(),
     };
 
@@ -117,12 +117,22 @@ fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 }
 
 fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
+    let other = *input;
     let (kind, span) = alt((
         preceded("0x", take_while(1.., AsChar::is_hex_digit)).map(|_| TokenKind::Int),
         float.map(|_: f64| TokenKind::Float),
     ))
     .with_span()
     .parse_next(input)?;
+
+    if matches!(kind, TokenKind::Float) {
+        if other
+            .get(..span.len())
+            .is_some_and(|s| s.parse::<i64>().is_ok())
+        {
+            return Ok(Token::new(TokenKind::Int, Span::from_range(span)));
+        }
+    }
 
     Ok(Token::new(kind, Span::from_range(span)))
 }

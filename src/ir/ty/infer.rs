@@ -1,5 +1,5 @@
 use super::store::TyId;
-use super::{TyVar, TypeKey, VarHash};
+use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey, VarHash};
 use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
@@ -16,17 +16,18 @@ pub struct InferCtx {
     hash: Option<FuncHash>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cnst {
     pub kind: CnstKind,
     pub src: Span,
     pub var: Span,
+    pub loc: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CnstKind {
     Ty(TyId),
-    Integral,
+    Integral(Integral),
     Equate(TyVar),
 }
 
@@ -81,17 +82,20 @@ impl InferCtx {
         self.vars.get(&hash).expect("invalid hash").1
     }
 
+    // TODO: if there are any conflicting absolute types, say from a parameter binding or a struct
+    // definition, then this will return none and cause spurious type errors
     pub fn guess_var_ty(&self, ctx: &Ctx, var: TyVar) -> Option<TyId> {
-        self.constraints
-            .get(&var)
-            .map(|cnsts| self.unify_constraints(ctx, var, &cnsts.1).ok())?
+        let cnsts = self.constraints.get(&var).expect("invalid ty var");
+        self.unify_constraints(ctx, var, &cnsts.1).ok()
     }
 
-    pub fn integral(&mut self, var: TyVar, src: Span) {
+    #[track_caller]
+    pub fn integral(&mut self, integral: Integral, var: TyVar, src: Span) {
         let span = self.var_span(var);
         let (_, cnsts) = self.constraints.get_mut(&var).expect("invalid ty var");
         cnsts.push(Cnst {
-            kind: CnstKind::Integral,
+            loc: std::panic::Location::caller().to_string(),
+            kind: CnstKind::Integral(integral),
             var: span,
             src,
         })
@@ -102,12 +106,14 @@ impl InferCtx {
         let span = self.var_span(var);
         let (_, cnsts) = self.constraints.get_mut(&var).expect("invalid ty var");
         cnsts.push(Cnst {
+            loc: std::panic::Location::caller().to_string(),
             kind: CnstKind::Ty(ty),
             var: span,
             src,
         })
     }
 
+    #[track_caller]
     pub fn var_eq(&mut self, ctx: &Ctx, var: TyVar, other: TyVar) {
         if let Some(ty) = self.guess_var_ty(ctx, other) {
             self.eq(var, ty, self.var_span(other));
@@ -118,6 +124,7 @@ impl InferCtx {
             let other_span = self.var_span(other);
             let (_, cnsts) = self.constraints.get_mut(&var).expect("invalid ty var");
             cnsts.push(Cnst {
+                loc: std::panic::Location::caller().to_string(),
                 kind: CnstKind::Equate(other),
                 var: span,
                 src: other_span,
@@ -187,33 +194,39 @@ impl InferCtx {
                         let other = ctx.ty_str(*ty);
 
                         // TODO: better error reporting, describe where the value is used
+                        //
+                        // in some cases, this doesn't even show where it is used.
                         return Err(ctx
                             .report_error(
-                                self.var_span(var),
+                                c.var,
                                 format!(
                                     "value of type `{}` cannot be coerced into a `{}`",
                                     ty_str, other
                                 ),
                             )
-                            .msg(Msg::note(
-                                abs.unwrap().1,
-                                format!("but this is of type `{}`", ty_str),
-                            ))
-                            .msg(Msg::info(c.src, "")));
+                            //.msg(Msg::note(
+                            //    abs.unwrap().1,
+                            //    format!("but this is of type `{}`", ty_str),
+                            //))
+                            .msg(Msg::info(c.src, &c.loc)));
                     }
 
                     abs = Some((*ty, c.src));
                 }
-                CnstKind::Integral => {
-                    integral = Some(c.src);
+                CnstKind::Integral(int) => {
+                    integral = Some((c.src, *int));
                 }
                 CnstKind::Equate(_) => unreachable!(),
             }
         }
 
         if let Some((abs, _)) = abs {
-            if let Some(span) = integral {
-                if !ctx.tys.ty(abs).is_int() && !ctx.tys.ty(abs).is_ref() {
+            if let Some((span, integral)) = integral {
+                let ty = ctx.tys.ty(abs);
+                if (matches!(integral, Integral::Int) && !ty.is_int())
+                    && (matches!(integral, Integral::Float) && !ty.is_float())
+                    && (matches!(integral, Integral::Int) && !ty.is_ref())
+                {
                     return Err(ctx.mismatch(self.var_span(var), "an integer", abs).msg(
                         Msg::note(
                             span,
@@ -225,10 +238,17 @@ impl InferCtx {
 
             Ok(abs)
         } else {
-            Err(ctx.report_error(
-                self.var_span(var),
-                format!("could not infer type of `{}`", self.var_ident(ctx, var)),
-            ))
+            if let Some((_, integral)) = integral {
+                Ok(match integral {
+                    Integral::Int => ctx.tys.builtin(Ty::Int(IntTy::new_64(Sign::I))),
+                    Integral::Float => ctx.tys.builtin(Ty::Float(FloatTy::F64)),
+                })
+            } else {
+                Err(ctx.report_error(
+                    self.var_span(var),
+                    format!("could not infer type of `{}`", self.var_ident(ctx, var)),
+                ))
+            }
         }
     }
 
@@ -288,4 +308,10 @@ impl InferCtx {
         self.constraints.insert(TyVar(idx), (hash, Vec::new()));
         TyVar(idx)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Integral {
+    Int,
+    Float,
 }

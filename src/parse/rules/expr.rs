@@ -2,7 +2,7 @@ use super::block::Block;
 use super::enom::EnumDef;
 use super::strukt::StructDef;
 use super::{Next, ParserRule, RResult};
-use crate::ir::{AssignKind, BinOpKind};
+use crate::ir::{AssignKind, BinOpKind, UOpKind};
 use crate::lex::{buffer::*, kind::*};
 use crate::parse::combinator::opt::Opt;
 use crate::parse::combinator::wile::{NextToken, While};
@@ -22,7 +22,6 @@ pub enum Expr {
     Assign(Assign),
     StructDef(StructDef),
     EnumDef(EnumDef),
-    TakeRef(TokenId, Box<Expr>),
     Access {
         span: Span,
         lhs: Box<Expr>,
@@ -35,6 +34,7 @@ pub enum Expr {
     },
     If(TokenId, Box<Expr>, Block, Option<Block>),
     Loop(TokenId, Block),
+    Unary(TokenId, UOpKind, Box<Expr>),
 }
 
 impl From<BinOpTokens> for BinOpKind {
@@ -70,18 +70,18 @@ pub enum BinOpTokens {
     DoubleEquals(TokenId),
 }
 
-impl BinOpTokens {
-    pub fn span(&self, buffer: &TokenBuffer) -> Span {
-        match self {
-            Self::Hyphen(t)
-            | Self::Plus(t)
-            | Self::Asterisk(t)
-            | Self::OpenParen(t)
-            | Self::DoubleEquals(t)
-            | Self::CloseParen(t) => buffer.span(*t),
-        }
-    }
-}
+//impl BinOpTokens {
+//    pub fn span(&self, buffer: &TokenBuffer) -> Span {
+//        match self {
+//            Self::Hyphen(t)
+//            | Self::Plus(t)
+//            | Self::Asterisk(t)
+//            | Self::OpenParen(t)
+//            | Self::DoubleEquals(t)
+//            | Self::CloseParen(t) => buffer.span(*t),
+//        }
+//    }
+//}
 
 trait Precedence {
     fn precedence(&self) -> usize;
@@ -153,49 +153,11 @@ impl<'a> ParserRule<'a> for BinOpKindRule {
     }
 }
 
-/// Collection of viable terms within an expression.
-///
-/// Directly translate to [`Expr`] with [`Term::into_expr`].
-#[derive(Debug, Clone)]
-pub enum Term {
-    Lit(TokenId),
-    Str(TokenId),
-    Ident(TokenId),
-    Bool(TokenId),
-    Access {
-        span: Span,
-        lhs: Box<Expr>,
-        field: TokenId,
-    },
-    Call {
-        span: Span,
-        func: TokenId,
-        args: Vec<Expr>,
-    },
-    Ref(TokenId, Box<Term>),
-    Deref(TokenId, Box<Term>),
-}
-
-impl Term {
-    pub fn into_expr(self) -> Expr {
-        match self {
-            Self::Lit(id) => Expr::Lit(id),
-            Self::Str(id) => Expr::Str(id),
-            Self::Ident(id) => Expr::Ident(id),
-            Self::Bool(bool) => Expr::Bool(bool),
-            Self::Call { span, func, args } => Expr::Call { span, func, args },
-            Self::Ref(token, term) => Expr::TakeRef(token, Box::new(term.clone().into_expr())),
-            Self::Access { span, lhs, field } => Expr::Access { span, lhs, field },
-            _ => todo!(), //Self::Deref(token, term) => Expr::Deref(token, Box::new(term.clone().into_expr())),
-        }
-    }
-}
-
-/// Produce the next [`Term`].
+/// Produce the next [`Expr`] term in a binary expression.
 pub struct TermRule;
 
 impl<'a> ParserRule<'a> for TermRule {
-    type Output = Term;
+    type Output = Expr;
 
     fn parse(
         buffer: &'a TokenBuffer<'a>,
@@ -246,7 +208,7 @@ impl<'a> ParserRule<'a> for TermRule {
 
                             let span = Span::from_spans(buffer.span(ident), buffer.span(close));
 
-                            Ok(Term::Call {
+                            Ok(Expr::Call {
                                 span,
                                 func: ident,
                                 args: args.into_iter().map(|(arg, _)| arg).collect(),
@@ -262,21 +224,32 @@ impl<'a> ParserRule<'a> for TermRule {
 
                             let span = Span::from_spans(buffer.span(ident), buffer.span(close));
 
-                            Ok(Term::Call {
+                            Ok(Expr::Call {
                                 span,
                                 func: ident,
                                 args: Vec::new(),
                             })
                         }
                     }
-                    _ => Ok(Term::Ident(ident)),
+                    _ => Ok(Expr::Ident(ident)),
                 }
             }
-            Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Term::Lit(stream.expect())),
-            Some(TokenKind::True) | Some(TokenKind::False) => Ok(Term::Bool(stream.expect())),
-            Some(TokenKind::Str) => Ok(Term::Str(stream.expect())),
-            Some(TokenKind::Ampersand) => Ok(Term::Ref(
+            Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Expr::Lit(stream.expect())),
+            Some(TokenKind::True) | Some(TokenKind::False) => Ok(Expr::Bool(stream.expect())),
+            Some(TokenKind::Str) => Ok(Expr::Str(stream.expect())),
+            Some(TokenKind::Bang) => Ok(Expr::Unary(
                 stream.expect(),
+                UOpKind::Not,
+                Box::new(TermRule::parse(buffer, stream, stack)?),
+            )),
+            Some(TokenKind::Ampersand) => Ok(Expr::Unary(
+                stream.expect(),
+                UOpKind::Ref,
+                Box::new(TermRule::parse(buffer, stream, stack)?),
+            )),
+            Some(TokenKind::Asterisk) => Ok(Expr::Unary(
+                stream.expect(),
+                UOpKind::Deref,
                 Box::new(TermRule::parse(buffer, stream, stack)?),
             )),
             kind => Err(stream.full_error(
@@ -295,17 +268,16 @@ impl<'a> ParserRule<'a> for TermRule {
 
             if !stream.match_peek::<Ident>() {
                 return Err(stream.full_error(
-                    "malformed field access",
+                    "invalid access: expected identifier after `.`",
                     buffer.span(dot),
-                    "expected identifier after `.`",
+                    "",
                 ));
             }
 
             let field = stream.expect();
-            let expr = term_result.into_expr();
-            term_result = Term::Access {
+            term_result = Expr::Access {
                 span: Span::from_spans(start_span, buffer.span(field)),
-                lhs: Box::new(expr),
+                lhs: Box::new(term_result),
                 field,
             };
         }
@@ -394,7 +366,7 @@ impl<'a> ParserRule<'a> for ExprRule {
         #[derive(Debug)]
         enum Item {
             Op(BinOpTokens),
-            Term(Term),
+            Term(Expr),
         }
 
         // https://en.wikipedia.org/wiki/Shunting_yard_algorithm
@@ -454,7 +426,7 @@ impl<'a> ParserRule<'a> for ExprRule {
         if operators.is_empty() && expr_stack.len() == 1 {
             assert!(expr_stack.len() == 1, "todo error");
             return Ok(match expr_stack.pop().unwrap() {
-                Item::Term(term) => term.into_expr(),
+                Item::Term(term) => term,
                 _ => panic!(),
             });
         }
@@ -498,7 +470,7 @@ impl<'a> ParserRule<'a> for ExprRule {
                     }
                 },
                 Item::Term(next) => {
-                    terms.push(next.into_expr());
+                    terms.push(next);
                 }
             }
         }

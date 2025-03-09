@@ -13,6 +13,7 @@ where
 {
     type Output = SpannedR<<T as ParserRule<'a>>::Output>;
 
+    #[track_caller]
     fn parse(
         buffer: &'a TokenBuffer<'a>,
         stream: &mut TokenStream<'a>,

@@ -271,28 +271,20 @@ impl<'a> TyStore<'a> {
         let strukt = &buf[struct_id.0];
         let mut struct_layouts = Vec::with_capacity(strukt.fields.len());
         for field in strukt.fields.iter() {
-            match ctx.tys.ty(field.ty) {
-                Ty::Struct(s) => {
-                    let ty_id = struct_ty_map.get(&s).unwrap();
+            let field_ty = ctx.tys.ty(field.ty);
+            if !field_ty.is_sized() {
+                errors.push(ctx.report_error(field.span, "struct fields must be sized"));
+            }
+
+            match field_ty {
+                Ty::Struct(id) => {
+                    let ty_id = struct_ty_map.get(&id).unwrap();
                     let layout = layouts.get(ty_id).unwrap();
                     struct_layouts.push(*layout);
                 }
-                Ty::Int(int) => {
-                    struct_layouts.push(int.layout());
+                _ => {
+                    struct_layouts.push(field_ty.layout(ctx));
                 }
-                Ty::Float(float) => {
-                    struct_layouts.push(float.layout());
-                }
-                Ty::Bool => {
-                    struct_layouts.push(Layout::splat(1));
-                }
-                Ty::Ref(_) => {
-                    struct_layouts.push(Layout::PTR);
-                }
-                Ty::Str => {
-                    errors.push(ctx.report_error(field.span, "`str` is of unknown size"));
-                }
-                Ty::Unit => panic!("field cannot be unit"),
             }
         }
 

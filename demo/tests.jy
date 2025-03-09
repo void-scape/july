@@ -1,3 +1,17 @@
+main: () -> i32 {
+    assert(double(2) == 4);
+    assert(double(4) == 8);
+    assert(double(28) == 56);
+    assert(seed() == 42);
+    assert(var_2_var() == 16);
+    assert(simple_if_then(true, 4) == 2);
+    assert(24 == 24);
+    assert(simple_float() == 0.7 * 2.);
+    // TODO: I don't know why this fails and the previous works
+    // assert(0.7 * 2. == 0.7 * 2.);
+    0
+}
+
 // ------------ Structs ------------
 
 // size: 24, alignment: 8
@@ -182,8 +196,24 @@ simple_if_then: (condition: bool, x: i32) -> i32 {
     }
 }
 
+// ------------ Floats ------------
+
+Vec2: struct {
+    x: f32,
+    y: f32,
+}
+
+simple_float: () -> f32 {
+    let pos = Vec2 { x: 0.4, y: 0.7 };
+    assert(pos.x == 0.4);
+    pos.y * 2.
+}
+
+// ------------ Util ------------
+
 assert: (condition: bool) {
-    if condition == false {
+    if !condition {
+        printf("failed assert\n");
         exit(1);
     }
 }
@@ -191,13 +221,5 @@ assert: (condition: bool) {
 #[intrinsic]
 exit: (code: i32) {}
 
-main: () -> i32 {
-    assert(double(2) == 4);
-    assert(double(4) == 8);
-    assert(double(28) == 56);
-    assert(seed() == 42);
-    assert(var_2_var() == 16);
-    assert(simple_if_then(true, 4) == 2);
-    assert(24 == 24);
-    0
-}
+#[intrinsic]
+printf: (fmt: &str) {}
