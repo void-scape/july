@@ -104,6 +104,10 @@ impl<'a> TyStore<'a> {
         StructId(idx)
     }
 
+    pub fn structs(&self) -> &[Struct] {
+        &self.structs
+    }
+
     pub fn store_const(&mut self, konst: &'a Const<'a>) {
         self.const_map.insert(konst.name.id, konst);
     }

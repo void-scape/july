@@ -164,8 +164,10 @@ impl InferCtx {
             }
         }
 
-        self.vars.clear();
-        self.constraints.clear();
+        self.vars
+            .retain(|hash, _| matches!(hash, VarHash::Const(_)));
+        self.constraints
+            .retain(|_, (hash, _)| matches!(hash, VarHash::Const(_)));
 
         if !errors.is_empty() {
             Err(errors)

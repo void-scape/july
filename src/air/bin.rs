@@ -180,7 +180,7 @@ pub struct FloatMul(pub Width);
 crate::impl_agnostic_bin_op_visitor!(FloatMul, FMulAB, 0, 0);
 crate::impl_float_bin_op_visitor!(FloatMul, FMulAB);
 
-enum BinOpArg {
+pub enum BinOpArg {
     Var(OffsetVar),
     Int(i64),
     Float(f64),
@@ -275,7 +275,7 @@ fn prepare_expr<'a>(ctx: &mut AirCtx<'a>, ty: TyId, expr: &'a Expr) -> BinOpArg 
     }
 }
 
-trait BinOpVisitWith {
+pub trait BinOpVisitWith {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg);
 }
 
@@ -288,19 +288,19 @@ impl FloatAlgebra for Eq {}
 
 impl BinOpVisitWith for FloatAdd {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        visit_float(self, ctx, dst, lhs, rhs);
+        visit_float(self, ctx, dst, rhs, lhs);
     }
 }
 
 impl BinOpVisitWith for FloatSub {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        visit_float(self, ctx, dst, lhs, rhs);
+        visit_float(self, ctx, dst, rhs, lhs);
     }
 }
 
 impl BinOpVisitWith for FloatMul {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        visit_float(self, ctx, dst, lhs, rhs);
+        visit_float(self, ctx, dst, rhs, lhs);
     }
 }
 
@@ -339,19 +339,19 @@ impl Algebra for Eq {}
 
 impl BinOpVisitWith for Add {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        visit_int(self, ctx, dst, lhs, rhs);
+        visit_int(self, ctx, dst, rhs, lhs);
     }
 }
 
 impl BinOpVisitWith for Sub {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        visit_int(self, ctx, dst, lhs, rhs);
+        visit_int(self, ctx, dst, rhs, lhs);
     }
 }
 
 impl BinOpVisitWith for Mul {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        visit_int(self, ctx, dst, lhs, rhs);
+        visit_int(self, ctx, dst, rhs, lhs);
     }
 }
 
@@ -359,10 +359,10 @@ impl BinOpVisitWith for Eq {
     fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
         match (&lhs, &rhs) {
             (BinOpArg::Float(_), _) | (_, BinOpArg::Float(_)) => {
-                visit_float(self, ctx, dst, lhs, rhs);
+                visit_float(self, ctx, dst, rhs, lhs);
             }
             _ => {
-                visit_int(self, ctx, dst, lhs, rhs);
+                visit_int(self, ctx, dst, rhs, lhs);
             }
         }
     }

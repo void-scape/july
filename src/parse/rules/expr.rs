@@ -298,9 +298,9 @@ impl<'a> ParserRule<'a> for AssignRule {
         stream: &mut TokenStream<'a>,
         stack: &mut Vec<TokenId>,
     ) -> RResult<'a, Self::Output> {
-        let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus)>>());
+        let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus, Hyphen)>>());
         let expr = ExprRule::parse(buffer, &mut slice, stack)?;
-        stream.eat_until::<Any<(Equals, Plus)>>();
+        stream.eat_until::<Any<(Equals, Plus, Hyphen)>>();
 
         match stream.peek_kind() {
             Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
@@ -319,6 +319,22 @@ impl<'a> ParserRule<'a> for AssignRule {
                             buffer.span(next.unwrap()),
                         ),
                         kind: AssignKind::Add,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
+                    })),
+                    _ => Err(stream.error("expected `+`")),
+                }
+            }
+            Some(TokenKind::Hyphen) => {
+                let plus = stream.expect();
+                let next = stream.next();
+                match next.map(|next| buffer.kind(next)) {
+                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
+                        assign_span: Span::from_spans(
+                            buffer.span(plus),
+                            buffer.span(next.unwrap()),
+                        ),
+                        kind: AssignKind::Sub,
                         lhs: Box::new(expr),
                         rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
                     })),

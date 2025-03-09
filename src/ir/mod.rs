@@ -1218,6 +1218,7 @@ pub struct Assign<'a> {
 pub enum AssignKind {
     Equals,
     Add,
+    Sub,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]

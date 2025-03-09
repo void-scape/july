@@ -115,12 +115,13 @@ fn entry(
 
     loop {
         let Some(instr) = instrs.next() else {
-            if let Some(block) = current_block {
-                if let Some(next_block) = current_func.next_block(block) {
-                    instrs = next_block.iter();
-                    continue;
-                }
-            }
+            //if let Some(block) = current_block {
+            //    if let Some(next_block) = current_func.next_block(block) {
+            //        //println!("{:#?}", next_block);
+            //        //instrs = next_block.iter();
+            //        //continue;
+            //    }
+            //}
 
             return Err(InterpErr::DryStream);
         };
@@ -136,6 +137,7 @@ fn entry(
                 instr,
                 instr_num,
                 total_instr_num,
+                current_block.unwrap(),
             );
         }
 
@@ -694,10 +696,12 @@ fn log_instr(
     instr: &Air,
     instr_num: usize,
     total_instr_num: usize,
+    current_block: BlockId,
 ) {
     println!(
-        "[\u{1b}[32m{}\u{1b}[39m:{instr_num}:{total_instr_num}]\u{1b}[1m\u{1b}[35m {instr:?}\u{1b}[39m\u{1b}[22m",
-        ctx.expect_ident(current_func.func.sig.ident)
+        "[\u{1b}[32m{}\u{1b}[39m:{:?}:{total_instr_num}]\u{1b}[1m\u{1b}[35m {instr:?}\u{1b}[39m\u{1b}[22m",
+        ctx.expect_ident(current_func.func.sig.ident),
+        current_block,
     );
 
     match instr {

@@ -14,7 +14,7 @@ extern("C") {
     SDL_CreateTextureFromSurface: (renderer: &Renderer, surface: &Surface) -> &Texture;
     SDL_RenderTexture: (renderer: &Renderer, texture: &Texture, srcrect: &FRect, dstrect: &FRect) -> bool;
 
-    SDL_PollEvent: (event: &Event) -> bool;
+    SDL_PollEvent: (event: &KeyboardEvent) -> bool;
     SDL_Delay: (ms: u32);
     SDL_GetError: () -> CStr;
 }
@@ -39,6 +39,22 @@ Event: struct {
     padding: [124] u8,
 }
 
+KeyboardEvent: struct {
+    event_type: u32,        /**< SDL_EVENT_KEY_DOWN or SDL_EVENT_KEY_UP */
+    reserved: u32,
+    timestamp: u64,         /**< In nanoseconds, populated using SDL_GetTicksNS() */
+    window_id: u32,         /**< The window with keyboard focus, if any */
+    keyboard_id: u32,       /**< The keyboard instance id, or 0 if unknown or virtual */
+    scancode: u32,          /**< SDL physical key code */
+    key: u32,               /**< SDL virtual key code */
+    keymod: u16,            /**< current key modifiers */
+    raw: u16,               /**< The platform dependent scancode for this event */
+    down: bool,             /**< true if the key is pressed */
+    repeat: bool,           /**< true if this is a key repeat */
+
+    padding: [88] u8,
+}
+
 Surface: struct {
     flags: u32,
     format: i32,
@@ -59,9 +75,10 @@ Texture: struct {
 }
 
 FRect: struct {
-    dummy: u32
-
-    // .. incomplete!
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
 }
 
 NULL           : const u64 = 0;
@@ -70,6 +87,10 @@ SDL_QUIT       : const u32 = 0x100;
 SDL_KEY_DOWN   : const u32 = 0x300;
 
 SDLK_A         : const u32 = 0x00000061;
+SDLK_S         : const u32 = 0x00000073;
+SDLK_D         : const u32 = 0x00000064;
+SDLK_W         : const u32 = 0x00000077;
+SDLK_ESC       : const u32 = 0x0000001b;
 
 WIDTH          : const i32 = 640;
 HEIGHT         : const i32 = 380;
@@ -104,24 +125,15 @@ main: () -> i32 {
         return 1;
     }
 
-    let bmp = SDL_LoadBMP(cs("./demo/bebop.bmp\0"));
-    if bmp == NULL {
-        report_error("failed to create bebop\n");
-        return 1;
-    }
-    let texture = SDL_CreateTextureFromSurface(renderer, bmp);
+    let texture = load_bmp_texture(cs("./demo/bebop.bmp\0"), renderer);
     if texture == NULL {
-        report_error("failed to create bebop texture\n");
         return 1;
     }
-    SDL_DestroySurface(bmp);
-
     // let textures = [&Texture; 2];
+    // textures[0] = bebop;
 
-    let pos = Vec2 { x: 0.4, y: 0. };
-    assert(pos.x == 0.4);
-
-    let event = Event {};
+    let pos = Vec2 { x: 0., y: 0. };
+    let event = KeyboardEvent {};
     loop {
         if SDL_PollEvent(&event) {
             if event.event_type == SDL_QUIT {
@@ -129,18 +141,52 @@ main: () -> i32 {
             }
 
             if event.event_type == SDL_KEY_DOWN {
-                return 0;
+                if event.key == SDLK_ESC {
+                    return 0;
+                }
+
+                if event.key == SDLK_S {
+                    pos.y += 1.;
+                }
+
+                if event.key == SDLK_D {
+                    pos.x += 1.;
+                }
+
+                if event.key == SDLK_W {
+                    pos.y -= 1.;
+                }
+
+                if event.key == SDLK_A {
+                    pos.x -= 1.;
+                }
             }
         }
 
+        let dst = FRect { x: pos.x, y: pos.y, w: 100., h: 100. };
         if !SDL_RenderClear(renderer)   { return 1; }
         if !SDL_RenderTexture(renderer,
                               texture,
                               NULL,
-                              NULL)     { return 1; }
+                              &dst)     { return 1; }
         if !SDL_RenderPresent(renderer) { return 1; }
         SDL_Delay(DELAY_MS);
     }
+}
+
+load_bmp_texture: (path: CStr, renderer: &Renderer) -> &Texture {
+    let bmp = SDL_LoadBMP(path);
+    if bmp == NULL {
+        report_error("failed to load bmp\n");
+        return NULL;
+    }
+    let texture = SDL_CreateTextureFromSurface(renderer, bmp);
+    if texture == NULL {
+        report_error("failed to create bmp texture\n");
+        return NULL;
+    }
+    SDL_DestroySurface(bmp);
+    texture
 }
 
 report_error: (msg: &str) {

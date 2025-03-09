@@ -103,19 +103,23 @@ impl<'a> AirCtx<'a> {
     #[track_caller]
     pub fn active_block(&self) -> BlockId {
         let builder = self.expect_func_builder();
-
-        if builder.instrs.is_empty() {
-            panic!("expected an active block");
-        }
-
-        BlockId(builder.instrs.len().saturating_sub(1))
+        builder.active
     }
 
     #[track_caller]
     pub fn in_new_block(&mut self, f: impl FnOnce(&mut Self, BlockId)) -> BlockId {
+        let prev = self.active_block();
         let inner = self.new_block();
+        self.set_active_block(inner);
         f(self, inner);
+        self.set_active_block(prev);
         inner
+    }
+
+    pub fn set_active_block(&mut self, block: BlockId) {
+        let builder = self.expect_func_builder_mut();
+        assert!(block.0 < builder.instrs.len());
+        builder.active = block;
     }
 
     pub fn new_var_registered_with_hash(
