@@ -201,7 +201,7 @@ impl<'a> Ctx<'a> {
 }
 
 impl<'a> Buffer<'a> for Ctx<'a> {
-    fn token_buffer(&'a self) -> &'a TokenBuffer<'a> {
+    fn token_buffer(&self) -> &TokenBuffer<'a> {
         self.tokens
     }
 }

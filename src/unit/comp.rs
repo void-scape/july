@@ -35,13 +35,13 @@ impl CompUnit {
                 .iter()
                 .map(|func| air::lower_func(&mut air_ctx, func))
                 .collect::<Vec<_>>();
-            //println!(
-            //    "{:#?}",
-            //    ctx.tys.structs().iter().map(|s| (
-            //        ctx.expect_ident(s.name.id),
-            //        ctx.tys.struct_layout(ctx.tys.expect_struct_id(s.name.id))
-            //    )).collect::<Vec<_>>()
-            //);
+            println!(
+                "{:#?}",
+                ctx.tys.structs().iter().map(|s| (
+                    ctx.expect_ident(s.name.id),
+                    ctx.tys.struct_layout(ctx.tys.expect_struct_id(s.name.id))
+                )).collect::<Vec<_>>()
+            );
             let exit = interp::run(&ctx, &air_funcs, &consts, log).unwrap();
             println!("exit: {exit}");
 

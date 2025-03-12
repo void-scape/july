@@ -1,14 +1,12 @@
 use super::expr::{Expr, ExprRule};
 use super::types::{PType, TypeRule};
-use super::{Next, ParserRule, RResult};
-use crate::diagnostic::Msg;
+use super::{Next, PErr, ParserRule, RResult};
 use crate::lex::buffer::*;
 use crate::parse::combinator::opt::Opt;
 use crate::parse::combinator::spanned::Spanned;
 use crate::parse::matc::{self, *};
 use crate::parse::stream::TokenStream;
 
-/// Structured data fields.
 #[derive(Debug)]
 pub struct Struct {
     pub span: Span,
@@ -24,64 +22,43 @@ pub struct Field {
     pub ty: PType,
 }
 
-/// <ident> : struct { [<fields>, ...] }
 #[derive(Debug, Default)]
 pub struct StructRule;
 
-impl<'a> ParserRule<'a> for StructRule {
+impl<'a, 's> ParserRule<'a, 's> for StructRule {
     type Output = Struct;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let (name, _, _, (block_span, fields)) =
-            <(
-                Next<Ident>,
-                Next<Colon>,
-                Next<matc::Struct>,
-                StructBlockRule,
-            ) as ParserRule>::parse(buffer, stream, stack)?;
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let (name, _, _) =
+            <(Next<Ident>, Next<Colon>, Next<matc::Struct>) as ParserRule>::parse(stream)?;
+        let (block_span, fields) = StructBlockRule::parse(stream).map_err(PErr::fail)?;
         Ok(Struct {
             name,
             fields,
-            span: Span::from_spans(buffer.span(name), block_span),
+            span: Span::from_spans(stream.span(name), block_span),
         })
     }
 }
 
-/// `{ [<ident>: <type>,][,] }`
 #[derive(Default)]
 pub struct StructBlockRule;
 
-impl<'a> ParserRule<'a> for StructBlockRule {
+impl<'a, 's> ParserRule<'a, 's> for StructBlockRule {
     type Output = (Span, Vec<Field>);
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let start = buffer.span(stream.prev());
-        match Spanned::<(Next<OpenCurly>, StructFieldDecl, Next<CloseCurly>)>::parse(
-            buffer, stream, stack,
-        ) {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let chk = *stream;
+        let start = stream.span(stream.prev());
+        match Spanned::<(Next<OpenCurly>, StructFieldDecl, Next<CloseCurly>)>::parse(stream) {
             Ok(block) => {
                 let span = block.span();
                 let (_, fields, _) = block.into_inner();
                 Ok((span, fields))
             }
             Err(e) => {
-                stream.eat_until::<CloseCurly>();
-                if let Some(t) = stream.next() {
-                    Err(e.msg(Msg::note(
-                        Span::from_spans(start, buffer.span(t)),
-                        "while parsing this struct",
-                    )))
-                } else {
-                    Err(e)
-                }
+                *stream = chk;
+                stream.consume_matched_delimiters_inclusive::<Curly>();
+                Err(e.fail())
             }
         }
     }
@@ -92,26 +69,20 @@ impl<'a> ParserRule<'a> for StructBlockRule {
 #[derive(Debug, Default)]
 pub struct StructFieldDecl;
 
-impl<'a> ParserRule<'a> for StructFieldDecl {
+impl<'a, 's> ParserRule<'a, 's> for StructFieldDecl {
     type Output = Vec<Field>;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let mut fields = Vec::new();
 
         while !stream.match_peek::<CloseCurly>() {
             let field =
-                Spanned::<(Next<Ident>, Next<Colon>, TypeRule, Opt<Next<Comma>>)>::parse(
-                    buffer, stream, stack,
-                )?;
+                Spanned::<(Next<Ident>, Next<Colon>, TypeRule, Opt<Next<Comma>>)>::parse(stream)?;
             let span = field.span();
             let (name, colon, ty, comma) = field.into_inner();
 
             if comma.is_none() && !stream.match_peek::<CloseCurly>() {
-                return Err(stream.error("expected `,` after field"));
+                return Err(PErr::Fail(stream.error("expected `,` after field")));
             }
 
             fields.push(Field {
@@ -142,24 +113,18 @@ pub struct FieldDef {
     pub expr: Expr,
 }
 
-/// <ident> { [<field_def>, ...] }
 #[derive(Debug, Default)]
 pub struct StructDefRule;
 
-impl<'a> ParserRule<'a> for StructDefRule {
+impl<'a, 's> ParserRule<'a, 's> for StructDefRule {
     type Output = StructDef;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let (name, (block_span, fields)) =
-            <(Next<Ident>, StructDefBlockRule)>::parse(buffer, stream, stack)?;
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let (name, (block_span, fields)) = <(Next<Ident>, StructDefBlockRule)>::parse(stream)?;
         Ok(StructDef {
             name,
             fields,
-            span: Span::from_spans(buffer.span(name), block_span),
+            span: Span::from_spans(stream.span(name), block_span),
         })
     }
 }
@@ -168,26 +133,17 @@ impl<'a> ParserRule<'a> for StructDefRule {
 #[derive(Default)]
 pub struct StructDefBlockRule;
 
-impl<'a> ParserRule<'a> for StructDefBlockRule {
+impl<'a, 's> ParserRule<'a, 's> for StructDefBlockRule {
     type Output = (Span, Vec<FieldDef>);
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        match Spanned::<(Next<OpenCurly>, StructFieldDef, Next<CloseCurly>)>::parse(
-            buffer, stream, stack,
-        ) {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        match Spanned::<(Next<OpenCurly>, StructFieldDef, Next<CloseCurly>)>::parse(stream) {
             Ok(block) => {
                 let span = block.span();
                 let (_, fields, _) = block.into_inner();
                 Ok((span, fields))
             }
-            Err(e) => {
-                stream.eat_until_consume::<CloseCurly>();
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 }
@@ -197,25 +153,20 @@ impl<'a> ParserRule<'a> for StructDefBlockRule {
 #[derive(Debug, Default)]
 pub struct StructFieldDef;
 
-impl<'a> ParserRule<'a> for StructFieldDef {
+impl<'a, 's> ParserRule<'a, 's> for StructFieldDef {
     type Output = Vec<FieldDef>;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let mut fields = Vec::new();
 
         while !stream.match_peek::<CloseCurly>() {
-            let field = Spanned::<(Next<Ident>, Next<Colon>, ExprRule, Opt<Next<Comma>>)>::parse(
-                buffer, stream, stack,
-            )?;
+            let field =
+                Spanned::<(Next<Ident>, Next<Colon>, ExprRule, Opt<Next<Comma>>)>::parse(stream)?;
             let span = field.span();
             let (name, colon, expr, comma) = field.into_inner();
 
             if comma.is_none() && !stream.match_peek::<CloseCurly>() {
-                return Err(stream.error("expected `,` after field"));
+                return Err(PErr::Fail(stream.error("expected `,` after field")));
             }
 
             fields.push(FieldDef {

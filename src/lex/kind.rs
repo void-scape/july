@@ -1,77 +1,47 @@
 /// Definition of all kinds of tokens found within a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
-    /// `const`
     Const,
-    /// `loop`
     Loop,
-    /// `if`
     If,
-    /// `else`
     Else,
-    /// `true`
+    For,
+    In,
     True,
-    /// `false`
     False,
-
-    /// `extern`
+    Break,
+    Continue,
     Extern,
-    /// `struct`
     Struct,
-    /// `enum`
     Enum,
-    /// `let`
     Let,
-    /// `fn`
     Fn,
-    /// `return`
     Ret,
-    /// `;`
     Semi,
-    /// `:`
     Colon,
-    /// `=`
     Equals,
-    /// `(`
     OpenParen,
-    /// `)`
     CloseParen,
-    /// `[`
     OpenBracket,
-    /// `]`
     CloseBracket,
-    /// `{`
     OpenCurly,
-    /// `}`
     CloseCurly,
-    /// [`0`..`9` .. ]
     Int,
-    /// [`0`..`9` .. [.] .. ]
     Float,
-    /// `"I am a string literal!"`
     Str,
-    /// `<a..z | A..Z>[a..z | A..Z | 0..9]`
     Ident,
-    /// '+'
     Plus,
-    /// `*`
     Asterisk,
-    /// `/`
     Slash,
-    /// `>`
     Greater,
-    /// `-`
     Hyphen,
-    /// `,`
     Comma,
-    /// `.`
     Dot,
-    /// `#`
+    DoubleDot,
     Pound,
-    /// `&`
     Ampersand,
-    /// `!`
     Bang,
+    Caret,
 }
 
 impl TokenKind {
@@ -99,32 +69,25 @@ impl TokenKind {
             Self::Hyphen => "-",
             Self::Comma => ",",
             Self::Dot => ".",
+            Self::DoubleDot => "..",
             Self::Pound => "#",
             Self::Ampersand => "&",
             Self::Bang => "!",
-
+            Self::Caret => "^",
             Self::Const => "const",
             Self::Loop => "loop",
             Self::If => "if",
             Self::Else => "else",
+            Self::For => "for",
+            Self::In => "in",
             Self::True => "true",
             Self::False => "false",
-
+            Self::Break => "break",
+            Self::Continue => "continue",
             Self::Int => "integer",
             Self::Float => "float",
             Self::Str => "string",
             Self::Ident => "identifier",
-        }
-    }
-
-    pub fn is_terminator(&self) -> bool {
-        matches!(self, Self::Semi)
-    }
-
-    pub fn is_keyword(&self) -> bool {
-        match self {
-            Self::Ret | Self::Struct | Self::Fn | Self::Let => true,
-            _ => false,
         }
     }
 }

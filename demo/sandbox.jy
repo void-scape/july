@@ -1,0 +1,20 @@
+main: () -> i32 {
+    let x = (1. * 4.) / 1.2;
+    printf("%\n", x);
+
+
+    0
+}
+
+assert: (condition: bool) {
+    if !condition {
+        printf("failed assert\n");
+        exit(1);
+    }
+}
+
+#[intrinsic]
+exit: (code: i32) {}
+
+#[intrinsic]
+printf: (fmt: &str) {}

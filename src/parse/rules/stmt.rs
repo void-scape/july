@@ -1,8 +1,9 @@
-use super::{Next, ParserRule, RResult};
+use super::{Next, PErr, ParserRule, RResult};
+use crate::ir::AssignKind;
 use crate::lex::buffer::*;
+use crate::lex::kind::TokenKind;
 use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*, stream::TokenStream};
 
-/// High level operation performed in blocks.
 #[derive(Debug, Clone)]
 pub enum Stmt {
     Let {
@@ -14,50 +15,55 @@ pub enum Stmt {
     Open(Expr),
 }
 
-/// `<expr>[;]`
 pub struct StmtRule;
 
-impl<'a> ParserRule<'a> for StmtRule {
+impl<'a, 's> ParserRule<'a, 's> for StmtRule {
     type Output = Stmt;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let (expr, semi) = <(
-            Alt<(CntrlFlowRule, ExprRule, AssignRule, LoopRule)>,
-            Opt<Next<Semi>>,
-        )>::parse(buffer, stream, stack)?;
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let chk = *stream;
+        match LetRule::parse(stream) {
+            Ok(let_) => Ok(let_),
+            Err(err) => {
+                if !err.recoverable() {
+                    return Err(err);
+                }
 
-        if semi.is_some() {
-            Ok(Stmt::Semi(expr))
-        } else {
-            Ok(Stmt::Open(expr))
+                *stream = chk;
+                let (expr, semi) = <(
+                    Alt<(CntrlFlowRule, ForRule, LoopRule, ExprRule, AssignRule)>,
+                    Opt<Next<Semi>>,
+                )>::parse(stream)?;
+
+                if semi.is_some() {
+                    Ok(Stmt::Semi(expr))
+                } else {
+                    Ok(Stmt::Open(expr))
+                }
+            }
         }
     }
 }
 
-/// `let <ident>[: <type>] = <expr>;`
 pub struct LetRule;
 
-impl<'a> ParserRule<'a> for LetRule {
+impl<'a, 's> ParserRule<'a, 's> for LetRule {
     type Output = Stmt;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let (_let, name, ty, _equals, expr, _semi) =
-            <(
-                Next<Let>,
-                Next<Ident>,
-                Opt<(Next<Colon>, TypeRule)>,
-                Next<Equals>,
-                ExprRule,
-                Next<Semi>,
-            ) as ParserRule>::parse(buffer, stream, stack)?;
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        if !stream.match_peek::<Let>() {
+            return Err(PErr::Recover(stream.error("expected `let`")));
+        }
+
+        let (_let, name, ty, _equals, expr, _semi) = <(
+            Next<Let>,
+            Next<Ident>,
+            Opt<(Next<Colon>, TypeRule)>,
+            Next<Equals>,
+            ExprRule,
+            Next<Semi>,
+        ) as ParserRule>::parse(stream)
+        .map_err(PErr::fail)?;
 
         Ok(Stmt::Let {
             ty: ty.map(|(_, t)| t),
@@ -67,23 +73,76 @@ impl<'a> ParserRule<'a> for LetRule {
     }
 }
 
-/// `if <condition> { <stmts> } [else { <stmts> }]`
-pub struct CntrlFlowRule;
+#[derive(Debug, Default)]
+pub struct AssignRule;
 
-impl<'a> ParserRule<'a> for CntrlFlowRule {
+impl<'a, 's> ParserRule<'a, 's> for AssignRule {
     type Output = Expr;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus, Hyphen)>>());
+        let expr = ExprRule::parse(&mut slice)?;
+        stream.eat_until::<Any<(Equals, Plus, Hyphen)>>();
+
+        match stream.peek_kind() {
+            Some(TokenKind::Equals) => {
+                _ = stream.expect();
+                if stream.match_peek::<Equals>() {
+                    Err(stream.recover("expected assignment, got equality"))
+                } else {
+                    Ok(Expr::Assign(Assign {
+                        kind: AssignKind::Equals,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(ExprRule::parse(stream).map_err(PErr::fail)?),
+                    }))
+                }
+            }
+            Some(TokenKind::Plus) => {
+                let _plus = stream.expect();
+                let next = stream.next();
+                match next.map(|next| stream.kind(next)) {
+                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
+                        kind: AssignKind::Add,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(ExprRule::parse(stream).map_err(PErr::fail)?),
+                    })),
+                    _ => Err(stream.recover("expected `+`")),
+                }
+            }
+            Some(TokenKind::Hyphen) => {
+                let _plus = stream.expect();
+                let next = stream.next();
+                match next.map(|next| stream.kind(next)) {
+                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
+                        kind: AssignKind::Sub,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(ExprRule::parse(stream).map_err(PErr::fail)?),
+                    })),
+                    _ => Err(stream.recover("expected `-`")),
+                }
+            }
+            _ => Err(stream.recover("expected assignment")),
+        }
+    }
+}
+
+pub struct CntrlFlowRule;
+
+impl<'a, 's> ParserRule<'a, 's> for CntrlFlowRule {
+    type Output = Expr;
+
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        if !stream.match_peek::<If>() {
+            return Err(PErr::Recover(stream.error("expected `if`")));
+        }
+
         let (iff, expr, block, otherwise) = <(
             Next<If>,
-            IfExprRule,
+            ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe,
             BlockRules,
             Opt<(Next<Else>, BlockRules)>,
-        ) as ParserRule>::parse(buffer, stream, stack)?;
+        ) as ParserRule>::parse(stream)
+        .map_err(PErr::fail)?;
 
         Ok(if let Some((_else, otherwise)) = otherwise {
             Expr::If(iff, Box::new(expr), block, Some(otherwise))
@@ -93,42 +152,64 @@ impl<'a> ParserRule<'a> for CntrlFlowRule {
     }
 }
 
-pub struct IfExprRule;
+pub struct ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe;
 
-impl<'a> ParserRule<'a> for IfExprRule {
+impl<'a, 's> ParserRule<'a, 's> for ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe {
     type Output = Expr;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let chk = *stream;
-        let mut slice = stream.slice(stream.find_offset::<OpenCurly>());
-        stream.eat_until::<OpenCurly>();
-        match ExprRule::parse(buffer, &mut slice, stack) {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let offset = stream.find_offset::<OpenCurly>();
+        let mut slice = stream.slice(offset);
+        stream.eat_n(offset);
+        assert!(stream.match_peek::<OpenCurly>());
+        match ExprRule::parse(&mut slice) {
             Ok(expr) => Ok(expr),
-            Err(diag) => {
-                *stream = chk;
-                Err(diag)
-            }
+            Err(diag) => Err(diag.fail()),
         }
     }
 }
 
-/// `loop { <stmts> .. }`
 pub struct LoopRule;
 
-impl<'a> ParserRule<'a> for LoopRule {
+impl<'a, 's> ParserRule<'a, 's> for LoopRule {
     type Output = Expr;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        if !stream.match_peek::<Loop>() {
+            return Err(PErr::Recover(stream.error("expected `loop`")));
+        }
+
         let (loop_, block) =
-            <(Next<Loop>, BlockRules) as ParserRule>::parse(buffer, stream, stack)?;
+            <(Next<Loop>, BlockRules) as ParserRule>::parse(stream).map_err(PErr::fail)?;
         Ok(Expr::Loop(loop_, block))
+    }
+}
+
+pub struct ForRule;
+
+impl<'a, 's> ParserRule<'a, 's> for ForRule {
+    type Output = Expr;
+
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        if !stream.match_peek::<For>() {
+            return Err(PErr::Recover(stream.error("expected `for`")));
+        }
+
+        let spanned = Spanned::<(
+            Next<For>,
+            Next<Ident>,
+            Next<In>,
+            ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe,
+            BlockRules,
+        )>::parse(stream)
+        .map_err(PErr::fail)?;
+        let span = spanned.span();
+        let (_four, iter, _inn, iterable, block) = spanned.into_inner();
+        Ok(Expr::For {
+            span,
+            iter,
+            iterable: Box::new(iterable),
+            block,
+        })
     }
 }

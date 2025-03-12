@@ -6,9 +6,13 @@ main: () -> i32 {
     assert(var_2_var() == 16);
     assert(simple_if_then(true, 4) == 2);
     assert(24 == 24);
+    simple_for();
+
     assert(simple_float() == 0.7 * 2.);
-    // TODO: I don't know why this fails and the previous works
-    // assert(0.7 * 2. == 0.7 * 2.);
+    assert(0.7 * 2. == 0.7 * 2.);
+    assert((1. * 4.) / 1.2 == 1. * 4. / 1.2)
+    assert(1. * 4. / 1.2 == 1. * (4. / 1.2))
+
     0
 }
 
@@ -191,8 +195,8 @@ simple_if_then: (condition: bool, x: i32) -> i32 {
     if condition == false {
         x
     } else {
-        let y = x - 2;
-        y
+        let some = x - 2;
+        return some;
     }
 }
 
@@ -207,6 +211,56 @@ simple_float: () -> f32 {
     let pos = Vec2 { x: 0.4, y: 0.7 };
     assert(pos.x == 0.4);
     pos.y * 2.
+}
+
+// ------------ Loops ------------
+simple_for: ()  {
+    printf("hard coded:\n");
+
+    let start = 0;
+    let end = 10;
+    let _it = start;
+    let i = _it;
+    loop {
+        // exit condition
+        if _it == end {
+            break;
+        }
+        i = _it;
+
+        // for block
+        // {
+            printf("%\n", i);
+        // }
+
+        // post op
+        _it += 1;
+    }
+
+    printf("builtin:\n");
+
+    let x = [true, false, false, true, false, true, true];
+
+    for b in x {
+        // printf("% => %\n", b, b^);
+        printf("%\n", b);
+    }
+
+    let ints = [12, 24, 48];
+
+    printf("\n");
+    for int in ints {
+        // printf("% => %\n", b, b^);
+        printf("%\n", int);
+    }
+
+    for val in 0..7 {
+        printf("%\n", x[val]);
+    }
+
+    for it in 2..10 {
+        printf("%\n", it);
+    }
 }
 
 // ------------ Util ------------

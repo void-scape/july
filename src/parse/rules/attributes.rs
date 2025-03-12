@@ -1,6 +1,7 @@
-use super::{ParserRule, RResult};
+use super::{PErr, ParserRule, RResult};
 use crate::lex::buffer::{Span, TokenId, TokenQuery};
 use crate::parse::matc::Bracket;
+use crate::parse::stream::TokenStream;
 
 // TODO: parse these suckers
 #[derive(Debug, Clone)]
@@ -11,14 +12,10 @@ pub struct Attribute {
 
 pub struct AttributeRule;
 
-impl<'a> ParserRule<'a> for AttributeRule {
+impl<'a, 's> ParserRule<'a, 's> for AttributeRule {
     type Output = Attribute;
 
-    fn parse(
-        buffer: &'a crate::lex::buffer::TokenBuffer<'a>,
-        stream: &mut crate::parse::stream::TokenStream<'a>,
-        _: &mut Vec<crate::lex::buffer::TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let _pound = stream.expect();
         let _bracket = stream.expect();
         let offset = stream.find_matched_delim_offset::<Bracket>();
@@ -29,20 +26,19 @@ impl<'a> ParserRule<'a> for AttributeRule {
         let tokens = slice.drain();
         match tokens.len() {
             0 => {
-                return Err(stream.full_error(
+                return Err(PErr::Fail(stream.full_error(
                     "expected atleast one argument in attribute",
-                    buffer.span(stream.prev()),
-                    "",
-                ))
+                    stream.span(stream.prev()),
+                )))
             }
             1 => Ok(Attribute {
-                span: buffer.span(tokens[0]),
+                span: stream.span(tokens[0]),
                 tokens,
             }),
             _ => Ok(Attribute {
                 span: Span::from_spans(
-                    buffer.span(tokens[0]),
-                    buffer.span(*tokens.last().unwrap()),
+                    stream.span(tokens[0]),
+                    stream.span(*tokens.last().unwrap()),
                 ),
                 tokens,
             }),

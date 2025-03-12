@@ -1,5 +1,6 @@
 use crate::{
     diagnostic::{Diag, Msg},
+    lex::buffer::Buffer,
     parse::matc::{Any, MatchTokenKind},
 };
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
 };
 use std::{marker::PhantomData, panic::Location};
 
+mod arr;
 mod attributes;
 mod block;
 mod enom;
@@ -20,6 +22,7 @@ mod types;
 
 #[allow(unused)]
 pub mod prelude {
+    pub use super::arr::*;
     pub use super::attributes::*;
     pub use super::block::*;
     pub use super::enom::*;
@@ -31,25 +34,53 @@ pub mod prelude {
     pub use super::types::*;
 }
 
-// TODO: remove buffer because stream already implements `TokenQuery`
-//
-// TODO: remove stack, it is only used for expr parsing, which can be allocated locally anyway
-// since expressions aren't typically too long
-//
-// TODO: errors should recover better. There are places like stmt parsing where an `Alt` parser will fail
-// with one parser half way through, reset, and try the next instead of reporting an unrecoverable error and
-// consuming the stream until a recoverable point.
-pub trait ParserRule<'a> {
+pub trait ParserRule<'a, 's> {
     type Output;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output>;
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output>;
 }
 
-pub type RResult<'a, T> = Result<T, Diag<'a>>;
+pub type RResult<'a, T> = Result<T, PErr<'a>>;
+
+#[derive(Debug)]
+pub enum PErr<'a> {
+    Recover(Diag<'a>),
+    Fail(Diag<'a>),
+}
+
+impl<'a> PErr<'a> {
+    pub fn recoverable(&self) -> bool {
+        matches!(self, Self::Recover(_))
+    }
+
+    pub fn recover(self) -> Self {
+        match self {
+            Self::Fail(diag) => Self::Recover(diag),
+            Self::Recover(diag) => Self::Recover(diag),
+        }
+    }
+
+    pub fn fail(self) -> Self {
+        match self {
+            Self::Recover(diag) => Self::Fail(diag),
+            Self::Fail(diag) => Self::Fail(diag),
+        }
+    }
+
+    pub fn wrap(self, other: Self) -> Self {
+        match self {
+            Self::Recover(diag) => Self::Recover(diag.wrap(other.into_diag())),
+            Self::Fail(diag) => Self::Fail(diag.wrap(other.into_diag())),
+        }
+    }
+
+    pub fn into_diag(self) -> Diag<'a> {
+        match self {
+            Self::Recover(diag) => diag,
+            Self::Fail(diag) => diag,
+        }
+    }
+}
 
 /// Consumes next token if it passes the `Next` constraint. Fails otherwise.
 pub type Next<Next> = Rule<Next, Any>;
@@ -69,7 +100,7 @@ impl<C, N, R> Default for Rule<C, N, R> {
     }
 }
 
-impl<'a, C, N, R> ParserRule<'a> for Rule<C, N, R>
+impl<'a, 's, C, N, R> ParserRule<'a, 's> for Rule<C, N, R>
 where
     C: MatchTokenKind,
     N: MatchTokenKind,
@@ -78,33 +109,33 @@ where
     type Output = TokenId;
 
     #[track_caller]
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        _stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, TokenId> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, TokenId> {
         match (stream.next(), stream.peek()) {
             (Some(c), Some(n)) => {
-                if C::matches(Some(buffer.kind(c))) && N::matches(Some(buffer.kind(n))) {
+                if C::matches(Some(stream.kind(c))) && N::matches(Some(stream.kind(n))) {
                     Ok(c)
                 } else {
-                    Err(R::report(buffer, Some(c), stream.prev()))
+                    Err(R::report(stream.token_buffer(), Some(c), stream.prev()))
                 }
             }
             (Some(c), None) => {
-                if C::matches(Some(buffer.kind(c))) && N::matches(None) {
+                if C::matches(Some(stream.kind(c))) && N::matches(None) {
                     Ok(c)
                 } else {
-                    Err(R::report(buffer, Some(c), stream.prev()))
+                    Err(R::report(stream.token_buffer(), Some(c), stream.prev()))
                 }
             }
-            (None, _) => Err(R::report(buffer, None, stream.prev())),
+            (None, _) => Err(R::report(stream.token_buffer(), None, stream.prev())),
         }
     }
 }
 
 pub trait ReportDiag {
-    fn report<'a>(buffer: &'a TokenBuffer<'a>, token: Option<TokenId>, prev: TokenId) -> Diag<'a>;
+    fn report<'a, 's>(
+        buffer: &'a TokenBuffer<'s>,
+        token: Option<TokenId>,
+        prev: TokenId,
+    ) -> PErr<'s>;
 }
 
 #[derive(Default)]
@@ -116,33 +147,38 @@ where
     N: MatchTokenKind,
 {
     #[track_caller]
-    fn report<'a>(buffer: &'a TokenBuffer<'a>, token: Option<TokenId>, prev: TokenId) -> Diag<'a> {
+    fn report<'a, 's>(
+        buffer: &'a TokenBuffer<'s>,
+        token: Option<TokenId>,
+        prev: TokenId,
+    ) -> PErr<'s> {
         let (msg, span) = if let Some(token) = token {
             (C::expect(), buffer.span(token))
         } else {
             (C::expect(), buffer.span(prev))
         };
 
-        Diag::sourced(PARSE_ERR, buffer.source(), Msg::error(span, msg)).loc(Location::caller())
+        PErr::Recover(
+            Diag::sourced(PARSE_ERR, buffer.source(), Msg::error(span, msg))
+                .loc(Location::caller()),
+        )
     }
 }
 
 macro_rules! impl_parser_rule {
     ($($T:ident),*) => {
-        impl<'a, $($T,)*> ParserRule<'a> for ($($T,)*)
+        impl<'a, 's, $($T,)*> ParserRule<'a, 's> for ($($T,)*)
         where
-            $($T: ParserRule<'a>,)*
+            $($T: ParserRule<'a, 's>,)*
         {
-            type Output = ($(<$T as ParserRule<'a>>::Output,)*);
+            type Output = ($(<$T as ParserRule<'a, 's>>::Output,)*);
 
             #[track_caller]
             fn parse(
-                buffer: &'a TokenBuffer<'a>,
-                stream: &mut TokenStream<'a>,
-                stack: &mut Vec<TokenId>,
-            ) -> RResult<'a, Self::Output> {
+                stream: &mut TokenStream<'a, 's>,
+            ) -> RResult<'s, Self::Output> {
                 Ok(($(
-                    $T::parse(buffer, stream, stack)?,
+                    $T::parse(stream)?,
                 )*))
             }
         }

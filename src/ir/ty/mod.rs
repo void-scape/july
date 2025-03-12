@@ -54,6 +54,10 @@ impl<'a> Ty<'a> {
         matches!(self, Self::Ref(_))
     }
 
+    pub fn is_array(&self) -> bool {
+        matches!(self, Self::Array(_, _))
+    }
+
     pub fn layout(&self, ctx: &Ctx) -> Layout {
         match self {
             Self::Unit => Layout::new(0, 1),
@@ -130,6 +134,7 @@ impl IntTy {
     pub const BOOL: Self = IntTy::new_8(Sign::U);
     pub const PTR: Self = IntTy::new_64(Sign::I);
     pub const ISIZE: Self = IntTy::new_64(Sign::I);
+    pub const USIZE: Self = IntTy::new_64(Sign::U);
 
     pub const fn new(sign: Sign, width: Width) -> Self {
         Self { sign, width }
@@ -201,7 +206,8 @@ pub enum Width {
 
 impl Width {
     pub const BOOL: Self = Self::W8;
-    pub const PTR: Self = Self::W64;
+    pub const PTR: Self = Self::SIZE;
+    pub const SIZE: Self = Self::W64;
 
     pub const fn bytes(&self) -> usize {
         match self {

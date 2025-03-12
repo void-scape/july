@@ -3,17 +3,15 @@ use crate::unit::source::Source;
 use std::ops::Range;
 
 pub trait Buffer<'a> {
-    fn token_buffer(&'a self) -> &'a TokenBuffer<'a>;
+    fn token_buffer(&self) -> &TokenBuffer<'a>;
 }
 
 /// Query about a specific token with a [`TokenId`].
 pub trait TokenQuery<'a> {
     fn kind(&'a self, token: TokenId) -> TokenKind;
     fn span(&'a self, token: TokenId) -> Span;
-    fn int_lit(&'a self, token: TokenId) -> i64;
     fn ident(&'a self, token: TokenId) -> &'a str;
     fn as_str(&'a self, token: TokenId) -> &'a str;
-    fn is_terminator(&'a self, token: TokenId) -> bool;
 }
 
 impl<'a, T> TokenQuery<'a> for T
@@ -36,17 +34,8 @@ where
     }
 
     #[track_caller]
-    fn int_lit(&'a self, token: TokenId) -> i64 {
-        self.token_buffer().int_lit(token)
-    }
-
-    #[track_caller]
     fn as_str(&'a self, token: TokenId) -> &'a str {
         self.token_buffer().as_str(token)
-    }
-
-    fn is_terminator(&'a self, token: TokenId) -> bool {
-        self.token_buffer().is_terminator(token)
     }
 }
 
@@ -82,7 +71,7 @@ impl<'a> TokenBuffer<'a> {
         self.len() == 0
     }
 
-    pub fn source(&self) -> &Source {
+    pub fn source(&self) -> &'a Source {
         self.source
     }
 
@@ -133,28 +122,6 @@ impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
     #[track_caller]
     fn as_str(&'a self, token: TokenId) -> &'a str {
         &self.source.raw()[self.span(token).range()]
-    }
-
-    #[track_caller]
-    fn int_lit(&self, token: TokenId) -> i64 {
-        if !matches!(self.kind(token), TokenKind::Int) {
-            panic!(
-                "called `TokenQuery::int_lit` on a {:?} token",
-                self.kind(token)
-            );
-        }
-
-        // TODO: check bounds of integer size somewhere
-        let str = self.as_str(token);
-        if str.contains("0x") {
-            i64::from_str_radix(&str[2..], 16).unwrap()
-        } else {
-            str.parse().unwrap()
-        }
-    }
-
-    fn is_terminator(&self, token: TokenId) -> bool {
-        self.kind(token).is_terminator()
     }
 }
 

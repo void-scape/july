@@ -1,24 +1,19 @@
-use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::parse::{rules::*, stream::TokenStream};
 
 /// Return `Some` `T` output if `Ok`, otherwise `None`.
 #[derive(Debug, Default)]
 pub struct Opt<T>(T);
 
-impl<'a, T> ParserRule<'a> for Opt<T>
+impl<'a, 's, T> ParserRule<'a, 's> for Opt<T>
 where
-    T: ParserRule<'a>,
+    T: ParserRule<'a, 's>,
 {
-    type Output = Option<<T as ParserRule<'a>>::Output>;
+    type Output = Option<<T as ParserRule<'a, 's>>::Output>;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let chck = *stream;
 
-        match T::parse(buffer, stream, stack) {
+        match T::parse(stream) {
             Ok(v) => Ok(Some(v)),
             Err(_) => {
                 *stream = chck;
@@ -34,21 +29,19 @@ pub struct XNor<T>(T);
 
 macro_rules! impl_xnor {
     ($(($n:tt, $T:ident)),*) => {
-        impl<'a, $($T,)*> ParserRule<'a> for XNor<($($T,)*)>
+        impl<'a, 's, $($T,)*> ParserRule<'a, 's> for XNor<($($T,)*)>
         where
-            $($T: ParserRule<'a> + Default,)*
+            $($T: ParserRule<'a, 's> + Default,)*
         {
-            type Output = Option<($(<$T as ParserRule<'a>>::Output,)*)>;
+            type Output = Option<($(<$T as ParserRule<'a, 's>>::Output,)*)>;
 
             fn parse(
-                buffer: &'a TokenBuffer<'a>,
-                stream: &mut TokenStream<'a>,
-                stack: &mut Vec<TokenId>,
-            ) -> RResult<'a, Self::Output> {
+                stream: &mut TokenStream<'a, 's>,
+            ) -> RResult<'s, Self::Output> {
                 let chck = *stream;
 
                 let results = ($({
-                    let res = $T::parse(buffer, stream, stack);
+                    let res = $T::parse(stream);
                     if res.is_err() {
                         *stream = chck;
                     }

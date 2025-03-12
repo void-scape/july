@@ -1,3 +1,4 @@
+use self::ctx::CtxFmt;
 use self::lit::LitKind;
 use self::sem::sem_analysis_pre_typing;
 use self::sig::Linkage;
@@ -704,15 +705,15 @@ fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt<'a>, Diag<'a>>
         rules::Stmt::Let { name, ty, assign } => Stmt::Semi(SemiStmt::Let(Let {
             span: ctx.span(*name),
             lhs: let_target(ctx, &rules::Expr::Ident(*name)),
-            rhs: let_expr(ctx, assign)?,
+            rhs: pexpr(ctx, assign)?,
             ty: ty.as_ref().map(|t| ptype(ctx, &t)).transpose()?,
         })),
         rules::Stmt::Semi(expr) => match expr {
             rules::Expr::Assign(assign) => Stmt::Semi(SemiStmt::Assign(Assign {
-                span: assign.assign_span,
+                span: expr.span(ctx.token_buffer()),
                 kind: assign.kind,
-                lhs: assign_target(ctx, &assign.lhs)?,
-                rhs: let_expr(ctx, &assign.rhs)?,
+                lhs: pexpr(ctx, &assign.lhs)?,
+                rhs: pexpr(ctx, &assign.rhs)?,
             })),
             rules::Expr::Ret(span, expr) => Stmt::Semi(SemiStmt::Ret(Return {
                 span: *span,
@@ -742,6 +743,8 @@ pub enum LetTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub enum Expr<'a> {
+    Break(Span),
+    Continue(Span),
     Ident(Ident),
     Lit(Lit<'a>),
     Str(StrLit<'a>),
@@ -755,11 +758,17 @@ pub enum Expr<'a> {
     Block(Block<'a>),
     If(If<'a>),
     Loop(Loop<'a>),
+    For(ForLoop<'a>),
+    Array(ArrDef<'a>),
+    IndexOf(IndexOf<'a>),
+    Range(Range<'a>),
 }
 
 impl Expr<'_> {
     pub fn span(&self) -> Span {
         match self {
+            Self::Continue(span) => *span,
+            Self::Break(span) => *span,
             Self::Bool(bool) => bool.span,
             Self::Ident(ident) => ident.span,
             Self::Lit(lit) => lit.span,
@@ -770,59 +779,50 @@ impl Expr<'_> {
             Self::Block(block) => block.span,
             Self::If(if_) => if_.span,
             Self::Loop(block) => block.span,
+            Self::For(for_) => for_.span,
             Self::Str(str) => str.span,
             Self::Access(access) => access.span,
             Self::Unary(unary) => unary.span,
+            Self::Array(arr) => arr.span,
+            Self::IndexOf(index) => index.span,
+            Self::Range(range) => range.span,
         }
     }
 
-    pub fn is_unit(&self, ctx: &Ctx) -> Option<bool> {
+    pub fn is_unit(&self, ctx: &Ctx) -> bool {
         match self {
-            Self::Ident(_) => None,
-            Self::Unary(_)
+            Self::Ident(_)
+            | Self::Unary(_)
+            | Self::Array(_)
             | Self::Str(_)
             | Self::Struct(_)
             | Self::Enum(_)
             | Self::Access(_)
             | Self::Bin(_)
             | Self::Lit(_)
-            | Self::Bool(_) => Some(false),
-            Self::Call(call) => Some(ctx.tys.is_unit(call.sig.ty)),
+            | Self::Range(_)
+            | Self::IndexOf(_)
+            | Self::Bool(_) => false,
+            Self::Call(call) => ctx.tys.is_unit(call.sig.ty),
             Self::If(if_) => {
                 let block = if_.block.is_unit(ctx);
                 let otherwise = if_.otherwise.map(|o| o.is_unit(ctx));
                 match (block, otherwise) {
-                    (Some(c1), Some(Some(c2))) => Some(c1 && c2),
-                    (Some(c), _) => Some(c),
-                    (None, Some(Some(c))) => Some(c),
-                    _ => None,
+                    (c1, Some(c2)) => c1 && c2,
+                    (c, None) => c,
                 }
             }
-            Self::Loop(_) => Some(true),
+            Self::Break(_) | Self::Continue(_) | Self::Loop(_) | Self::For(_) => true,
             Self::Block(block) => match block.end {
                 Some(end) => end.is_unit(ctx),
-                None => Some(true),
+                None => true,
             },
         }
     }
 
-    //pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
-    //    match self {
-    //        Self::Unary(_) | Self::Access(_) | Self::Ident(_) => None,
-    //        Self::Lit(lit) => Some(lit.kind.is_int()),
-    //        Self::Call(call) => Some(ctx.tys.ty(call.sig.ty).is_int()),
-    //        Self::Bin(bin) => bin.is_integral(ctx),
-    //        Self::Loop(_)
-    //        | Self::Ref(_)
-    //        | Self::Str(_)
-    //        | Self::Bool(_)
-    //        | Self::Struct(_)
-    //        | Self::Enum(_) => Some(false),
-    //        Self::If(_) | Self::Block(_) => todo!(),
-    //    }
-    //}
-
-    pub fn infer<'a>(&self, ctx: &AirCtx<'a>) -> InferTy {
+    /// Panics is an `IndexOf` array type is not an array.
+    #[track_caller]
+    pub fn infer<'a>(&self, ctx: &mut AirCtx<'a>) -> InferTy {
         match self {
             Self::Lit(lit) => match lit.kind {
                 LitKind::Int(_) => InferTy::Int,
@@ -837,11 +837,40 @@ impl Expr<'_> {
                 let rhs = bin.lhs.infer(ctx);
                 assert_eq!(lhs, rhs);
                 match bin.kind {
-                    BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul => lhs,
+                    BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Xor => lhs,
                     BinOpKind::Eq => InferTy::Ty(TyId::BOOL),
                 }
             }
             Self::Bool(_) => InferTy::Ty(TyId::BOOL),
+            Self::IndexOf(index) => match index.array.infer(ctx) {
+                InferTy::Ty(arr_ty) => match ctx.tys.ty(arr_ty) {
+                    Ty::Array(_, inner) => InferTy::Ty(ctx.tys.get_ty_id(inner).unwrap()),
+                    other => panic!("invalid array type for index of: {:?}", other),
+                },
+                other => panic!("invalid array type for index of: {:?}", other),
+            },
+            Self::Unary(unary) => match unary.kind {
+                UOpKind::Deref => match unary.inner.infer(ctx) {
+                    InferTy::Ty(ty) => match ctx.tys.ty(ty) {
+                        Ty::Ref(inner) => InferTy::Ty(ctx.tys.ty_id(inner)),
+                        _ => unreachable!(),
+                    },
+                    InferTy::Int | InferTy::Float => unreachable!(),
+                },
+                UOpKind::Ref => match unary.inner.infer(ctx) {
+                    InferTy::Ty(ty) => {
+                        InferTy::Ty(ctx.tys.ty_id(&Ty::Ref(ctx.intern(ctx.tys.ty(ty)))))
+                    }
+                    InferTy::Int | InferTy::Float => {
+                        todo!("how do you describe a reference to these?")
+                    }
+                },
+                UOpKind::Not => unary.inner.infer(ctx),
+            },
             ty => todo!("{ty:?}"),
         }
     }
@@ -858,7 +887,11 @@ impl Expr<'_> {
                 let rhs = bin.lhs.infer_abs(ctx);
                 match bin.kind {
                     BinOpKind::Eq => Some(TyId::BOOL),
-                    BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul => match (lhs, rhs) {
+                    BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Xor => match (lhs, rhs) {
                         (Some(lhs), Some(rhs)) => {
                             assert_eq!(lhs, rhs);
                             Some(lhs)
@@ -921,6 +954,27 @@ pub fn aquire_access_ty<'a>(ctx: &AirCtx<'a>, access: &Access) -> TyId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct Range<'a> {
+    pub span: Span,
+    pub start: Option<&'a Expr<'a>>,
+    pub end: Option<&'a Expr<'a>>,
+    pub inclusive: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct IndexOf<'a> {
+    pub span: Span,
+    pub array: &'a Expr<'a>,
+    pub index: &'a Expr<'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct ArrDef<'a> {
+    pub span: Span,
+    pub exprs: &'a [Expr<'a>],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct Unary<'a> {
     pub span: Span,
     pub inner: &'a Expr<'a>,
@@ -934,11 +988,21 @@ pub enum UOpKind {
     Not,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InferTy {
     Ty(TyId),
     Int,
     Float,
+}
+
+impl InferTy {
+    pub fn to_string(self, ctx: &Ctx) -> String {
+        match self {
+            Self::Int => "{integer}".to_owned(),
+            Self::Float => "{float}".to_owned(),
+            Self::Ty(ty) => ty.to_string(ctx),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -956,6 +1020,14 @@ pub struct BoolLit {
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct Loop<'a> {
     pub span: Span,
+    pub block: Block<'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct ForLoop<'a> {
+    pub span: Span,
+    pub iter: Ident,
+    pub iterable: &'a Expr<'a>,
     pub block: Block<'a>,
 }
 
@@ -986,8 +1058,13 @@ fn if_<'a>(
         None => None,
     };
 
+    let span = match otherwise {
+        Some(o) => o.span(),
+        None => blck.span(),
+    };
+
     Ok(If {
-        span: Span::from_spans(ctx.span(iff), blck.span()),
+        span: Span::from_spans(ctx.span(iff), span),
         condition: ctx.intern(condition),
         block: ctx.intern(blck),
         otherwise,
@@ -1001,26 +1078,13 @@ fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
     }
 }
 
-fn let_expr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>> {
-    Ok(match expr {
-        rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
-        rules::Expr::Bin(op, lhs, rhs) => Expr::Bin(bin_op(ctx, *op, lhs, rhs)?),
-        rules::Expr::StructDef(def) => Expr::Struct(struct_def(ctx, def)?),
-        rules::Expr::EnumDef(def) => Expr::Enum(enum_def(ctx, def)?),
-        rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
-        rules::Expr::Access { span, lhs, field } => Expr::Access(access(ctx, *span, lhs, *field)?),
-        _ => todo!(),
-    })
-}
-
-fn enum_def<'a>(ctx: &mut Ctx<'a>, def: &rules::EnumDef) -> Result<EnumDef, Diag<'a>> {
-    Ok(EnumDef {
-        span: def.span,
-        name: ctx.store_ident(def.name),
-        variant: variant(ctx, &def.variant),
-    })
-}
+//fn enum_def<'a>(ctx: &mut Ctx<'a>, def: &rules::EnumDef) -> Result<EnumDef, Diag<'a>> {
+//    Ok(EnumDef {
+//        span: def.span,
+//        name: ctx.store_ident(def.name),
+//        variant: variant(ctx, &def.variant),
+//    })
+//}
 
 fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef<'a>, Diag<'a>> {
     let id = ctx.store_ident(def.name).id;
@@ -1044,7 +1108,7 @@ fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef<'a
     Ok(FieldDef {
         span: def.span,
         name: ctx.store_ident(def.name),
-        expr: let_expr(ctx, &def.expr)?,
+        expr: pexpr(ctx, &def.expr)?,
     })
 }
 
@@ -1070,13 +1134,18 @@ pub enum BinOpKind {
     Add,
     Sub,
     Mul,
+    Div,
+
+    Xor,
+
     Eq,
 }
 
 impl BinOpKind {
     pub fn output_is_input(&self) -> bool {
         match self {
-            Self::Add | Self::Sub | Self::Mul => true,
+            Self::Add | Self::Sub | Self::Mul | Self::Div => true,
+            Self::Xor => true,
             Self::Eq => false,
         }
     }
@@ -1178,16 +1247,102 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>
                 inner: ctx.intern(expr),
             }
         }),
+        rules::Expr::Array(arr) => Expr::Array(array(ctx, arr)?),
+        rules::Expr::IndexOf { span, array, index } => {
+            Expr::IndexOf(index_of(ctx, *span, array, index)?)
+        }
+        rules::Expr::Break(t) => Expr::Break(ctx.span(*t)),
+        rules::Expr::Continue(t) => Expr::Continue(ctx.span(*t)),
+        rules::Expr::For {
+            span,
+            iter,
+            iterable,
+            block,
+        } => Expr::For(for_loop(ctx, *span, *iter, iterable, block)?),
+        rules::Expr::Range {
+            span,
+            start,
+            end,
+            inclusive,
+        } => Expr::Range({
+            Range {
+                start: start
+                    .as_ref()
+                    .map(|s| pexpr(ctx, &s))
+                    .transpose()?
+                    .map(|s| ctx.intern(s)),
+                end: end
+                    .as_ref()
+                    .map(|e| pexpr(ctx, &e))
+                    .transpose()?
+                    .map(|e| ctx.intern(e)),
+                span: *span,
+                inclusive: *inclusive,
+            }
+        }),
+        rules::Expr::Paren(inner) => pexpr(ctx, inner)?,
         //rules::Expr::Deref(asterisk, inner) => Expr::Deref(deref(ctx, *asterisk, inner)?),
-        _ => todo!(),
+        expr => todo!("{expr:#?}"),
     })
+}
+
+fn for_loop<'a>(
+    ctx: &mut Ctx<'a>,
+    span: Span,
+    iter: TokenId,
+    iterable: &rules::Expr,
+    blck: &rules::Block,
+) -> Result<ForLoop<'a>, Diag<'a>> {
+    let iterable = pexpr(ctx, iterable)?;
+    Ok(ForLoop {
+        span,
+        iter: ctx.store_ident(iter),
+        iterable: ctx.intern(iterable),
+        block: block(ctx, blck)?,
+    })
+}
+
+fn index_of<'a>(
+    ctx: &mut Ctx<'a>,
+    span: Span,
+    array: &rules::Expr,
+    index: &rules::Expr,
+) -> Result<IndexOf<'a>, Diag<'a>> {
+    let array = pexpr(ctx, array)?;
+    let index = pexpr(ctx, index)?;
+
+    Ok(IndexOf {
+        span,
+        array: ctx.intern(array),
+        index: ctx.intern(index),
+    })
+}
+
+fn array<'a>(ctx: &mut Ctx<'a>, arr: &rules::ArrDef) -> Result<ArrDef<'a>, Diag<'a>> {
+    let mut errors = Vec::new();
+    let mut exprs = Vec::with_capacity(arr.exprs.len());
+    for expr in arr.exprs.iter() {
+        match pexpr(ctx, expr) {
+            Ok(expr) => exprs.push(expr),
+            Err(diag) => errors.push(diag),
+        }
+    }
+
+    if !errors.is_empty() {
+        Err(Diag::bundle(errors))
+    } else {
+        Ok(ArrDef {
+            span: arr.span,
+            exprs: ctx.intern_slice(&exprs),
+        })
+    }
 }
 
 fn plit<'a>(ctx: &mut Ctx<'a>, lit: TokenId) -> Result<Lit<'a>, Diag<'a>> {
     let str = ctx.as_str(lit);
     match (
         if str.contains("0x") {
-            i64::from_str_radix(&str[2..], 16)
+            u64::from_str_radix(&str[2..], 16)
         } else {
             str.parse()
         },
@@ -1209,7 +1364,7 @@ fn plit<'a>(ctx: &mut Ctx<'a>, lit: TokenId) -> Result<Lit<'a>, Diag<'a>> {
 pub struct Assign<'a> {
     pub span: Span,
     pub kind: AssignKind,
-    pub lhs: AssignTarget<'a>,
+    pub lhs: Expr<'a>,
     pub rhs: Expr<'a>,
 }
 
@@ -1221,20 +1376,14 @@ pub enum AssignKind {
     Sub,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
-pub enum AssignTarget<'a> {
-    Ident(Ident),
-    Access(Access<'a>),
-}
-
-fn assign_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<AssignTarget<'a>, Diag<'a>> {
-    Ok(match expr {
-        rules::Expr::Ident(ident) => AssignTarget::Ident(ctx.store_ident(*ident)),
-        rules::Expr::Access { span, lhs, field } => {
-            AssignTarget::Access(access(ctx, *span, lhs, *field)?)
+impl AssignKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Equals => "=",
+            Self::Add => "+=",
+            Self::Sub => "-=",
         }
-        _ => todo!(),
-    })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]

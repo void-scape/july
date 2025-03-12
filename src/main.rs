@@ -22,7 +22,7 @@ struct Args {
     #[arg(short, long)]
     file: String,
 
-    /// Log the interpretor
+    /// Log the interpreter
     #[arg(short, long, default_value_t = false)]
     log: bool,
 }

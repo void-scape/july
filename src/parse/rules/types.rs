@@ -1,5 +1,5 @@
 use super::strukt::Struct;
-use super::{Next, ParserRule};
+use super::{Next, PErr, ParserRule};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
@@ -8,6 +8,7 @@ use crate::parse::combinator::spanned::Spanned;
 use crate::parse::matc::{
     Any, CloseBracket, CloseCurly, CloseParen, Comma, Equals, Int, OpenBracket, OpenCurly, Semi,
 };
+use crate::parse::stream::TokenStream;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -63,14 +64,10 @@ impl PType {
 #[derive(Debug, Default)]
 pub struct TypeRule;
 
-impl<'a> ParserRule<'a> for TypeRule {
+impl<'a, 's> ParserRule<'a, 's> for TypeRule {
     type Output = PType;
 
-    fn parse(
-        buffer: &'a crate::lex::buffer::TokenBuffer<'a>,
-        stream: &mut crate::parse::stream::TokenStream<'a>,
-        stack: &mut Vec<crate::lex::buffer::TokenId>,
-    ) -> super::RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
         let mut slice =
             stream.slice(
                 stream
@@ -79,28 +76,31 @@ impl<'a> ParserRule<'a> for TypeRule {
         stream.eat_until::<Any<(Semi, Comma, CloseParen, OpenCurly, CloseCurly, Equals)>>();
 
         match slice.remaining() {
-            0 => return Err(stream.full_error("expected type", stream.span(stream.prev()), "")),
+            0 => {
+                return Err(PErr::Recover(
+                    stream.full_error("expected type", stream.span(stream.prev())),
+                ))
+            }
             1 => Ok(PType::Simple(slice.expect())),
             2 => match slice.peek_kind() {
                 Some(TokenKind::Ampersand) => Ok(PType::Ref {
                     borrow: slice.expect(),
                     inner: Box::new(PType::Simple(slice.expect())),
                 }),
-                _ => Err(stream.error("expected a type")),
+                _ => Err(PErr::Fail(stream.error("expected a type"))),
             },
             _ => {
                 let spanned =
                     Spanned::<(Next<OpenBracket>, Next<Int>, Next<CloseBracket>, TypeRule)>::parse(
-                        buffer, &mut slice, stack,
+                        &mut slice,
                     )?;
                 let span = spanned.span();
                 let (_open, size, _close, inner) = spanned.into_inner();
                 let Ok(size) = stream.as_str(size).parse::<usize>() else {
-                    return Err(stream.full_error(
+                    return Err(PErr::Fail(stream.full_error(
                         "expected a positive integer size for an array type",
                         stream.span(size),
-                        "",
-                    ));
+                    )));
                 };
 
                 Ok(PType::Array {

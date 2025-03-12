@@ -1,6 +1,6 @@
 use self::matc::{Any, Colon, Ident, MatchTokenKind};
 use self::rules::prelude::{Const, Enum, ExternFunc, Func, Struct};
-use self::rules::ParserRule;
+use self::rules::{PErr, ParserRule};
 use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
@@ -30,7 +30,6 @@ impl Parser {
 
     fn parse_buffer<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, Vec<Diag<'a>>> {
         let mut items = Vec::new();
-        let mut stack = Vec::with_capacity(buffer.len());
         let mut diags = Vec::new();
         let mut stream = buffer.stream();
         let mut active_attribute = None;
@@ -42,7 +41,7 @@ impl Parser {
                 stream.peekn(2).map(|t| buffer.kind(t)),
             ) {
                 (Some(TokenKind::Extern), _, _) => {
-                    match rules::prelude::ExternFnRule::parse(buffer, &mut stream, &mut stack) {
+                    match rules::prelude::ExternFnRule::parse(&mut stream) {
                         Err(diag) => {
                             diags.push(diag);
                         }
@@ -60,7 +59,7 @@ impl Parser {
                     }
                 }
                 (Some(TokenKind::Pound), Some(TokenKind::OpenBracket), _) => {
-                    match rules::prelude::AttributeRule::parse(buffer, &mut stream, &mut stack) {
+                    match rules::prelude::AttributeRule::parse(&mut stream) {
                         Err(diag) => {
                             diags.push(diag);
                         }
@@ -69,34 +68,32 @@ impl Parser {
                         }
                     }
                 }
-                (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Enum)) => {
-                    if active_attribute.is_some() {
-                        diags.push(stream.full_error(
-                            "cannot add attributes to enums",
-                            buffer.span(stream.peek().unwrap()),
-                            "",
-                        ))
-                    }
-
-                    match rules::prelude::EnumRule::parse(buffer, &mut stream, &mut stack) {
-                        Err(diag) => {
-                            diags.push(diag);
-                        }
-                        Ok(e) => {
-                            items.push(Item::Enum(e));
-                        }
-                    }
-                }
+                //(Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Enum)) => {
+                //    if active_attribute.is_some() {
+                //        diags.push(PErr::Recover(stream.full_error(
+                //            "cannot add attributes to enums",
+                //            buffer.span(stream.peek().unwrap()),
+                //        )))
+                //    }
+                //
+                //    match rules::prelude::EnumRule::parse(&mut stream) {
+                //        Err(diag) => {
+                //            diags.push(diag);
+                //        }
+                //        Ok(e) => {
+                //            items.push(Item::Enum(e));
+                //        }
+                //    }
+                //}
                 (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Struct)) => {
                     if active_attribute.is_some() {
-                        diags.push(stream.full_error(
-                            "cannot add attributes to enums",
+                        diags.push(PErr::Recover(stream.full_error(
+                            "cannot add attributes to structs",
                             buffer.span(stream.peek().unwrap()),
-                            "",
-                        ))
+                        )))
                     }
 
-                    match rules::prelude::StructRule::parse(buffer, &mut stream, &mut stack) {
+                    match rules::prelude::StructRule::parse(&mut stream) {
                         Err(diag) => {
                             diags.push(diag);
                         }
@@ -106,7 +103,7 @@ impl Parser {
                     }
                 }
                 (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::OpenParen)) => {
-                    match rules::prelude::FnRule::parse(buffer, &mut stream, &mut stack) {
+                    match rules::prelude::FnRule::parse(&mut stream) {
                         Err(diag) => {
                             diags.push(diag);
                         }
@@ -121,7 +118,7 @@ impl Parser {
                     }
                 }
                 (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Const)) => {
-                    match rules::prelude::ConstRule::parse(buffer, &mut stream, &mut stack) {
+                    match rules::prelude::ConstRule::parse(&mut stream) {
                         Err(diag) => {
                             diags.push(diag);
                         }
@@ -132,12 +129,13 @@ impl Parser {
                 }
                 (_t1, _t2, _t3) => {
                     // panic!("{_t1:?}, {_t2:?}, {_t3:?}");
-                    diags.push(stream.error("expected an item"));
-                    while !Ident::matches(stream.peek().map(|t| buffer.kind(t)))
-                        || !Colon::matches(stream.peekn(1).map(|t| buffer.kind(t)))
-                        || !Any::<(matc::Enum, matc::Struct, matc::OpenParen)>::matches(
-                            stream.peekn(2).map(|t| buffer.kind(t)),
-                        )
+                    diags.push(PErr::Recover(stream.error("expected an item")));
+                    while !stream.is_empty()
+                        && (!Ident::matches(stream.peek().map(|t| buffer.kind(t)))
+                            || !Colon::matches(stream.peekn(1).map(|t| buffer.kind(t)))
+                            || !Any::<(matc::Enum, matc::Struct, matc::OpenParen)>::matches(
+                                stream.peekn(2).map(|t| buffer.kind(t)),
+                            ))
                     {
                         stream.eat();
                     }
@@ -146,7 +144,7 @@ impl Parser {
         }
 
         if !diags.is_empty() {
-            Err(diags)
+            Err(diags.into_iter().map(PErr::into_diag).collect())
         } else {
             Ok(items)
         }

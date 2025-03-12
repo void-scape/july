@@ -2,7 +2,7 @@ use crate::unit::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
 use winnow::ascii::float;
-use winnow::combinator::{delimited, preceded};
+use winnow::combinator::{delimited, opt, preceded};
 use winnow::stream::Stream;
 use winnow::{combinator::alt, stream::AsChar, token::take_while, LocatingSlice, PResult, Parser};
 
@@ -77,9 +77,20 @@ fn str_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 }
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (sym, span) = alt((".", ",", ";", "+", "*", "=", ":", "-", ">", "#", "&", "!"))
-        .with_span()
-        .parse_next(input)?;
+    let (sym, span) = alt((
+        ".", ",", ";", "+", "*", "=", ":", "-", ">", "#", "&", "!", "^", "/",
+    ))
+    .with_span()
+    .parse_next(input)?;
+
+    if sym == "." && input.peek_token().is_some_and(|(_, t)| t == '.') {
+        _ = input.next_token();
+        return Ok(Token::new(
+            TokenKind::DoubleDot,
+            Span::from_range(span.start..span.end + 1),
+        ));
+    }
+
     let token = match sym {
         "." => TokenKind::Dot,
         "," => TokenKind::Comma,
@@ -89,10 +100,12 @@ fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         "=" => TokenKind::Equals,
         ":" => TokenKind::Colon,
         "-" => TokenKind::Hyphen,
-        ">" => TokenKind::Greater,
-        "#" => TokenKind::Pound,
-        "&" => TokenKind::Ampersand,
         "!" => TokenKind::Bang,
+        ">" => TokenKind::Greater,
+        "&" => TokenKind::Ampersand,
+        "/" => TokenKind::Slash,
+        "#" => TokenKind::Pound,
+        "^" => TokenKind::Caret,
         _ => unreachable!(),
     };
 
@@ -131,6 +144,16 @@ fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
             .is_some_and(|s| s.parse::<i64>().is_ok())
         {
             return Ok(Token::new(TokenKind::Int, Span::from_range(span)));
+        } else if other.get(..span.len()).is_some_and(|s| s.ends_with('.'))
+            && input.peek_token().is_some_and(|(_, t)| t == '.')
+        {
+            *input = other;
+            take_while(1.., AsChar::is_hex_digit).parse_next(input)?;
+
+            return Ok(Token::new(
+                TokenKind::Int,
+                Span::from_range(span.start..span.end - 1),
+            ));
         }
     }
 
@@ -141,6 +164,7 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     let (result, span) = take_while(1.., |c: char| {
         !c.is_whitespace()
             && c != '.'
+            && c != '^'
             && c != ','
             && c != ':'
             && c != ';'
@@ -160,8 +184,12 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         "else" => TokenKind::Else,
         "true" => TokenKind::True,
         "false" => TokenKind::False,
-        "return" => TokenKind::Ret,
+        "for" => TokenKind::For,
+        "in" => TokenKind::In,
         "fn" => TokenKind::Fn,
+        "return" => TokenKind::Ret,
+        "continue" => TokenKind::Continue,
+        "break" => TokenKind::Break,
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
         "loop" => TokenKind::Loop,

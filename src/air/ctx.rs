@@ -3,7 +3,7 @@ use super::{Air, AirFunc, AirFuncBuilder, Args, BlockId, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
 use crate::ir::sig::Sig;
-use crate::ir::ty::store::TyId;
+use crate::ir::ty::store::{TyId, TyStore};
 use crate::ir::ty::{Ty, TypeKey, VarHash, Width};
 use crate::ir::{self, *};
 use std::collections::HashMap;
@@ -14,6 +14,7 @@ use std::ops::Deref;
 /// To start constructing a function, use [`AirCtx::start`], and to collect the resulting
 /// [`AirFunc`], use [`AirCtx::finish`]. `AirCtx` reuses data structures for efficiency.
 pub struct AirCtx<'a> {
+    pub tys: TyStore<'a>,
     ctx: &'a Ctx<'a>,
     key: &'a TypeKey,
     var_index: usize,
@@ -29,6 +30,7 @@ impl<'a> AirCtx<'a> {
         Self {
             ctx,
             key,
+            tys: ctx.tys.clone(),
             var_index: 0,
             var_map: HashMap::default(),
             ty_map: HashMap::default(),
@@ -76,7 +78,7 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    fn expect_func_builder(&'a self) -> &'a AirFuncBuilder<'a> {
+    fn expect_func_builder(&self) -> &AirFuncBuilder<'a> {
         match &self.instr_builder {
             InstrBuilder::Func(b) => b,
             InstrBuilder::Const(_) => panic!("called `expect_func_builder` with const builder"),
@@ -106,13 +108,48 @@ impl<'a> AirCtx<'a> {
         builder.active
     }
 
+    pub fn loop_ctx(&self) -> Option<LoopCtx> {
+        let builder = self.expect_func_builder();
+        builder.loop_ctx
+    }
+
+    pub fn break_block(&self) -> Option<BlockId> {
+        let builder = self.expect_func_builder();
+        builder.loop_ctx.map(|l| l.breac)
+    }
+
+    pub fn loop_start(&self) -> Option<BlockId> {
+        let builder = self.expect_func_builder();
+        builder.loop_ctx.map(|l| l.start)
+    }
+
     #[track_caller]
-    pub fn in_new_block(&mut self, f: impl FnOnce(&mut Self, BlockId)) -> BlockId {
-        let prev = self.active_block();
+    pub fn in_loop(&mut self, breac: BlockId, f: impl FnOnce(&mut Self, BlockId)) -> BlockId {
+        let prev_block = self.active_block();
+
+        let inner = self.new_block();
+        self.set_active_block(inner);
+        let prev_loop_ctx = self.loop_ctx();
+        self.set_loop_ctx(Some(LoopCtx {
+            breac,
+            start: inner,
+        }));
+        f(self, inner);
+        self.set_active_block(prev_block);
+        self.set_loop_ctx(prev_loop_ctx);
+
+        inner
+    }
+
+    #[track_caller]
+    pub fn in_scope(&mut self, f: impl FnOnce(&mut Self, BlockId)) -> BlockId {
+        let prev_block = self.active_block();
+
         let inner = self.new_block();
         self.set_active_block(inner);
         f(self, inner);
-        self.set_active_block(prev);
+        self.set_active_block(prev_block);
+
         inner
     }
 
@@ -120,6 +157,11 @@ impl<'a> AirCtx<'a> {
         let builder = self.expect_func_builder_mut();
         assert!(block.0 < builder.instrs.len());
         builder.active = block;
+    }
+
+    pub fn set_loop_ctx(&mut self, loop_ctx: Option<LoopCtx>) {
+        let builder = self.expect_func_builder_mut();
+        builder.loop_ctx = loop_ctx;
     }
 
     pub fn new_var_registered_with_hash(
@@ -215,6 +257,12 @@ impl<'a> AirCtx<'a> {
     pub fn str_lit(&mut self, str: &str) -> (BssEntry, usize) {
         self.bss.str_lit(str)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LoopCtx {
+    pub start: BlockId,
+    pub breac: BlockId,
 }
 
 pub const RET_REG: Reg = Reg::A;

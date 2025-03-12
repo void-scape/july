@@ -14,20 +14,14 @@ pub struct Const {
     pub expr: Expr,
 }
 
-/// <ident> : const <type> = <const-expr>;
 #[derive(Default)]
 pub struct ConstRule;
 
-impl<'a> ParserRule<'a> for ConstRule {
+impl<'a, 's> ParserRule<'a, 's> for ConstRule {
     type Output = Const;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let spanned = Spanned::<(
-            //Reported<Next<Fn>, MissingFn>,
             Next<Ident>,
             Next<Colon>,
             Next<matc::Const>,
@@ -35,7 +29,7 @@ impl<'a> ParserRule<'a> for ConstRule {
             Next<Equals>,
             ExprRule,
             Next<Semi>,
-        )>::parse(buffer, stream, stack)?;
+        )>::parse(stream)?;
         let span = spanned.span();
         let (name, _colon, _const, ty, _eq, expr, _semi) = spanned.into_inner();
         Ok(Const {

@@ -1,4 +1,3 @@
-use crate::lex::buffer::{TokenBuffer, TokenId};
 use crate::parse::{rules::*, stream::TokenStream};
 
 /// Returns the first successful rule from `T`.
@@ -7,52 +6,22 @@ use crate::parse::{rules::*, stream::TokenStream};
 #[derive(Debug, Default)]
 pub struct Alt<T>(T);
 
-impl<'a, O, A, B> ParserRule<'a> for Alt<(A, B)>
+impl<'a, 's, O, A, B> ParserRule<'a, 's> for Alt<(A, B)>
 where
-    A: ParserRule<'a, Output = O>,
-    B: ParserRule<'a, Output = O>,
+    A: ParserRule<'a, 's, Output = O>,
+    B: ParserRule<'a, 's, Output = O>,
 {
     type Output = O;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let str = *stream;
-        match A::parse(buffer, stream, stack) {
-            Err(_) => {
-                *stream = str;
-                B::parse(buffer, stream, stack)
-            }
-            Ok(val) => Ok(val),
-        }
-    }
-}
-
-impl<'a, O, A, B, C> ParserRule<'a> for Alt<(A, B, C)>
-where
-    A: ParserRule<'a, Output = O>,
-    B: ParserRule<'a, Output = O>,
-    C: ParserRule<'a, Output = O>,
-{
-    type Output = O;
-
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let str = *stream;
-        match A::parse(buffer, stream, stack) {
-            Err(_) => {
-                *stream = str;
-                match B::parse(buffer, stream, stack) {
-                    Err(_) => {
-                        *stream = str;
-                        C::parse(buffer, stream, stack)
-                    }
-                    Ok(val) => Ok(val),
+        match A::parse(stream) {
+            Err(err) => {
+                if err.recoverable() {
+                    *stream = str;
+                    B::parse(stream)
+                } else {
+                    Err(err)
                 }
             }
             Ok(val) => Ok(val),
@@ -60,36 +29,201 @@ where
     }
 }
 
-impl<'a, O, A, B, C, D> ParserRule<'a> for Alt<(A, B, C, D)>
+impl<'a, 's, O, A, B, C> ParserRule<'a, 's> for Alt<(A, B, C)>
 where
-    A: ParserRule<'a, Output = O>,
-    B: ParserRule<'a, Output = O>,
-    C: ParserRule<'a, Output = O>,
-    D: ParserRule<'a, Output = O>,
+    A: ParserRule<'a, 's, Output = O>,
+    B: ParserRule<'a, 's, Output = O>,
+    C: ParserRule<'a, 's, Output = O>,
 {
     type Output = O;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let str = *stream;
-        match A::parse(buffer, stream, stack) {
-            Err(_) => {
-                *stream = str;
-                match B::parse(buffer, stream, stack) {
-                    Err(_) => {
-                        *stream = str;
-                        match C::parse(buffer, stream, stack) {
-                            Err(_) => {
+        match A::parse(stream) {
+            Err(err) => {
+                if err.recoverable() {
+                    *stream = str;
+                    match B::parse(stream) {
+                        Err(err) => {
+                            if err.recoverable() {
                                 *stream = str;
-                                D::parse(buffer, stream, stack)
+                                C::parse(stream)
+                            } else {
+                                Err(err)
                             }
-                            Ok(val) => Ok(val),
                         }
+                        Ok(val) => Ok(val),
                     }
-                    Ok(val) => Ok(val),
+                } else {
+                    Err(err)
+                }
+            }
+            Ok(val) => Ok(val),
+        }
+    }
+}
+
+impl<'a, 's, O, A, B, C, D> ParserRule<'a, 's> for Alt<(A, B, C, D)>
+where
+    A: ParserRule<'a, 's, Output = O>,
+    B: ParserRule<'a, 's, Output = O>,
+    C: ParserRule<'a, 's, Output = O>,
+    D: ParserRule<'a, 's, Output = O>,
+{
+    type Output = O;
+
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let str = *stream;
+        match A::parse(stream) {
+            Err(err) => {
+                if err.recoverable() {
+                    *stream = str;
+                    match B::parse(stream) {
+                        Err(err) => {
+                            if err.recoverable() {
+                                *stream = str;
+                                match C::parse(stream) {
+                                    Err(err) => {
+                                        if err.recoverable() {
+                                            *stream = str;
+                                            D::parse(stream)
+                                        } else {
+                                            Err(err)
+                                        }
+                                    }
+                                    Ok(val) => Ok(val),
+                                }
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        Ok(val) => Ok(val),
+                    }
+                } else {
+                    Err(err)
+                }
+            }
+            Ok(val) => Ok(val),
+        }
+    }
+}
+
+impl<'a, 's, O, A, B, C, D, E> ParserRule<'a, 's> for Alt<(A, B, C, D, E)>
+where
+    A: ParserRule<'a, 's, Output = O>,
+    B: ParserRule<'a, 's, Output = O>,
+    C: ParserRule<'a, 's, Output = O>,
+    D: ParserRule<'a, 's, Output = O>,
+    E: ParserRule<'a, 's, Output = O>,
+{
+    type Output = O;
+
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let str = *stream;
+        match A::parse(stream) {
+            Err(err) => {
+                if err.recoverable() {
+                    *stream = str;
+                    match B::parse(stream) {
+                        Err(err) => {
+                            if err.recoverable() {
+                                *stream = str;
+                                match C::parse(stream) {
+                                    Err(err) => {
+                                        if err.recoverable() {
+                                            *stream = str;
+                                            match D::parse(stream) {
+                                                Err(err) => {
+                                                    if err.recoverable() {
+                                                        *stream = str;
+                                                        E::parse(stream)
+                                                    } else {
+                                                        Err(err)
+                                                    }
+                                                }
+                                                Ok(val) => Ok(val),
+                                            }
+                                        } else {
+                                            Err(err)
+                                        }
+                                    }
+                                    Ok(val) => Ok(val),
+                                }
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        Ok(val) => Ok(val),
+                    }
+                } else {
+                    Err(err)
+                }
+            }
+            Ok(val) => Ok(val),
+        }
+    }
+}
+
+impl<'a, 's, O, A, B, C, D, E, F> ParserRule<'a, 's> for Alt<(A, B, C, D, E, F)>
+where
+    A: ParserRule<'a, 's, Output = O>,
+    B: ParserRule<'a, 's, Output = O>,
+    C: ParserRule<'a, 's, Output = O>,
+    D: ParserRule<'a, 's, Output = O>,
+    E: ParserRule<'a, 's, Output = O>,
+    F: ParserRule<'a, 's, Output = O>,
+{
+    type Output = O;
+
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        let str = *stream;
+        match A::parse(stream) {
+            Err(err) => {
+                if err.recoverable() {
+                    *stream = str;
+                    match B::parse(stream) {
+                        Err(err) => {
+                            if err.recoverable() {
+                                *stream = str;
+                                match C::parse(stream) {
+                                    Err(err) => {
+                                        if err.recoverable() {
+                                            *stream = str;
+                                            match D::parse(stream) {
+                                                Err(err) => {
+                                                    if err.recoverable() {
+                                                        *stream = str;
+                                                        match E::parse(stream) {
+                                                            Err(err) => {
+                                                                if err.recoverable() {
+                                                                    *stream = str;
+                                                                    F::parse(stream)
+                                                                } else {
+                                                                    Err(err)
+                                                                }
+                                                            }
+                                                            Ok(val) => Ok(val),
+                                                        }
+                                                    } else {
+                                                        Err(err)
+                                                    }
+                                                }
+                                                Ok(val) => Ok(val),
+                                            }
+                                        } else {
+                                            Err(err)
+                                        }
+                                    }
+                                    Ok(val) => Ok(val),
+                                }
+                            } else {
+                                Err(err)
+                            }
+                        }
+                        Ok(val) => Ok(val),
+                    }
+                } else {
+                    Err(err)
                 }
             }
             Ok(val) => Ok(val),

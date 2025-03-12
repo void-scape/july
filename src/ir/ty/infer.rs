@@ -89,6 +89,14 @@ impl InferCtx {
         self.unify_constraints(ctx, var, &cnsts.1).ok()
     }
 
+    pub fn is_var_integral(&self, ctx: &Ctx, var: TyVar) -> bool {
+        let cnsts = self.constraints.get(&var).expect("invalid ty var");
+        cnsts
+            .1
+            .iter()
+            .any(|c| matches!(c.kind, CnstKind::Integral(_)))
+    }
+
     #[track_caller]
     pub fn integral(&mut self, integral: Integral, var: TyVar, src: Span) {
         let span = self.var_span(var);

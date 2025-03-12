@@ -1,5 +1,4 @@
 use std::hash::Hash;
-
 use crate::lex::buffer::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -10,7 +9,7 @@ pub struct Lit<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LitKind {
-    Int(i64),
+    Int(u64),
     Float(f64),
 }
 

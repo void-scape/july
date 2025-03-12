@@ -1,31 +1,40 @@
+use super::arr::{ArrDef, ArrDefRule};
 use super::block::Block;
-use super::enom::EnumDef;
+use super::func::ArgsRule;
 use super::strukt::StructDef;
-use super::{Next, ParserRule, RResult};
+use super::{ParserRule, RResult};
 use crate::ir::{AssignKind, BinOpKind, UOpKind};
 use crate::lex::{buffer::*, kind::*};
 use crate::parse::combinator::opt::Opt;
-use crate::parse::combinator::wile::{NextToken, While};
-use crate::parse::rules::enom::EnumDefRule;
+use crate::parse::combinator::spanned::Spanned;
 use crate::parse::rules::strukt::StructDefRule;
+use crate::parse::rules::PErr;
 use crate::parse::{matc::*, stream::TokenStream};
 
-/// A composition of tokens that resolve into a value.
 #[derive(Debug, Clone)]
 pub enum Expr {
+    Break(TokenId),
+    Continue(TokenId),
     Ident(TokenId),
     Lit(TokenId),
     Str(TokenId),
     Bool(TokenId),
     Bin(BinOpKind, Box<Expr>, Box<Expr>),
+    Paren(Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
     StructDef(StructDef),
-    EnumDef(EnumDef),
+    //EnumDef(EnumDef),
+    Array(ArrDef),
     Access {
         span: Span,
         lhs: Box<Expr>,
         field: TokenId,
+    },
+    IndexOf {
+        span: Span,
+        array: Box<Expr>,
+        index: Box<Expr>,
     },
     Call {
         span: Span,
@@ -33,205 +42,202 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     If(TokenId, Box<Expr>, Block, Option<Block>),
+    For {
+        span: Span,
+        iter: TokenId,
+        iterable: Box<Expr>,
+        block: Block,
+    },
+    Range {
+        span: Span,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+        inclusive: bool,
+    },
     Loop(TokenId, Block),
     Unary(TokenId, UOpKind, Box<Expr>),
 }
 
-impl From<BinOpTokens> for BinOpKind {
-    fn from(value: BinOpTokens) -> Self {
-        match value {
-            BinOpTokens::Plus(_) => BinOpKind::Add,
-            BinOpTokens::Hyphen(_) => BinOpKind::Sub,
-            BinOpTokens::Asterisk(_) => BinOpKind::Mul,
-            BinOpTokens::DoubleEquals(_) => BinOpKind::Eq,
-            _ => panic!(),
+impl Expr {
+    pub fn span(&self, token_buffer: &TokenBuffer) -> Span {
+        match self {
+            Self::Break(t) => token_buffer.span(*t),
+            Self::Continue(t) => token_buffer.span(*t),
+            Self::Ident(t) => token_buffer.span(*t),
+            Self::Lit(t) => token_buffer.span(*t),
+            Self::Str(t) => token_buffer.span(*t),
+            Self::Bool(t) => token_buffer.span(*t),
+            Self::Paren(inner) => inner.span(token_buffer),
+            Self::Bin(_, lhs, rhs) => {
+                Span::from_spans(lhs.span(token_buffer), rhs.span(token_buffer))
+            }
+            Self::Ret(span, _) => *span,
+            Self::Assign(assign) => {
+                Span::from_spans(assign.lhs.span(token_buffer), assign.rhs.span(token_buffer))
+            }
+            Self::StructDef(def) => def.span,
+            //Self::EnumDef(def) => def.span,
+            Self::Array(def) => def.span,
+            Self::Access { span, .. } => *span,
+            Self::IndexOf { span, .. } => *span,
+            Self::Call { span, .. } => *span,
+            Self::If(t, _, block, otherwise) => {
+                if let Some(otherwise) = otherwise {
+                    Span::from_spans(token_buffer.span(*t), otherwise.span)
+                } else {
+                    Span::from_spans(token_buffer.span(*t), block.span)
+                }
+            }
+            Self::For { span, .. } => *span,
+            Self::Range { span, .. } => *span,
+            Self::Loop(t, block) => Span::from_spans(token_buffer.span(*t), block.span),
+            Self::Unary(t, _, expr) => {
+                Span::from_spans(token_buffer.span(*t), expr.span(token_buffer))
+            }
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Assign {
-    pub assign_span: Span,
     pub kind: AssignKind,
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
 }
 
-/// Produce the next [`BinOpKind`].
 pub struct BinOpKindRule;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinOpTokens {
-    Plus(TokenId),
-    Hyphen(TokenId),
-    Asterisk(TokenId),
-    OpenParen(TokenId),
-    CloseParen(TokenId),
-    DoubleEquals(TokenId),
-}
-
-//impl BinOpTokens {
-//    pub fn span(&self, buffer: &TokenBuffer) -> Span {
-//        match self {
-//            Self::Hyphen(t)
-//            | Self::Plus(t)
-//            | Self::Asterisk(t)
-//            | Self::OpenParen(t)
-//            | Self::DoubleEquals(t)
-//            | Self::CloseParen(t) => buffer.span(*t),
-//        }
-//    }
-//}
 
 trait Precedence {
     fn precedence(&self) -> usize;
 }
 
-impl Precedence for BinOpTokens {
+impl Precedence for BinOpKind {
     fn precedence(&self) -> usize {
         match self {
-            Self::DoubleEquals(_)
-            | Self::Hyphen(_)
-            | Self::Plus(_)
-            | Self::OpenParen(_)
-            | Self::CloseParen(_) => 1,
-            Self::Asterisk(_) => 2,
+            Self::Eq => 1,
+            Self::Xor => 2,
+            Self::Add | Self::Sub => 3,
+            Self::Mul | Self::Div => 4,
         }
     }
 }
 
-impl<'a> ParserRule<'a> for BinOpKindRule {
-    type Output = BinOpTokens;
+// TODO: ranges should be operators will low precedence
+impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
+    type Output = BinOpKind;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        _stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let str = *stream;
-
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         match stream.peek_kind() {
-            Some(TokenKind::Plus) => {
-                let plus = stream.expect();
-                if stream.peek_kind() == Some(TokenKind::Equals) {
-                    let equals = stream.expect();
-                    return Err(stream.full_error(
-                        "invalid assign",
-                        Span::from_spans(buffer.span(plus), buffer.span(equals)),
+            Some(TokenKind::Plus)
+            | Some(TokenKind::Hyphen)
+            | Some(TokenKind::Asterisk)
+            | Some(TokenKind::Slash) => {
+                let mut tmp = *stream;
+                let plus = tmp.expect();
+                if tmp.peek_kind() == Some(TokenKind::Equals) {
+                    let equals = tmp.expect();
+                    return Err(PErr::Fail(stream.full_error(
                         "cannot assign expression",
-                    ));
+                        Span::from_spans(stream.span(plus), stream.span(equals)),
+                    )));
                 }
             }
             _ => {}
         }
 
-        *stream = str;
-        match stream.peek_kind() {
+        let chk = *stream;
+        let op = Ok(match stream.peek_kind() {
             Some(TokenKind::Equals) => {
                 let equals = stream.expect();
-                if stream.peek_kind() == Some(TokenKind::Equals) {
-                    stream.expect();
-                    Ok(BinOpTokens::DoubleEquals(equals))
+                if stream.match_peek::<Equals>() {
+                    BinOpKind::Eq
                 } else {
-                    Err(stream.full_error(
-                        "invalid assign",
-                        buffer.span(equals),
-                        "cannot assign expression",
-                    ))
+                    *stream = chk;
+                    return Err(PErr::Fail(
+                        stream.full_error("cannot assign expression", stream.span(equals)),
+                    ));
                 }
             }
-            Some(TokenKind::Plus) => Ok(BinOpTokens::Plus(stream.expect())),
-            Some(TokenKind::Hyphen) => Ok(BinOpTokens::Hyphen(stream.expect())),
-            Some(TokenKind::Asterisk) => Ok(BinOpTokens::Asterisk(stream.expect())),
-            Some(TokenKind::OpenParen) => Ok(BinOpTokens::OpenParen(stream.expect())),
-            Some(TokenKind::CloseParen) => Ok(BinOpTokens::CloseParen(stream.expect())),
-            kind => Err(stream.error(format!(
-                "expected binary operator, got `{}`",
-                kind.map(|k| k.as_str()).unwrap_or("???")
-            ))),
-        }
+            Some(TokenKind::Plus) => BinOpKind::Add,
+            Some(TokenKind::Hyphen) => BinOpKind::Sub,
+            Some(TokenKind::Asterisk) => BinOpKind::Mul,
+            Some(TokenKind::Caret) => BinOpKind::Xor,
+            Some(TokenKind::Slash) => BinOpKind::Div,
+            kind => {
+                return Err(PErr::Recover(stream.error(format!(
+                    "expected binary operator, got `{}`",
+                    kind.map(|k| k.as_str()).unwrap_or("???")
+                ))));
+            }
+        });
+
+        stream.expect();
+        op
     }
 }
 
-/// Produce the next [`Expr`] term in a binary expression.
 pub struct TermRule;
 
-impl<'a> ParserRule<'a> for TermRule {
+impl<'a, 's> ParserRule<'a, 's> for TermRule {
     type Output = Expr;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let Some(start_span) = stream.peek().map(|t| stream.span(t)) else {
-            return Err(stream.error("expected expression term"));
+            return Err(stream.recover("expected expression term"));
         };
+
+        if stream.match_peek::<DoubleDot>() {
+            let dots = stream.expect();
+            let dot_span = stream.span(dots);
+
+            let inclusive = if stream.match_peek::<Equals>() {
+                stream.expect();
+                true
+            } else {
+                false
+            };
+
+            if let Some(spanned) = Opt::<Spanned<TermRule>>::parse(stream).unwrap() {
+                let end_span = spanned.span();
+                let end_expr = spanned.into_inner();
+
+                return Ok(Expr::Range {
+                    span: Span::from_spans(dot_span, end_span),
+                    start: None,
+                    end: Some(Box::new(end_expr)),
+                    inclusive,
+                });
+            } else {
+                return Ok(Expr::Range {
+                    span: Span::from_spans(dot_span, stream.span(dots)),
+                    start: None,
+                    end: None,
+                    inclusive,
+                });
+            }
+        }
 
         let term = match stream.peek_kind() {
             Some(TokenKind::Ident) => {
-                let ident = Next::<Ident>::parse(buffer, stream, stack)?;
-                match stream.peek_kind() {
+                match stream.peekn(1).map(|t| stream.kind(t)) {
                     Some(TokenKind::OpenParen) => {
-                        let str = *stream;
-                        match Next::<OpenParen>::parse(buffer, stream, stack) {
-                            Err(err) => {
-                                *stream = str;
-                                return Err(err);
-                            }
-                            Ok(_) => {}
-                        }
-                        if !stream.match_peek::<CloseParen>() {
-                            let offset = stream.find_matched_delim_offset::<Paren>();
-                            let mut slice = stream.slice(offset);
-                            let args = match While::<
-                                NextToken<Not<CloseParen>>,
-                                (ExprRule, Opt<Next<Comma>>),
-                            >::parse(
-                                buffer, &mut slice, stack
-                            ) {
-                                Err(err) => {
-                                    *stream = str;
-                                    return Err(err);
-                                }
-                                Ok(args) => args,
-                            };
-
-                            stream.eat_n(offset);
-                            let close = match Next::<CloseParen>::parse(buffer, stream, stack) {
-                                Err(err) => {
-                                    *stream = str;
-                                    return Err(err);
-                                }
-                                Ok(close) => close,
-                            };
-
-                            let span = Span::from_spans(buffer.span(ident), buffer.span(close));
-
-                            Ok(Expr::Call {
-                                span,
-                                func: ident,
-                                args: args.into_iter().map(|(arg, _)| arg).collect(),
-                            })
-                        } else {
-                            let close = match Next::<CloseParen>::parse(buffer, stream, stack) {
-                                Err(err) => {
-                                    *stream = str;
-                                    return Err(err);
-                                }
-                                Ok(close) => close,
-                            };
-
-                            let span = Span::from_spans(buffer.span(ident), buffer.span(close));
-
-                            Ok(Expr::Call {
-                                span,
-                                func: ident,
-                                args: Vec::new(),
-                            })
-                        }
+                        let ident = stream.expect();
+                        let (span, args) = ArgsRule::parse(stream).map_err(PErr::fail)?;
+                        Ok(Expr::Call {
+                            func: ident,
+                            span,
+                            args,
+                        })
                     }
-                    _ => Ok(Expr::Ident(ident)),
+                    Some(TokenKind::OpenCurly) => Ok(Expr::StructDef(
+                        StructDefRule::parse(stream).map_err(PErr::fail)?,
+                    )),
+                    //Some(TokenKind::Caret) => Ok(Expr::Unary(
+                    //    stream.expect(),
+                    //    UOpKind::Deref,
+                    //    Box::new(Expr::Ident(ident)),
+                    //)),
+                    _ => Ok(Expr::Ident(stream.expect())),
                 }
             }
             Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Expr::Lit(stream.expect())),
@@ -240,260 +246,186 @@ impl<'a> ParserRule<'a> for TermRule {
             Some(TokenKind::Bang) => Ok(Expr::Unary(
                 stream.expect(),
                 UOpKind::Not,
-                Box::new(TermRule::parse(buffer, stream, stack)?),
+                Box::new(TermRule::parse(stream)?),
             )),
             Some(TokenKind::Ampersand) => Ok(Expr::Unary(
                 stream.expect(),
                 UOpKind::Ref,
-                Box::new(TermRule::parse(buffer, stream, stack)?),
+                Box::new(TermRule::parse(stream)?),
             )),
-            Some(TokenKind::Asterisk) => Ok(Expr::Unary(
-                stream.expect(),
-                UOpKind::Deref,
-                Box::new(TermRule::parse(buffer, stream, stack)?),
-            )),
-            kind => Err(stream.full_error(
-                "malformed expression",
-                buffer.span(stream.peek().unwrap()),
-                format!(
-                    "expected one of `int literal`, `function call`, or `identifier`, got `{}`",
-                    kind.map(|k| k.as_str()).unwrap_or("???")
-                ),
-            )),
+            Some(TokenKind::OpenBracket) => Ok(Expr::Array(ArrDefRule::parse(stream)?)),
+            Some(TokenKind::Break) => Ok(Expr::Break(stream.expect())),
+            Some(TokenKind::Continue) => Ok(Expr::Continue(stream.expect())),
+            Some(TokenKind::OpenParen) => {
+                let open = stream.expect();
+                let offset = stream.find_matched_delim_offset::<Paren>();
+                let mut slice = stream.slice(offset);
+                stream.eat_n(offset);
+                let inner = ExprRule::parse(&mut slice).map_err(|_| {
+                    PErr::Fail(
+                        stream
+                            .full_error("expected expression within delimiters", stream.span(open)),
+                    )
+                })?;
+
+                if stream.is_empty() {
+                    return Err(PErr::Fail(
+                        stream.full_error("mismatched delimiter", stream.span(open)),
+                    ));
+                }
+
+                assert!(stream.match_peek::<CloseParen>());
+                stream.expect();
+                Ok(Expr::Paren(Box::new(inner)))
+            }
+            _ => Err(PErr::Recover(stream.full_error(
+                "expected term",
+                stream.span(stream.peek().unwrap()),
+            ))),
         };
 
         let mut term_result = term?;
-        while stream.match_peek::<Dot>() {
-            let dot = stream.expect();
+        loop {
+            if stream.match_peek::<DoubleDot>() {
+                let dots = stream.expect();
+                let dot_span = stream.span(dots);
 
-            if !stream.match_peek::<Ident>() {
-                return Err(stream.full_error(
-                    "invalid access: expected identifier after `.`",
-                    buffer.span(dot),
-                    "",
-                ));
+                let inclusive = if stream.match_peek::<Equals>() {
+                    stream.expect();
+                    true
+                } else {
+                    false
+                };
+
+                if let Some(spanned) = Opt::<Spanned<TermRule>>::parse(stream).unwrap() {
+                    let end_span = spanned.span();
+                    let end_expr = spanned.into_inner();
+
+                    return Ok(Expr::Range {
+                        span: Span::from_spans(dot_span, end_span),
+                        start: Some(Box::new(term_result)),
+                        end: Some(Box::new(end_expr)),
+                        inclusive,
+                    });
+                } else {
+                    return Ok(Expr::Range {
+                        span: Span::from_spans(dot_span, stream.span(dots)),
+                        start: Some(Box::new(term_result)),
+                        end: None,
+                        inclusive,
+                    });
+                }
+            } else if stream.match_peek::<Dot>() {
+                let dot = stream.expect();
+
+                if !stream.match_peek::<Ident>() {
+                    return Err(PErr::Fail(stream.full_error(
+                        "invalid access: expected identifier after `.`",
+                        stream.span(dot),
+                    )));
+                }
+
+                let field = stream.expect();
+                term_result = Expr::Access {
+                    span: Span::from_spans(start_span, stream.span(field)),
+                    lhs: Box::new(term_result),
+                    field,
+                };
+            } else if stream.match_peek::<OpenBracket>() {
+                let open_bracket = stream.expect();
+                let index_expr = ExprRule::parse(stream)?;
+
+                if !stream.match_peek::<CloseBracket>() {
+                    return Err(PErr::Fail(stream.full_error(
+                        "unclosed array index: expected `]`",
+                        stream.span(open_bracket),
+                    )));
+                }
+
+                let close_bracket = stream.expect();
+                term_result = Expr::IndexOf {
+                    span: Span::from_spans(start_span, stream.span(close_bracket)),
+                    array: Box::new(term_result),
+                    index: Box::new(index_expr),
+                };
+            //} else if stream.match_peek::<Caret>() {
+            //    let caret = stream.expect();
+            //    term_result = Expr::Unary(caret, UOpKind::Deref, Box::new(term_result));
+            } else {
+                break;
             }
-
-            let field = stream.expect();
-            term_result = Expr::Access {
-                span: Span::from_spans(start_span, buffer.span(field)),
-                lhs: Box::new(term_result),
-                field,
-            };
         }
 
         Ok(term_result)
     }
 }
 
-/// Produce the next [`Assign`].
 #[derive(Debug, Default)]
-pub struct AssignRule;
+pub struct ExprRule;
 
-impl<'a> ParserRule<'a> for AssignRule {
+impl<'a, 's> ParserRule<'a, 's> for ExprRule {
     type Output = Expr;
 
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus, Hyphen)>>());
-        let expr = ExprRule::parse(buffer, &mut slice, stack)?;
-        stream.eat_until::<Any<(Equals, Plus, Hyphen)>>();
+    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+        if stream.match_peek::<Ret>() {
+            let t = stream.expect();
+            return Ok(Expr::Ret(
+                stream.span(t),
+                Opt::<ExprRule>::parse(stream)?.map(Box::new),
+            ));
+        }
 
-        match stream.peek_kind() {
-            Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
-                assign_span: buffer.span(stream.expect()),
-                kind: AssignKind::Equals,
-                lhs: Box::new(expr),
-                rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
-            })),
-            Some(TokenKind::Plus) => {
-                let plus = stream.expect();
-                let next = stream.next();
-                match next.map(|next| buffer.kind(next)) {
-                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
-                        assign_span: Span::from_spans(
-                            buffer.span(plus),
-                            buffer.span(next.unwrap()),
-                        ),
-                        kind: AssignKind::Add,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
-                    })),
-                    _ => Err(stream.error("expected `+`")),
+        let mut bin = None;
+        let mut lhs = Some(TermRule::parse(stream).map_err(PErr::fail)?);
+        loop {
+            let op = match BinOpKindRule::parse(stream) {
+                Ok(op) => op,
+                Err(err) => {
+                    if !err.recoverable() {
+                        // fails in the case it is doing an assign, but we want to recover if that is
+                        // the case
+                        return Err(err.recover());
+                    } else {
+                        break;
+                    }
+                }
+            };
+
+            let rhs = TermRule::parse(stream)?;
+            match bin {
+                None => {
+                    assert!(lhs.is_some());
+                    bin = Some(Expr::Bin(op, Box::new(lhs.take().unwrap()), Box::new(rhs)));
+                }
+                Some(lhs) => {
+                    bin = Some(Expr::Bin(op, Box::new(lhs), Box::new(rhs)));
                 }
             }
-            Some(TokenKind::Hyphen) => {
-                let plus = stream.expect();
-                let next = stream.next();
-                match next.map(|next| buffer.kind(next)) {
-                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
-                        assign_span: Span::from_spans(
-                            buffer.span(plus),
-                            buffer.span(next.unwrap()),
-                        ),
-                        kind: AssignKind::Sub,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(ExprRule::parse(buffer, stream, stack)?),
-                    })),
-                    _ => Err(stream.error("expected `+`")),
-                }
-            }
-            _ => Err(stream.error("expected assignment")),
+        }
+
+        match bin {
+            Some(bin) => Ok(reorder_expr(bin)),
+            None => Ok(reorder_expr(lhs.take().unwrap())),
         }
     }
 }
 
-/// Produce the next [`Expr`].
-#[derive(Debug, Default)]
-pub struct ExprRule;
+fn reorder_expr(expr: Expr) -> Expr {
+    match expr {
+        Expr::Paren(inner) => Expr::Paren(Box::new(reorder_expr(*inner))),
+        Expr::Bin(op, lhs, rhs) => {
+            let lhs = reorder_expr(*lhs);
+            let rhs = Box::new(reorder_expr(*rhs));
 
-impl<'a> ParserRule<'a> for ExprRule {
-    type Output = Expr;
-
-    fn parse(
-        buffer: &'a TokenBuffer<'a>,
-        stream: &mut TokenStream<'a>,
-        stack: &mut Vec<TokenId>,
-    ) -> RResult<'a, Self::Output> {
-        if stream.match_peek::<Ret>() {
-            let span = buffer.span(stream.next().unwrap());
-            let expr = Opt::<ExprRule>::parse(buffer, stream, stack)?;
-            return Ok(Expr::Ret(span, expr.map(Box::new)));
-        }
-
-        let str = *stream;
-        if stream.match_peek::<Ident>() {
-            stream.eat();
-            if stream.match_peek::<OpenCurly>() {
-                *stream = str;
-                let def = StructDefRule::parse(buffer, stream, stack)?;
-                return Ok(Expr::StructDef(def));
-            } else if stream.match_peek::<Colon>() {
-                *stream = str;
-                let def = EnumDefRule::parse(buffer, stream, stack)?;
-                return Ok(Expr::EnumDef(def));
-            }
-        }
-        *stream = str;
-
-        #[derive(Debug)]
-        enum Item {
-            Op(BinOpTokens),
-            Term(Expr),
-        }
-
-        // https://en.wikipedia.org/wiki/Shunting_yard_algorithm
-        let mut expr_stack = Vec::new();
-        let mut operators = Vec::new();
-        let mut open_parens = 0;
-        while stream.match_peek::<Not<Any<(Semi, CloseCurly, Comma, OpenCurly)>>>() {
-            if let Some(op) = Opt::<BinOpKindRule>::parse(buffer, stream, stack)? {
-                match op {
-                    BinOpTokens::DoubleEquals(_)
-                    | BinOpTokens::Hyphen(_)
-                    | BinOpTokens::Plus(_)
-                    | BinOpTokens::Asterisk(_) => {
-                        while operators.last().is_some_and(|t: &BinOpTokens| {
-                            t.precedence() > op.precedence()
-                                && !matches!(t, BinOpTokens::OpenParen(_))
-                        }) {
-                            expr_stack.push(Item::Op(operators.pop().unwrap()));
-                        }
-                        operators.push(op)
-                    }
-                    BinOpTokens::OpenParen(_) => {
-                        open_parens += 1;
-                        operators.push(op)
-                    }
-                    BinOpTokens::CloseParen(t) => {
-                        open_parens -= 1;
-                        if open_parens < 0 {
-                            return Err(stream.full_error(
-                                "malformed expression",
-                                buffer.span(t),
-                                "unopened delimiter",
-                            ));
-                        }
-
-                        loop {
-                            let Some(op) = operators.pop() else {
-                                unreachable!()
-                            };
-
-                            match op {
-                                BinOpTokens::OpenParen(_) => {
-                                    break;
-                                }
-                                _ => expr_stack.push(Item::Op(op)),
-                            }
-                        }
-                    }
+            match lhs {
+                Expr::Bin(lhs_op, lhs_lhs, lhs_rhs)
+                    if lhs_op.precedence() < op.precedence() && !matches!(lhs, Expr::Paren(_)) =>
+                {
+                    Expr::Bin(lhs_op, lhs_lhs, Box::new(Expr::Bin(op, lhs_rhs, rhs)))
                 }
-            } else {
-                let term = TermRule::parse(buffer, stream, stack)?;
-                expr_stack.push(Item::Term(term));
+                _ => Expr::Bin(op, Box::new(lhs), rhs),
             }
         }
-
-        // no operators means there should only be one term
-        if operators.is_empty() && expr_stack.len() == 1 {
-            assert!(expr_stack.len() == 1, "todo error");
-            return Ok(match expr_stack.pop().unwrap() {
-                Item::Term(term) => term,
-                _ => panic!(),
-            });
-        }
-
-        expr_stack.extend(operators.drain(..).rev().map(Item::Op));
-        expr_stack.reverse();
-
-        for item in expr_stack.iter() {
-            if let Item::Op(op) = item {
-                match op {
-                    BinOpTokens::OpenParen(t) => {
-                        return Err(stream.full_error(
-                            "malformed expression",
-                            buffer.span(*t),
-                            "unclosed delimiter",
-                        ))
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let mut accum_op = None;
-        let mut terms = Vec::with_capacity(expr_stack.len());
-        while let Some(item) = expr_stack.pop() {
-            match item {
-                Item::Op(op) => match accum_op {
-                    Some(acop) => {
-                        accum_op = Some(Expr::Bin(
-                            BinOpKind::from(op),
-                            Box::new(terms.pop().unwrap()),
-                            Box::new(acop),
-                        ));
-                    }
-                    None => {
-                        accum_op = Some(Expr::Bin(
-                            BinOpKind::from(op),
-                            Box::new(terms.pop().unwrap()),
-                            Box::new(terms.pop().unwrap()),
-                        ));
-                    }
-                },
-                Item::Term(next) => {
-                    terms.push(next);
-                }
-            }
-        }
-
-        match accum_op {
-            Some(op) => Ok(op),
-            None => Err(stream.error("empty expression")),
-        }
+        _ => expr,
     }
 }

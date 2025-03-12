@@ -118,12 +118,7 @@ fn unique_funcs<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
 }
 
 fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
-    if func.sig.ty == ctx.tys.unit()
-        && func
-            .block
-            .end
-            .is_some_and(|b| b.is_unit(ctx).is_some_and(|c| !c))
-    {
+    if func.sig.ty == ctx.tys.unit() && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
         Err(ctx
             .report_error(
                 func.block.end.as_ref().unwrap().span(),
@@ -164,31 +159,3 @@ fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
         Ok(())
     }
 }
-
-//fn validate_loop_block<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
-//    for stmt in func.block.stmts.iter() {
-//        if let Stmt::Open(Expr::Loop(block)) = stmt {
-//            if let Some(end) = block.end {
-//                // TODO: ctx.expr_ty(end), or something
-//                return Err(ctx.report_error(end.span(), "mismatched types: expected `()`"));
-//            }
-//        } else if let Stmt::Semi(SemiStmt::Ret(ret)) = stmt {
-//            // TODO: should there be a place for kind of checking, or should it be done during type inferece?
-//            match ret.expr {
-//                None => {
-//                    if !ctx.tys.is_unit(func.sig.ty) {
-//                        return Err(ctx.mismatch(ret.span, func.sig.ty, TyId::UNIT));
-//                    }
-//                }
-//                Some(_) => {
-//                    if ctx.tys.is_unit(func.sig.ty) {
-//                        // TODO: ctx.expr_ty(end), or something
-//                        return Err(ctx.report_error(ret.span, "mismatched types: expected `()`"));
-//                    }
-//                }
-//            }
-//        }
-//    }
-//
-//    Ok(())
-//}

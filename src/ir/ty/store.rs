@@ -9,46 +9,15 @@ use crate::ir::Const;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TyPath<'a> {
-    Global(&'a [IdentId]),
-    Var(VarHash),
-}
-
-pub trait IntoTyPath<'a> {
-    fn into_ty_path(&self) -> TyPath<'a>;
-}
-
-impl<'a> IntoTyPath<'a> for TyPath<'a> {
-    fn into_ty_path(&self) -> TyPath<'a> {
-        *self
-    }
-}
-
-impl<'a> IntoTyPath<'a> for &'a [IdentId] {
-    fn into_ty_path(&self) -> TyPath<'a> {
-        TyPath::Global(self)
-    }
-}
-
-impl<'a, const N: usize> IntoTyPath<'a> for &'a [IdentId; N] {
-    fn into_ty_path(&self) -> TyPath<'a> {
-        TyPath::Global(&self[..])
-    }
-}
-
-impl IntoTyPath<'static> for VarHash {
-    fn into_ty_path(&self) -> TyPath<'static> {
-        TyPath::Var(*self)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyId(usize);
 
 impl TyId {
     pub const UNIT: Self = TyId(0);
     pub const BOOL: Self = TyId(1);
     pub const STR_LIT: Self = TyId(2);
+    pub const USIZE: Self = TyId(8);
+    /// Useful when the inner type does not matter and access to `TyStore` is immutable.
+    pub const ANON_PTR: Self = TyId(13);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -83,6 +52,7 @@ impl<'a> TyStore<'a> {
         slf.store_ty(Ty::Int(IntTy::new_16(Sign::I)));
         slf.store_ty(Ty::Int(IntTy::new_32(Sign::I)));
         slf.store_ty(Ty::Int(IntTy::new_64(Sign::I)));
+        slf.store_ty(Ty::Int(IntTy::new_64(Sign::U)));
 
         slf
     }
@@ -150,7 +120,7 @@ impl<'a> TyStore<'a> {
         }
     }
 
-    pub fn get_ty_id(&self, ty: &Ty<'a>) -> Option<TyId> {
+    pub fn get_ty_id(&self, ty: &Ty) -> Option<TyId> {
         self.ty_map.get(ty).copied()
     }
 
