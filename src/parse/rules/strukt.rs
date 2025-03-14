@@ -18,7 +18,6 @@ pub struct Struct {
 pub struct Field {
     pub span: Span,
     pub name: TokenId,
-    pub colon: TokenId,
     pub ty: PType,
 }
 
@@ -48,7 +47,6 @@ impl<'a, 's> ParserRule<'a, 's> for StructBlockRule {
 
     fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let chk = *stream;
-        let start = stream.span(stream.prev());
         match Spanned::<(Next<OpenCurly>, StructFieldDecl, Next<CloseCurly>)>::parse(stream) {
             Ok(block) => {
                 let span = block.span();
@@ -79,18 +77,13 @@ impl<'a, 's> ParserRule<'a, 's> for StructFieldDecl {
             let field =
                 Spanned::<(Next<Ident>, Next<Colon>, TypeRule, Opt<Next<Comma>>)>::parse(stream)?;
             let span = field.span();
-            let (name, colon, ty, comma) = field.into_inner();
+            let (name, _colon, ty, comma) = field.into_inner();
 
             if comma.is_none() && !stream.match_peek::<CloseCurly>() {
                 return Err(PErr::Fail(stream.error("expected `,` after field")));
             }
 
-            fields.push(Field {
-                span,
-                name,
-                colon,
-                ty,
-            });
+            fields.push(Field { span, name, ty });
         }
 
         Ok(fields)
@@ -109,7 +102,6 @@ pub struct StructDef {
 pub struct FieldDef {
     pub span: Span,
     pub name: TokenId,
-    pub colon: TokenId,
     pub expr: Expr,
 }
 
@@ -163,18 +155,13 @@ impl<'a, 's> ParserRule<'a, 's> for StructFieldDef {
             let field =
                 Spanned::<(Next<Ident>, Next<Colon>, ExprRule, Opt<Next<Comma>>)>::parse(stream)?;
             let span = field.span();
-            let (name, colon, expr, comma) = field.into_inner();
+            let (name, _colon, expr, comma) = field.into_inner();
 
             if comma.is_none() && !stream.match_peek::<CloseCurly>() {
                 return Err(PErr::Fail(stream.error("expected `,` after field")));
             }
 
-            fields.push(FieldDef {
-                span,
-                name,
-                colon,
-                expr,
-            });
+            fields.push(FieldDef { span, name, expr });
         }
 
         Ok(fields)

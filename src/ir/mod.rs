@@ -114,16 +114,13 @@ pub fn lower<'a>(
     ctx.store_funcs(funcs);
 
     sem_analysis_pre_typing(&ctx)?;
-    let key = match resolve_types(&mut ctx) {
-        Ok(key) => key,
-        Err(diags) => {
-            for diag in diags.into_iter() {
-                diagnostic::report(diag);
-            }
-            return Err(());
+    match resolve_types(&mut ctx) {
+        Ok(key) => sem_analysis(&ctx, &key).map(|_| (ctx, key, eval_order)),
+        Err(diag) => {
+            diagnostic::report(diag);
+            Err(())
         }
-    };
-    sem_analysis(&ctx, &key).map(|_| (ctx, key, eval_order))
+    }
 }
 
 fn add_structs<'a>(
@@ -828,7 +825,7 @@ impl Expr<'_> {
                 LitKind::Int(_) => InferTy::Int,
                 LitKind::Float(_) => InferTy::Float,
             },
-            Self::Ident(ident) => InferTy::Ty(ctx.var_ty(ident.id)),
+            Self::Ident(ident) => InferTy::Ty(ctx.var_ty(ident)),
             Self::Access(access) => InferTy::Ty(aquire_access_ty(ctx, access)),
             Self::Call(call) => InferTy::Ty(call.sig.ty),
             Self::Str(_) => InferTy::Ty(TyId::STR_LIT),
@@ -842,7 +839,7 @@ impl Expr<'_> {
                     | BinOpKind::Mul
                     | BinOpKind::Div
                     | BinOpKind::Xor => lhs,
-                    BinOpKind::Eq => InferTy::Ty(TyId::BOOL),
+                    BinOpKind::Eq | BinOpKind::Ne => InferTy::Ty(TyId::BOOL),
                 }
             }
             Self::Bool(_) => InferTy::Ty(TyId::BOOL),
@@ -878,7 +875,7 @@ impl Expr<'_> {
     pub fn infer_abs<'a>(&self, ctx: &AirCtx<'a>) -> Option<TyId> {
         match self {
             Self::Lit(_) => None,
-            Self::Ident(ident) => Some(ctx.var_ty(ident.id)),
+            Self::Ident(ident) => Some(ctx.var_ty(ident)),
             Self::Access(access) => Some(aquire_access_ty(ctx, access)),
             Self::Call(call) => Some(call.sig.ty),
             Self::Str(_) => Some(TyId::STR_LIT),
@@ -886,7 +883,7 @@ impl Expr<'_> {
                 let lhs = bin.lhs.infer_abs(ctx);
                 let rhs = bin.lhs.infer_abs(ctx);
                 match bin.kind {
-                    BinOpKind::Eq => Some(TyId::BOOL),
+                    BinOpKind::Eq | BinOpKind::Ne => Some(TyId::BOOL),
                     BinOpKind::Add
                     | BinOpKind::Sub
                     | BinOpKind::Mul
@@ -908,7 +905,7 @@ impl Expr<'_> {
 
 pub fn aquire_access_ty<'a>(ctx: &AirCtx<'a>, access: &Access) -> TyId {
     let ty = match access.lhs {
-        Expr::Ident(ident) => ctx.var_ty(ident.id),
+        Expr::Ident(ident) => ctx.var_ty(ident),
         _ => unimplemented!(),
     };
 
@@ -1139,6 +1136,7 @@ pub enum BinOpKind {
     Xor,
 
     Eq,
+    Ne,
 }
 
 impl BinOpKind {
@@ -1146,7 +1144,7 @@ impl BinOpKind {
         match self {
             Self::Add | Self::Sub | Self::Mul | Self::Div => true,
             Self::Xor => true,
-            Self::Eq => false,
+            Self::Ne | Self::Eq => false,
         }
     }
 }

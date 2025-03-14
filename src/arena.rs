@@ -107,6 +107,7 @@ impl<T> Default for Arena<T> {
     }
 }
 
+#[allow(unused)]
 impl<T> Arena<T> {
     pub fn alloc(&self, item: T) -> &mut T {
         if self.last == self.ptr {

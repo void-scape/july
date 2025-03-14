@@ -24,7 +24,7 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
 
                 BinOpKind::Xor => visit(Xor(width), ctx, out, dst, bin),
 
-                BinOpKind::Eq => panic!("invalid op"),
+                BinOpKind::Eq | BinOpKind::Ne => panic!("invalid op"),
             }
         }
         Ty::Float(ty) => {
@@ -44,22 +44,23 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                     dst,
                     bin,
                 ),
+                BinOpKind::Ne => {
+                    visit(
+                        Ne {
+                            input: width,
+                            output: Width::BOOL,
+                        },
+                        ctx,
+                        out,
+                        dst,
+                        bin,
+                    );
+                }
 
                 BinOpKind::Xor => panic!("invalid op"),
             }
         }
         Ty::Bool => {
-            match bin.kind {
-                BinOpKind::Add
-                | BinOpKind::Mul
-                | BinOpKind::Sub
-                | BinOpKind::Div
-                | BinOpKind::Xor => {
-                    panic!("invalid op")
-                }
-                BinOpKind::Eq => {}
-            }
-
             let ty = match (bin.lhs.infer(ctx), bin.rhs.infer(ctx)) {
                 (InferTy::Ty(lhs), InferTy::Ty(_rhs)) => {
                     //assert_eq!(lhs, rhs);
@@ -91,11 +92,29 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                 ty => unreachable!("{ty:#?}"),
             };
 
-            Eq {
-                input: width,
-                output: Width::BOOL,
+            match bin.kind {
+                BinOpKind::Add
+                | BinOpKind::Mul
+                | BinOpKind::Sub
+                | BinOpKind::Div
+                | BinOpKind::Xor => {
+                    panic!("invalid op")
+                }
+                BinOpKind::Eq => {
+                    Eq {
+                        input: width,
+                        output: Width::BOOL,
+                    }
+                    .visit_with(ctx, dst, lhs, rhs);
+                }
+                BinOpKind::Ne => {
+                    Ne {
+                        input: width,
+                        output: Width::BOOL,
+                    }
+                    .visit_with(ctx, dst, lhs, rhs);
+                }
             }
-            .visit_with(ctx, dst, lhs, rhs);
         }
         ty => panic!("invalid type: {ty:#?}"),
     }
@@ -207,6 +226,16 @@ pub struct Eq {
 crate::impl_agnostic_bin_op_visitor!(Eq, EqAB, input, output);
 crate::impl_prim_bin_op_visitor!(Eq, EqAB);
 crate::impl_float_bin_op_visitor!(Eq, FEqAB);
+crate::impl_cmp!(Eq);
+
+pub struct Ne {
+    pub input: Width,
+    pub output: Width,
+}
+crate::impl_agnostic_bin_op_visitor!(Ne, NEqAB, input, output);
+crate::impl_prim_bin_op_visitor!(Ne, NEqAB);
+crate::impl_float_bin_op_visitor!(Ne, NFEqAB);
+crate::impl_cmp!(Ne);
 
 macro_rules! float_op {
     ($ty:ident, $instr:ident) => {
@@ -285,7 +314,7 @@ fn prepare_expr<'a>(ctx: &mut AirCtx<'a>, ty: TyId, expr: &'a Expr) -> BinOpArg 
                 Expr::Ident(ident) => {
                     let var = OffsetVar::zero(ctx.expect_var(ident.id));
                     ctx.ins(Air::Addr(Reg::A, var));
-                    let var_ty = ctx.var_ty(ident.id);
+                    let var_ty = ctx.var_ty(ident);
                     let result = OffsetVar::zero(ctx.anon_var(var_ty));
                     ctx.ins(Air::PushIReg {
                         dst: result,
@@ -392,20 +421,31 @@ macro_rules! impl_int_algebra {
     };
 }
 
-impl IntAlgebra for Eq {}
-impl FloatAlgebra for Eq {}
+#[macro_export]
+macro_rules! impl_cmp {
+    ($ty:ident) => {
+        impl IntAlgebra for $ty {}
+        impl FloatAlgebra for $ty {}
 
-impl BinOpVisitWith for Eq {
-    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
-        match (&lhs, &rhs) {
-            (BinOpArg::Float(_), _) | (_, BinOpArg::Float(_)) => {
-                visit_float(self, ctx, dst, rhs, lhs);
-            }
-            _ => {
-                visit_int(self, ctx, dst, rhs, lhs);
+        impl BinOpVisitWith for $ty {
+            fn visit_with<'a>(
+                &self,
+                ctx: &mut AirCtx<'a>,
+                dst: OffsetVar,
+                lhs: BinOpArg,
+                rhs: BinOpArg,
+            ) {
+                match (&lhs, &rhs) {
+                    (BinOpArg::Float(_), _) | (_, BinOpArg::Float(_)) => {
+                        visit_float(self, ctx, dst, rhs, lhs);
+                    }
+                    _ => {
+                        visit_int(self, ctx, dst, rhs, lhs);
+                    }
+                }
             }
         }
-    }
+    };
 }
 
 fn visit_int<'a>(

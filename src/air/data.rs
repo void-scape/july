@@ -18,7 +18,7 @@ impl Bss {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BssEntry {
     ty: TyId,
     layout: Layout,

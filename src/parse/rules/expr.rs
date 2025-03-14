@@ -114,7 +114,7 @@ trait Precedence {
 impl Precedence for BinOpKind {
     fn precedence(&self) -> usize {
         match self {
-            Self::Eq => 1,
+            Self::Eq | Self::Ne => 1,
             Self::Xor => 2,
             Self::Add | Self::Sub => 3,
             Self::Mul | Self::Div => 4,
@@ -155,6 +155,17 @@ impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
                     *stream = chk;
                     return Err(PErr::Fail(
                         stream.full_error("cannot assign expression", stream.span(equals)),
+                    ));
+                }
+            }
+            Some(TokenKind::Bang) => {
+                let bang = stream.expect();
+                if stream.match_peek::<Equals>() {
+                    BinOpKind::Ne
+                } else {
+                    *stream = chk;
+                    return Err(PErr::Fail(
+                        stream.full_error("cannot assign expression", stream.span(bang)),
                     ));
                 }
             }

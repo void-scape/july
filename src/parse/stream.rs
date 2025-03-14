@@ -1,5 +1,5 @@
-use super::matc::{DelimPair, MatchTokenKind, OpenCurly};
-use super::rules::{Next, PErr, ParserRule};
+use super::matc::{DelimPair, MatchTokenKind};
+use super::rules::PErr;
 use crate::diagnostic::{Diag, Msg};
 use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
@@ -44,6 +44,7 @@ impl<'a, 's> TokenStream<'a, 's> {
         }
     }
 
+    #[allow(unused)]
     pub fn print(&self, max: usize) {
         let mut slf = *self;
         for _ in 0..max {
@@ -177,10 +178,6 @@ impl<'a, 's> TokenStream<'a, 's> {
         self.index += n;
     }
 
-    pub fn eat_to_index(&mut self, index: usize) {
-        self.index += index.saturating_sub(self.index);
-    }
-
     pub fn eat_until<T: MatchTokenKind>(&mut self) {
         while self
             .peek()
@@ -216,11 +213,6 @@ impl<'a, 's> TokenStream<'a, 's> {
 
     pub fn match_peek<T: MatchTokenKind>(&self) -> bool {
         self.peek()
-            .is_some_and(|t| T::matches(Some(self.buffer.kind(t))))
-    }
-
-    pub fn match_peekn<T: MatchTokenKind>(&self, n: usize) -> bool {
-        self.peekn(n)
             .is_some_and(|t| T::matches(Some(self.buffer.kind(t))))
     }
 }

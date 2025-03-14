@@ -1,20 +1,29 @@
 main: () -> i32 {
-    assert(double(2) == 4);
-    assert(double(4) == 8);
-    assert(double(28) == 56);
-    assert(seed() == 42);
-    assert(var_2_var() == 16);
-    assert(simple_if_then(true, 4) == 2);
-    assert(24 == 24);
-    simple_for();
-
-    assert(simple_float() == 0.7 * 2.);
-    assert(0.7 * 2. == 0.7 * 2.);
-    assert((1. * 4.) / 1.2 == 1. * 4. / 1.2)
-    assert(1. * 4. / 1.2 == 1. * (4. / 1.2))
+    let i = 0;
+    loop {
+        if i == 16 {
+            break;
+        }
+        test(double(2) == 4);
+        test(double(4) == 8);
+        test(double(28) == 56);
+        test(seed() == 42);
+        test(var_2_var() == 16);
+        test(simple_if_then(true, 4) == 2);
+        test(24 == 24);
+        test(simple_float() == 0.7 * 2.);
+        test(0.7 * 2. == 0.7 * 2.);
+        test((1. * 4.) / 1.2 == 1. * 4. / 1.2)
+        test(1. * 4. / 1.2 == 1. * (4. / 1.2))
+        simple_for();
+        scope();
+        i += 1;
+    }
 
     0
 }
+
+sp: () {}
 
 // ------------ Structs ------------
 
@@ -214,8 +223,9 @@ simple_float: () -> f32 {
 }
 
 // ------------ Loops ------------
+
 simple_for: ()  {
-    printf("hard coded:\n");
+    // printf("hard coded:\n");
 
     let start = 0;
     let end = 10;
@@ -230,40 +240,75 @@ simple_for: ()  {
 
         // for block
         // {
-            printf("%\n", i);
+            // printf("%\n", i);
         // }
 
         // post op
         _it += 1;
     }
 
-    printf("builtin:\n");
+    // printf("builtin:\n");
 
     let x = [true, false, false, true, false, true, true];
 
     for b in x {
         // printf("% => %\n", b, b^);
-        printf("%\n", b);
+        // printf("%\n", b);
     }
 
     let ints = [12, 24, 48];
 
-    printf("\n");
+    // printf("\n");
     for int in ints {
         // printf("% => %\n", b, b^);
-        printf("%\n", int);
+        // printf("%\n", int);
     }
 
     for val in 0..7 {
-        printf("%\n", x[val]);
+        // printf("%\n", x[val]);
     }
 
     for it in 2..10 {
-        printf("%\n", it);
+        // printf("%\n", it);
     }
 }
 
+// ------------ Scope ------------
+
+scope: () {
+    let other = 4;
+    assert(other == 4);
+
+    // shadow
+    let other = 5;
+    assert(other == 5);
+
+    if true {
+        let other = 10;
+        if false {
+            let double = 1;
+        }
+    }
+
+    assert(other == 5);
+    // assert(test == 10);
+    // assert(double == 1);
+}
+
 // ------------ Util ------------
+
+I: const u32 = 0;
+
+test: (condition: bool) {
+    printf("Test % .................... ", I);
+    if condition {
+        printf("Ok\n");
+    } else {
+        printf("Fail\n");
+    }
+
+    I += 1;
+}
 
 assert: (condition: bool) {
     if !condition {

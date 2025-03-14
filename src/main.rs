@@ -3,6 +3,7 @@
 
 use self::unit::comp::CompUnit;
 use clap::Parser;
+use std::process::ExitCode;
 
 mod air;
 mod arena;
@@ -28,8 +29,16 @@ struct Args {
 }
 
 #[allow(non_snake_case)]
-fn main() {
+fn main() -> ExitCode {
     let args = Args::parse();
-    let unit = CompUnit::new(args.file).expect("invalid file path");
-    unit.compile(args.log);
+    match CompUnit::new(args.file) {
+        Ok(unit) => match unit.compile(args.log) {
+            Ok(exit) => ExitCode::from(exit as u8),
+            Err(_) => ExitCode::FAILURE,
+        },
+        Err(e) => {
+            println!("invalid file path: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }

@@ -9,7 +9,6 @@ pub fn sem_analysis_pre_typing<'a>(ctx: &'a Ctx<'a>) -> Result<(), ()> {
     ctx.sem_try(entry);
     ctx.sem_try(unique_funcs);
     ctx.sem_func(end_is_return);
-    //ctx.sem_func(validate_loop_block);
 
     if ctx.diags.is_empty() {
         Ok(())

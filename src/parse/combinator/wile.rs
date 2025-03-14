@@ -1,4 +1,4 @@
-use crate::lex::buffer::{TokenBuffer, TokenId, TokenQuery};
+use crate::lex::buffer::TokenQuery;
 use crate::parse::matc::MatchTokenKind;
 use crate::parse::{rules::*, stream::TokenStream};
 use std::marker::PhantomData;

@@ -1,24 +1,22 @@
 use super::data::{Bss, BssEntry};
-use super::{Air, AirFunc, AirFuncBuilder, Args, BlockId, OffsetVar, Reg, Var};
+use super::{Air, AirFunc, AirFuncBuilder, BlockId, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
-use crate::ir::ident::IdentId;
+use crate::ir::ident::{Ident, IdentId};
 use crate::ir::sig::Sig;
+use crate::ir::ty::infer::SymbolTable;
 use crate::ir::ty::store::{TyId, TyStore};
-use crate::ir::ty::{Ty, TypeKey, VarHash, Width};
+use crate::ir::ty::{Ty, TypeKey, Width};
 use crate::ir::{self, *};
 use std::collections::HashMap;
 use std::ops::Deref;
 
-/// Contains relevant context for constructing [`Air`] instructions.
-///
-/// To start constructing a function, use [`AirCtx::start`], and to collect the resulting
-/// [`AirFunc`], use [`AirCtx::finish`]. `AirCtx` reuses data structures for efficiency.
 pub struct AirCtx<'a> {
     pub tys: TyStore<'a>,
     ctx: &'a Ctx<'a>,
     key: &'a TypeKey,
     var_index: usize,
-    var_map: HashMap<VarHash, Var>,
+    pub tables: Vec<SymbolTable<Var>>,
+    func_args: HashMap<Ident, Var>,
     ty_map: HashMap<Var, TyId>,
     bss: Bss,
     func: Option<FuncHash>,
@@ -32,7 +30,8 @@ impl<'a> AirCtx<'a> {
             key,
             tys: ctx.tys.clone(),
             var_index: 0,
-            var_map: HashMap::default(),
+            tables: Vec::new(),
+            func_args: HashMap::default(),
             ty_map: HashMap::default(),
             bss: Bss::default(),
             func: None,
@@ -98,10 +97,6 @@ impl<'a> AirCtx<'a> {
         self.expect_func_builder_mut().new_block()
     }
 
-    pub fn ins_in_block(&mut self, block: BlockId, ins: Air<'a>) {
-        self.expect_func_builder_mut().insert(block, ins);
-    }
-
     #[track_caller]
     pub fn active_block(&self) -> BlockId {
         let builder = self.expect_func_builder();
@@ -125,20 +120,15 @@ impl<'a> AirCtx<'a> {
 
     #[track_caller]
     pub fn in_loop(&mut self, breac: BlockId, f: impl FnOnce(&mut Self, BlockId)) -> BlockId {
-        let prev_block = self.active_block();
-
-        let inner = self.new_block();
-        self.set_active_block(inner);
-        let prev_loop_ctx = self.loop_ctx();
-        self.set_loop_ctx(Some(LoopCtx {
-            breac,
-            start: inner,
-        }));
-        f(self, inner);
-        self.set_active_block(prev_block);
-        self.set_loop_ctx(prev_loop_ctx);
-
-        inner
+        self.in_scope(|ctx, inner| {
+            let prev_loop_ctx = ctx.loop_ctx();
+            ctx.set_loop_ctx(Some(LoopCtx {
+                breac,
+                start: inner,
+            }));
+            f(ctx, inner);
+            ctx.set_loop_ctx(prev_loop_ctx);
+        })
     }
 
     #[track_caller]
@@ -153,6 +143,22 @@ impl<'a> AirCtx<'a> {
         inner
     }
 
+    pub fn in_var_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.tables.push(SymbolTable::default());
+        let result = f(self);
+        self.tables.pop();
+        result
+    }
+
+    pub fn push_pop_sp<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        // TODO: this sort of leaks?
+        let sp = OffsetVar::zero(self.anon_var(TyId::USIZE));
+        self.ins(Air::ReadSP(sp));
+        let result = f(self);
+        self.ins(Air::WriteSP(sp));
+        result
+    }
+
     pub fn set_active_block(&mut self, block: BlockId) {
         let builder = self.expect_func_builder_mut();
         assert!(block.0 < builder.instrs.len());
@@ -164,43 +170,34 @@ impl<'a> AirCtx<'a> {
         builder.loop_ctx = loop_ctx;
     }
 
-    pub fn new_var_registered_with_hash(
-        &mut self,
-        ident: IdentId,
-        hash: FuncHash,
-        ty: TyId,
-    ) -> Var {
-        let var = self.anon_var(ty);
-        let hash = VarHash::Func { func: hash, ident };
-        assert!(self.var_map.get(&hash).is_none());
-        self.var_map.insert(hash, var);
-        var
-    }
-
-    pub fn new_var_registered_no_salloc(&mut self, ident: IdentId, ty: TyId) -> Var {
-        let func = self.func.expect("AirCtx func hash not set is `lower_func`");
+    pub fn new_var_registered_no_salloc(&mut self, ident: &Ident, ty: TyId) -> Var {
         let var = self.anon_var_no_salloc(ty);
-        let hash = VarHash::Func { func, ident };
-        assert!(self.var_map.get(&hash).is_none());
-        self.var_map.insert(hash, var);
+        self.register_var(ident, var);
         var
     }
 
     #[track_caller]
-    pub fn new_var_registered(&mut self, ident: IdentId, ty: TyId) -> Var {
-        if matches!(self.instr_builder, InstrBuilder::Func(_)) {
-            let func = self.func.expect("AirCtx func hash not set is `lower_func`");
-            let var = self.anon_var(ty);
-            let hash = VarHash::Func { func, ident };
-            assert!(self.var_map.get(&hash).is_none());
-            self.var_map.insert(hash, var);
-            var
-        } else {
-            let var = self.anon_var(ty);
-            let hash = VarHash::Const(ident);
-            assert!(self.var_map.get(&hash).is_none());
-            self.var_map.insert(hash, var);
-            var
+    pub fn new_var_registered(&mut self, ident: &Ident, ty: TyId) -> Var {
+        let var = self.anon_var(ty);
+        self.register_var(ident, var);
+        var
+    }
+
+    #[track_caller]
+    pub fn new_func_arg_var_registered(&mut self, ident: &Ident, ty: TyId) -> Var {
+        let var = self.anon_var_no_salloc(ty);
+        self.func_args.insert(*ident, var);
+        var
+    }
+
+    fn register_var(&mut self, ident: &Ident, var: Var) {
+        if self.tables.is_empty() {
+            self.tables.push(SymbolTable::default());
+        }
+
+        match self.tables.last_mut() {
+            Some(table) => table.register(*ident, var),
+            None => unreachable!(),
         }
     }
 
@@ -219,25 +216,35 @@ impl<'a> AirCtx<'a> {
         var
     }
 
-    pub fn get_var(&self, ident: IdentId) -> Option<Var> {
-        self.get_var_with_hash(
-            ident,
-            self.func.expect("AirCtx func hash not set in `lower_func`"),
-        )
+    pub fn func_arg_var(&mut self, ident: Ident, ty: TyId) -> Var {
+        match self.func_args.get(&ident) {
+            Some(arg) => *arg,
+            None => self.new_func_arg_var_registered(&ident, ty),
+        }
     }
 
-    pub fn get_const(&self, ident: IdentId) -> Option<Var> {
-        self.var_map.get(&VarHash::Const(ident)).copied()
+    pub fn var_meta(&self, ident: IdentId) -> Option<&(Ident, Var)> {
+        self.tables.iter().rev().find_map(|t| t.symbol(ident))
     }
 
-    pub fn get_var_with_hash(&self, ident: IdentId, func: FuncHash) -> Option<Var> {
-        self.var_map.get(&VarHash::Func { func, ident }).copied()
+    pub fn var(&self, ident: IdentId) -> Option<Var> {
+        self.var_meta(ident).map(|(_, var)| *var)
     }
 
     #[track_caller]
     pub fn expect_var(&self, ident: IdentId) -> Var {
-        self.get_var(ident)
-            .or_else(|| self.get_const(ident))
+        let builder = self.expect_func_builder();
+
+        self.var(ident)
+            .or_else(|| {
+                builder
+                    .func
+                    .sig
+                    .params
+                    .iter()
+                    .find(|p| p.ident.id == ident)
+                    .map(|p| self.func_args.get(&p.ident).copied().unwrap())
+            })
             .expect("invalid var ident")
     }
 
@@ -246,12 +253,38 @@ impl<'a> AirCtx<'a> {
         *self.ty_map.get(&var).expect("invalid var")
     }
 
-    #[track_caller]
-    pub fn var_ty(&self, ident: IdentId) -> TyId {
-        self.key.ty(
-            ident,
-            self.func.expect("AirCtx func hash not set in `lower_func`"),
-        )
+    pub fn var_ty(&self, ident: &Ident) -> TyId {
+        let set = self.key.ident_set(ident.id);
+        match set.len() {
+            0 => panic!("ident not keyed: {:?}", ident),
+            1 => set[0].1,
+            _ => {
+                // choose the var type that is closest behind `ident`
+                let mut prev = None;
+                for (option, ty) in set.iter() {
+                    if option.span.start == ident.span.start {
+                        return *ty;
+                    } else if option.span.start > ident.span.start {
+                        match prev {
+                            Some((_, ty)) => return ty,
+                            None => panic!("ident not keyed: {:?}", ident),
+                        }
+                    }
+                    prev = Some((option, *ty));
+                }
+
+                match prev {
+                    Some((option, ty)) => {
+                        if option.span.start <= ident.span.start {
+                            return ty;
+                        } else {
+                            panic!("ident not keyed: {:?}", ident);
+                        }
+                    }
+                    None => panic!("ident not keyed: {:?}", ident),
+                }
+            }
+        }
     }
 
     pub fn str_lit(&mut self, str: &str) -> (BssEntry, usize) {
@@ -301,10 +334,6 @@ impl<'a> AirCtx<'a> {
     pub fn ret_ptr(&mut self, var: OffsetVar) {
         self.ins(Air::Addr(RET_REG, var));
         self.ins(Air::Ret);
-    }
-
-    pub fn call(&mut self, sig: &'a Sig, args: Args) {
-        self.ins(Air::Call(sig, args))
     }
 }
 

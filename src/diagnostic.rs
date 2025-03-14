@@ -1,3 +1,4 @@
+#![allow(unused)]
 use crate::lex::buffer::Span;
 use crate::unit::source::Source;
 use annotate_snippets::{Level, Renderer, Snippet};

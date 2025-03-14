@@ -1,4 +1,5 @@
-use crate::air::{Air, AirFunc, Bits, BlockId, ConstData, IntKind, OffsetVar, Reg};
+use self::ctx::InterpCtx;
+use crate::air::{Air, AirFunc, Bits, ConstData, IntKind, OffsetVar};
 use crate::ir::ctx::Ctx;
 use crate::ir::sig::{Linkage, Sig};
 use crate::ir::ty::store::TyId;
@@ -7,36 +8,21 @@ use anstream::println;
 use core::str;
 use libffi::low::CodePtr;
 use libffi::middle::{Arg, Cif, Type};
-use stack::*;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_void};
 use std::ops::BitXor;
 
+mod ctx;
 mod stack;
 
-#[derive(Debug)]
-pub enum InterpErr {
-    NoEntry,
-    DryStream,
-}
-
-pub fn run<'a>(
-    ctx: &'a Ctx<'a>,
-    air_funcs: &[AirFunc],
-    consts: &[Air<'a>],
-    log: bool,
-) -> Result<i32, InterpErr> {
+pub fn run<'a>(ctx: &'a Ctx<'a>, air_funcs: &[AirFunc], consts: &[Air<'a>], log: bool) -> i32 {
     let libs = load_libraries(ctx.sigs.values().copied());
 
     let main = air_funcs
         .iter()
         .find(|f| ctx.expect_ident(f.func.sig.ident) == "main")
-        .ok_or_else(|| InterpErr::NoEntry)?;
-    let mut stack = Stack::default();
-    eval_consts(ctx, consts, air_funcs, &mut stack, &libs, log);
-    let result = entry(ctx, main, air_funcs, &mut stack, &libs, log);
-    println!("stack_len: {:?} bytes", stack.len() * 8);
-    result
+        .unwrap();
+    entry(ctx, main, air_funcs, &libs, consts, log)
 }
 
 fn load_libraries<'a>(
@@ -58,157 +44,83 @@ fn load_libraries<'a>(
         .collect()
 }
 
-#[derive(Default)]
-pub struct CallStack<'a> {
-    stack: Vec<(LR<'a>, usize, BlockId)>,
-}
-
-impl<'a> CallStack<'a> {
-    pub fn push_lr(&mut self, lr: LR<'a>, block_id: BlockId) {
-        self.stack.push((lr, 0, block_id));
-    }
-
-    pub fn grow_stack(&mut self, bytes: usize) {
-        if let Some((_, stack, _)) = self.stack.last_mut() {
-            *stack += bytes;
-        }
-    }
-}
-
-pub struct LR<'a> {
-    func: &'a AirFunc<'a>,
-    instr: usize,
-}
-
-#[derive(Default)]
-pub struct Rega(u64);
-
-impl Rega {
-    pub fn w(&mut self, val: u64) {
-        self.0 = val;
-    }
-
-    pub fn r(&self) -> u64 {
-        self.0
-    }
-}
-
-fn eval_consts(
-    ctx: &Ctx,
-    instrs: &[Air],
-    air_funcs: &[AirFunc],
-    stack: &mut Stack,
-    libs: &HashMap<&str, libloading::Library>,
-    log: bool,
-) {
-    let mut current_func = None;
-    let mut instrs = instrs.iter();
-    let mut current_block = None;
-    let mut call_stack = CallStack::default();
-    let mut rega = Rega::default();
-    let mut regb = Rega::default();
-    let mut instr_num = 0;
-
-    loop {
-        let Some(instr) = instrs.next() else {
-            return;
-        };
-
-        if log {
-            log_instr(
-                ctx,
-                current_func,
-                stack,
-                &call_stack,
-                &rega,
-                &regb,
-                instr,
-                instr_num,
-                current_block,
-            );
-        }
-
-        match execute_instr(
-            ctx,
-            &mut current_func,
-            air_funcs,
-            stack,
-            libs,
-            &mut call_stack,
-            &mut rega,
-            &mut regb,
-            instr,
-            &mut instr_num,
-            &mut current_block,
-            &mut instrs,
-        ) {
-            InstrResult::Continue => continue,
-            InstrResult::Break => break,
-            InstrResult::Ok => {}
-        }
-
-        instr_num += 1;
-    }
-}
-
 fn entry(
     ctx: &Ctx,
     main: &AirFunc,
     air_funcs: &[AirFunc],
-    stack: &mut Stack,
     libs: &HashMap<&str, libloading::Library>,
+    consts: &[Air],
     log: bool,
-) -> Result<i32, InterpErr> {
-    let mut current_func = Some(main);
-    let mut instrs = main.start().iter();
-    let mut current_block = Some(main.start_block());
-    let mut call_stack = CallStack::default();
-    let mut rega = Rega::default();
-    let mut regb = Rega::default();
-    let mut instr_num = 0;
-
+) -> i32 {
+    let mut ctx = InterpCtx::new(ctx);
+    ctx.consts(consts);
     loop {
-        let Some(instr) = instrs.next() else {
-            return Err(InterpErr::DryStream);
-        };
-
-        if log {
-            log_instr(
-                ctx,
-                current_func,
-                stack,
-                &call_stack,
-                &rega,
-                &regb,
-                instr,
-                instr_num,
-                current_block,
-            );
-        }
-
-        match execute_instr(
-            ctx,
-            &mut current_func,
-            air_funcs,
-            stack,
-            libs,
-            &mut call_stack,
-            &mut rega,
-            &mut regb,
-            instr,
-            &mut instr_num,
-            &mut current_block,
-            &mut instrs,
-        ) {
-            InstrResult::Continue => continue,
+        match execute(&mut ctx, air_funcs, libs, log) {
             InstrResult::Break => break,
+            InstrResult::Continue => continue,
             InstrResult::Ok => {}
         }
 
-        instr_num += 1;
+        ctx.incr_instr();
     }
 
-    Ok(rega.r() as i32)
+    ctx.start_func(main);
+    loop {
+        match execute(&mut ctx, air_funcs, libs, log) {
+            InstrResult::Break => break,
+            InstrResult::Continue => continue,
+            InstrResult::Ok => {}
+        }
+
+        ctx.incr_instr();
+    }
+
+    println!("\nstack: {:?} bytes", ctx.stack.len() * 8);
+    ctx.a.r() as i32
+}
+
+macro_rules! float_op {
+    ($ctx:expr, $width:expr, $op:tt) => {
+        match $width {
+            Width::W32 => {
+                $ctx.a.w(
+                    (f32::from_bits($ctx.a.r() as u32) $op f32::from_bits($ctx.b.r() as u32)).to_bits()
+                        as u64,
+                );
+            }
+            Width::W64 => {
+                $ctx.a
+                    .w((f64::from_bits($ctx.a.r()) $op f64::from_bits($ctx.b.r())).to_bits());
+            }
+            _ => unreachable!(),
+        }
+    };
+
+    (Cmp, $ctx:expr, $width:expr, $op:tt) => {
+        match $width {
+            Width::W32 => {
+                $ctx.a.w(
+                    (f32::from_bits($ctx.a.r() as u32) $op f32::from_bits($ctx.b.r() as u32)) as u64,
+                );
+            }
+            Width::W64 => {
+                $ctx.a
+                    .w((f64::from_bits($ctx.a.r()) $op f64::from_bits($ctx.b.r())) as u64);
+            }
+            _ => unreachable!(),
+        }
+    };
+}
+
+macro_rules! int_op {
+    ($ctx:expr, $width:expr, $op:tt) => {
+        match $width {
+            Width::W8 => $ctx.a.w(($ctx.a.r() as u8 $op $ctx.b.r() as u8) as u64),
+            Width::W16 => $ctx.a.w(($ctx.a.r() as u16 $op $ctx.b.r() as u16) as u64),
+            Width::W32 => $ctx.a.w(($ctx.a.r() as u32 $op $ctx.b.r() as u32) as u64),
+            Width::W64 => $ctx.a.w(($ctx.a.r() $op $ctx.b.r()) as u64),
+        }
+    };
 }
 
 enum InstrResult {
@@ -217,70 +129,38 @@ enum InstrResult {
     Ok,
 }
 
-fn execute_instr<'a>(
-    ctx: &Ctx,
-    current_func: &mut Option<&'a AirFunc<'a>>,
+fn execute<'a>(
+    ctx: &mut InterpCtx<'a>,
     air_funcs: &'a [AirFunc],
-    stack: &mut Stack,
     libs: &HashMap<&str, libloading::Library>,
-    call_stack: &mut CallStack<'a>,
-    rega: &mut Rega,
-    regb: &mut Rega,
-    instr: &Air,
-    instr_num: &mut usize,
-    current_block: &mut Option<BlockId>,
-    instrs: &mut std::slice::Iter<'a, Air<'a>>,
+    log: bool,
 ) -> InstrResult {
+    let instr = match ctx.next() {
+        Some(instr) => instr,
+        None => return InstrResult::Break,
+    };
+
+    if log {
+        ctx.log(instr);
+    }
+
     match instr {
-        Air::Ret => match call_stack.stack.last() {
-            Some((LR { func, instr }, stack_frame_size, block)) => {
-                *current_func = Some(func);
-                *instrs = func.block(*block).iter();
-                for _ in 0..*instr {
-                    instrs.next();
-                }
-                *instr_num = *instr;
-                *stack.sp_mut() -= stack_frame_size;
-                *current_block = Some(*block);
-                call_stack.stack.pop();
-                return InstrResult::Continue;
-            }
-            None => {
-                if ctx.expect_ident(current_func.unwrap().func.sig.ident) == "main" {
-                    return InstrResult::Break;
-                } else {
-                    panic!("no return");
-                }
-            }
-        },
+        Air::Ret => return ctx.pop_frame(),
         Air::Call(sig, args) => {
             match sig.linkage {
                 Linkage::Local => {
-                    call_stack.push_lr(
-                        LR {
-                            func: current_func.unwrap(),
-                            instr: *instr_num + 1,
-                        },
-                        current_block.expect("no current block"),
-                    );
-                    *instr_num = 0;
-
-                    // TODO: hashmap?
                     let func = air_funcs
                         .iter()
                         .find(|f| f.func.sig.ident == sig.ident)
                         .unwrap_or_else(|| panic!("invalid func"));
-                    *current_func = Some(func);
-                    *instrs = func.start().iter();
-                    *current_block = Some(func.start_block());
+                    ctx.start_func(func);
 
-                    //&*stack.var_ptr_mut(args.vars.first().unwrap().1),
                     if ctx.expect_ident(sig.ident) == "printf" {
                         let (ty, fmt) = args.vars.first().unwrap();
                         assert_eq!(*ty, TyId::STR_LIT);
                         let fmt = OffsetVar::zero(*fmt);
-                        let len = stack.read_var::<u64>(fmt);
-                        let addr = stack.read_var::<u64>(fmt.add(Width::W64));
+                        let len = ctx.stack.read_var::<u64>(fmt);
+                        let addr = ctx.stack.read_var::<u64>(fmt.add(Width::W64));
                         let str = unsafe { str::from_raw_parts(addr as *const u8, len as usize) };
 
                         enum Entry {
@@ -306,44 +186,44 @@ fn execute_instr<'a>(
                                             match ctx.tys.ty(*ty) {
                                                 Ty::Int(ty) => match ty.kind() {
                                                     IntKind::U8 => {
-                                                        print!("{}", stack.read_var::<u8>(var))
+                                                        print!("{}", ctx.stack.read_var::<u8>(var))
                                                     }
                                                     IntKind::U16 => {
-                                                        print!("{}", stack.read_var::<u16>(var))
+                                                        print!("{}", ctx.stack.read_var::<u16>(var))
                                                     }
                                                     IntKind::U32 => {
-                                                        print!("{}", stack.read_var::<u32>(var))
+                                                        print!("{}", ctx.stack.read_var::<u32>(var))
                                                     }
                                                     IntKind::U64 => {
-                                                        print!("{}", stack.read_var::<u64>(var))
+                                                        print!("{}", ctx.stack.read_var::<u64>(var))
                                                     }
                                                     IntKind::I8 => {
-                                                        print!("{}", stack.read_var::<i8>(var))
+                                                        print!("{}", ctx.stack.read_var::<i8>(var))
                                                     }
                                                     IntKind::I16 => {
-                                                        print!("{}", stack.read_var::<i16>(var))
+                                                        print!("{}", ctx.stack.read_var::<i16>(var))
                                                     }
                                                     IntKind::I32 => {
-                                                        print!("{}", stack.read_var::<i32>(var))
+                                                        print!("{}", ctx.stack.read_var::<i32>(var))
                                                     }
                                                     IntKind::I64 => {
-                                                        print!("{}", stack.read_var::<i64>(var))
+                                                        print!("{}", ctx.stack.read_var::<i64>(var))
                                                     }
                                                 },
                                                 Ty::Float(float) => match float {
                                                     FloatTy::F32 => {
-                                                        print!("{}", stack.read_var::<f32>(var))
+                                                        print!("{}", ctx.stack.read_var::<f32>(var))
                                                     }
                                                     FloatTy::F64 => {
-                                                        print!("{}", stack.read_var::<f64>(var))
+                                                        print!("{}", ctx.stack.read_var::<f64>(var))
                                                     }
                                                 },
                                                 Ty::Bool => {
-                                                    print!("{}", stack.read_var::<u8>(var) == 1)
+                                                    print!("{}", ctx.stack.read_var::<u8>(var) == 1)
                                                 }
                                                 Ty::Ref(&Ty::Str) => todo!(),
                                                 Ty::Ref(_) => {
-                                                    print!("{:#x}", stack.read_var::<u64>(var))
+                                                    print!("{:#x}", ctx.stack.read_var::<u64>(var))
                                                 }
                                                 ty => unimplemented!("printf arg: {ty:?}"),
                                             }
@@ -394,7 +274,9 @@ fn execute_instr<'a>(
                     let args = args
                         .vars
                         .iter()
-                        .map(|(_, v)| Arg::new(unsafe { &*stack.var_ptr_mut(OffsetVar::zero(*v)) }))
+                        .map(|(_, v)| {
+                            Arg::new(unsafe { &*ctx.stack.var_ptr_mut(OffsetVar::zero(*v)) })
+                        })
                         .collect::<Vec<_>>();
 
                     unsafe {
@@ -406,10 +288,10 @@ fn execute_instr<'a>(
 
                                 match ctx.tys.ty(sig.ty) {
                                     Ty::Bool => {
-                                        rega.w(result as u64);
+                                        ctx.a.w(result as u64);
                                     }
                                     Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => rega.w(result as u64),
+                                    Ty::Ref(_) => ctx.a.w(result as u64),
                                     _ => todo!(),
                                 }
                             }
@@ -419,10 +301,10 @@ fn execute_instr<'a>(
 
                                 match ctx.tys.ty(sig.ty) {
                                     Ty::Bool => {
-                                        rega.w(result as u64);
+                                        ctx.a.w(result as u64);
                                     }
                                     Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => rega.w(result as u64),
+                                    Ty::Ref(_) => ctx.a.w(result as u64),
                                     _ => todo!(),
                                 }
                             }
@@ -432,10 +314,10 @@ fn execute_instr<'a>(
 
                                 match ctx.tys.ty(sig.ty) {
                                     Ty::Bool => {
-                                        rega.w(result as u64);
+                                        ctx.a.w(result as u64);
                                     }
                                     Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => rega.w(result as u64),
+                                    Ty::Ref(_) => ctx.a.w(result as u64),
                                     _ => todo!(),
                                 }
                             }
@@ -445,15 +327,15 @@ fn execute_instr<'a>(
 
                                 match ctx.tys.ty(sig.ty) {
                                     Ty::Bool => {
-                                        rega.w(result);
+                                        ctx.a.w(result);
                                     }
                                     Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => rega.w(result),
+                                    Ty::Ref(_) => ctx.a.w(result),
                                     Ty::Struct(id) => {
                                         let bytes = ctx.tys.struct_layout(id).size;
-                                        let addr = stack.anon_alloc(bytes);
-                                        stack.write_bits(Bits::from_u64(result), addr as usize);
-                                        rega.w(addr as u64);
+                                        let addr = ctx.stack.anon_alloc(bytes);
+                                        ctx.stack.write_bits(Bits::from_u64(result), addr as usize);
+                                        ctx.a.w(addr as u64);
                                     }
                                     _ => todo!(),
                                 }
@@ -470,107 +352,77 @@ fn execute_instr<'a>(
             then,
             otherwise,
         } => {
-            if match condition {
-                Reg::A => rega.r() == 1,
-                Reg::B => regb.r() == 1,
-            } {
-                *current_block = Some(*then);
-                *instrs = current_func.unwrap().block(*then).iter();
-                *instr_num = 0;
+            if ctx.r(*condition) == 1 {
+                ctx.start_block(*then);
             } else {
-                *current_block = Some(*otherwise);
-                *instrs = current_func.unwrap().block(*otherwise).iter();
-                *instr_num = 0;
+                ctx.start_block(*otherwise);
             }
             return InstrResult::Continue;
         }
         Air::Jmp(block) => {
-            *current_block = Some(*block);
-            *instrs = current_func.unwrap().block(*block).iter();
-            *instr_num = 0;
+            ctx.start_block(*block);
             return InstrResult::Continue;
         }
 
         Air::SAlloc(var, bytes) => {
-            if !stack.allocated(*var) {
-                stack.alloc(*var, *bytes);
-                call_stack.grow_stack(*bytes);
-            }
+            ctx.stack.alloc(*var, *bytes);
+        }
+
+        Air::ReadSP(var) => {
+            ctx.stack
+                .push_some_bits(*var, Bits::from_u64(ctx.stack.sp() as u64));
+        }
+        Air::WriteSP(var) => {
+            *ctx.stack.sp_mut() = ctx.stack.read_var::<u64>(*var) as usize;
         }
 
         Air::Addr(reg, var) => {
-            let addr = unsafe { stack.var_ptr_mut(*var).addr() as u64 };
-            match reg {
-                Reg::A => rega.w(addr),
-                Reg::B => regb.w(addr),
-            }
+            let addr = ctx.stack.var_addr(*var) as u64;
+            ctx.w(*reg, addr);
         }
         Air::MemCpy { dst, src, bytes } => {
-            let dst = match dst {
-                Reg::A => rega.r(),
-                Reg::B => regb.r(),
-            } as usize;
-            let src = match src {
-                Reg::A => rega.r(),
-                Reg::B => regb.r(),
-            } as usize;
-            unsafe { stack.memcpy(dst, src, *bytes) };
+            let dst = ctx.r(*dst) as usize;
+            let src = ctx.r(*src) as usize;
+            unsafe { ctx.stack.memcpy(dst, src, *bytes) };
         }
 
         Air::PushIConst(var, data) => match data {
             ConstData::Bits(bits) => {
-                stack.push_some_bits(*var, *bits);
+                ctx.stack.push_some_bits(*var, *bits);
             }
             ConstData::Ptr(entry) => {
-                stack.push_var::<u64>(*var, entry.addr() as u64);
+                ctx.stack.push_var::<u64>(*var, entry.addr() as u64);
             }
         },
         Air::PushIReg { dst, width, src } => {
-            let reg = match src {
-                Reg::A => rega,
-                Reg::B => regb,
-            };
-            let bits = Bits::from_width(reg.r(), *width);
-            stack.push_some_bits(*dst, bits);
+            let bits = Bits::from_width(ctx.r(*src), *width);
+            ctx.stack.push_some_bits(*dst, bits);
         }
         Air::PushIVar { dst, width, src } => {
-            let bits = stack.read_some_bits(*src, *width);
-            stack.push_some_bits(*dst, bits);
+            let bits = ctx.stack.read_some_bits(*src, *width);
+            ctx.stack.push_some_bits(*dst, bits);
         }
 
         Air::Read { dst, addr, width } => {
-            let addr = match addr {
-                Reg::A => rega.r(),
-                Reg::B => regb.r(),
-            };
-
-            match dst {
-                Reg::A => rega.w(stack
+            let addr = ctx.r(*addr);
+            ctx.w(
+                *dst,
+                ctx.stack
                     .read_some_bits_with_addr(addr as usize, *width)
-                    .to_u64()),
-                Reg::B => regb.w(stack
-                    .read_some_bits_with_addr(addr as usize, *width)
-                    .to_u64()),
-            }
+                    .to_u64(),
+            );
         }
         Air::Write { addr, data, width } => {
-            let addr = match addr {
-                Reg::A => rega.r(),
-                Reg::B => regb.r(),
-            };
-
-            let data_bits = match data {
-                Reg::A => rega.r(),
-                Reg::B => regb.r(),
-            };
-
-            stack.write_bits(Bits::from_width(data_bits, *width), addr as usize);
+            let addr = ctx.r(*addr);
+            let data_bits = ctx.r(*data);
+            ctx.stack
+                .write_bits(Bits::from_width(data_bits, *width), addr as usize);
         }
 
         Air::SwapReg => {
-            let tmp = rega.r();
-            rega.w(regb.r());
-            regb.w(tmp);
+            let tmp = ctx.a.r();
+            ctx.a.w(ctx.b.r());
+            ctx.b.w(tmp);
         }
         Air::MovIConst(reg, data) => {
             let data = match data {
@@ -578,392 +430,58 @@ fn execute_instr<'a>(
                 ConstData::Ptr(data) => data.addr() as u64,
             };
 
-            match reg {
-                Reg::A => rega.w(data),
-                Reg::B => regb.w(data),
-            }
+            ctx.w(*reg, data);
         }
         Air::MovIVar(reg, var, width) => {
-            let int = stack.read_some_bits(*var, *width).to_u64();
-            match reg {
-                Reg::A => {
-                    rega.w(int);
-                }
-                Reg::B => {
-                    regb.w(int);
-                }
-            }
+            let bits = ctx.stack.read_some_bits(*var, *width).to_u64();
+            ctx.w(*reg, bits);
         }
 
-        Air::AddAB(width) => match width {
-            Width::W8 => rega.w((rega.r() as u8 + regb.r() as u8) as u64),
-            Width::W16 => rega.w((rega.r() as u16 + regb.r() as u16) as u64),
-            Width::W32 => rega.w((rega.r() as u32 + regb.r() as u32) as u64),
-            Width::W64 => rega.w(rega.r() + regb.r()),
-        },
-        Air::MulAB(width) => match width {
-            Width::W8 => rega.w((rega.r() as u8 * regb.r() as u8) as u64),
-            Width::W16 => rega.w((rega.r() as u16 * regb.r() as u16) as u64),
-            Width::W32 => rega.w((rega.r() as u32 * regb.r() as u32) as u64),
-            Width::W64 => rega.w(rega.r() * regb.r()),
-        },
-        Air::SubAB(width) => match width {
-            Width::W8 => rega.w((rega.r() as u8 - regb.r() as u8) as u64),
-            Width::W16 => rega.w((rega.r() as u16 - regb.r() as u16) as u64),
-            Width::W32 => rega.w((rega.r() as u32 - regb.r() as u32) as u64),
-            Width::W64 => rega.w(rega.r() - regb.r()),
-        },
-        Air::DivAB(width) => match width {
-            Width::W8 => rega.w((rega.r() as u8 / regb.r() as u8) as u64),
-            Width::W16 => rega.w((rega.r() as u16 / regb.r() as u16) as u64),
-            Width::W32 => rega.w((rega.r() as u32 / regb.r() as u32) as u64),
-            Width::W64 => rega.w(rega.r() / regb.r()),
-        },
+        Air::AddAB(width) => int_op!(ctx, width, +),
+        Air::SubAB(width) => int_op!(ctx, width, -),
+        Air::MulAB(width) => int_op!(ctx, width, *),
+        Air::DivAB(width) => int_op!(ctx, width, /),
+        Air::XorAB(width) => int_op!(ctx, width, ^),
 
-        Air::XorAB(width) => match width {
-            Width::W8 => rega.w((rega.r() as u8 ^ regb.r() as u8) as u64),
-            Width::W16 => rega.w((rega.r() as u16 ^ regb.r() as u16) as u64),
-            Width::W32 => rega.w((rega.r() as u32 ^ regb.r() as u32) as u64),
-            Width::W64 => rega.w(rega.r() ^ regb.r()),
-        },
+        Air::EqAB(width) => int_op!(ctx, width, ==),
+        Air::NEqAB(width) => int_op!(ctx, width, !=),
 
-        Air::EqAB(width) => match width {
-            Width::W8 => rega.w((rega.r() as u8 == regb.r() as u8) as u64),
-            Width::W16 => rega.w((rega.r() as u16 == regb.r() as u16) as u64),
-            Width::W32 => rega.w((rega.r() as u32 == regb.r() as u32) as u64),
-            Width::W64 => rega.w((rega.r() == regb.r()) as u64),
-        },
+        Air::FAddAB(width) => float_op!(ctx, width, +),
+        Air::FSubAB(width) => float_op!(ctx, width, -),
+        Air::FMulAB(width) => float_op!(ctx, width, *),
+        Air::FDivAB(width) => float_op!(ctx, width, /),
 
-        Air::FAddAB(width) => match width {
-            Width::W32 => {
-                rega.w(
-                    (f32::from_bits(rega.r() as u32) + f32::from_bits(regb.r() as u32)).to_bits()
-                        as u64,
-                );
-            }
-            Width::W64 => {
-                rega.w((f64::from_bits(rega.r()) + f64::from_bits(regb.r())).to_bits());
-            }
-            _ => unreachable!(),
-        },
-        Air::FSubAB(width) => match width {
-            Width::W32 => {
-                rega.w(
-                    (f32::from_bits(rega.r() as u32) - f32::from_bits(regb.r() as u32)).to_bits()
-                        as u64,
-                );
-            }
-            Width::W64 => {
-                rega.w((f64::from_bits(rega.r()) - f64::from_bits(regb.r())).to_bits());
-            }
-            _ => unreachable!(),
-        },
-        Air::FMulAB(width) => match width {
-            Width::W32 => {
-                rega.w(
-                    (f32::from_bits(rega.r() as u32) * f32::from_bits(regb.r() as u32)).to_bits()
-                        as u64,
-                );
-            }
-            Width::W64 => {
-                rega.w((f64::from_bits(rega.r()) * f64::from_bits(regb.r())).to_bits());
-            }
-            _ => unreachable!(),
-        },
-        Air::FDivAB(width) => match width {
-            Width::W32 => {
-                rega.w(
-                    (f32::from_bits(rega.r() as u32) / f32::from_bits(regb.r() as u32)).to_bits()
-                        as u64,
-                );
-            }
-            Width::W64 => {
-                rega.w((f64::from_bits(rega.r()) / f64::from_bits(regb.r())).to_bits());
-            }
-            _ => unreachable!(),
-        },
-
-        Air::FEqAB(width) => match width {
-            Width::W32 => {
-                rega.w((f32::from_bits(rega.r() as u32) == f32::from_bits(regb.r() as u32)) as u64);
-            }
-            Width::W64 => {
-                rega.w((f64::from_bits(rega.r()) == f64::from_bits(regb.r())) as u64);
-            }
-            _ => unreachable!(),
-        },
+        Air::FEqAB(width) => float_op!(Cmp, ctx, width, ==),
+        Air::NFEqAB(width) => float_op!(Cmp, ctx, width, !=),
 
         Air::FSqrt(ty) => match ty {
             FloatTy::F32 => {
-                rega.w(f32::from_bits(rega.r() as u32).sqrt().to_bits() as u64);
+                ctx.a
+                    .w(f32::from_bits(ctx.a.r() as u32).sqrt().to_bits() as u64);
             }
             FloatTy::F64 => {
-                rega.w(f64::from_bits(rega.r()).sqrt().to_bits());
+                ctx.a.w(f64::from_bits(ctx.a.r()).sqrt().to_bits());
             }
         },
 
         Air::XOR(mask) => {
-            rega.w(mask.bitxor(rega.r()));
+            ctx.a.w(mask.bitxor(ctx.a.r()));
         }
 
         Air::Fu32 => {
-            rega.w(f32::from_bits(rega.r() as u32) as u32 as u64);
+            ctx.a.w(f32::from_bits(ctx.a.r() as u32) as u32 as u64);
         }
 
         Air::Exit => {
             return InstrResult::Break;
         }
         Air::PrintCStr => unsafe {
-            libc::printf(rega.r() as *const c_char);
+            libc::printf(ctx.a.r() as *const c_char);
             libc::printf("\n\0".as_ptr() as *const c_char);
         },
     }
 
     InstrResult::Ok
-}
-
-fn log_instr(
-    ctx: &Ctx,
-    current_func: Option<&AirFunc>,
-    stack: &mut Stack,
-    call_stack: &CallStack,
-    rega: &Rega,
-    regb: &Rega,
-    instr: &Air,
-    total_instr_num: usize,
-    current_block: Option<BlockId>,
-) {
-    if let Some(f) = current_func {
-        println!(
-        "[\u{1b}[32m{}\u{1b}[39m:{:?}:{total_instr_num}]\u{1b}[1m\u{1b}[35m {instr:?}\u{1b}[39m\u{1b}[22m",
-        ctx.expect_ident(f.func.sig.ident),
-        current_block,
-    );
-    } else {
-        println!(
-        "[\u{1b}[32m\u{1b}[39m::{total_instr_num}]\u{1b}[1m\u{1b}[35m {instr:?}\u{1b}[39m\u{1b}[22m",
-    );
-    }
-
-    match instr {
-        Air::PushIConst(_, _) | Air::Exit | Air::Jmp(_) | Air::SwapReg | Air::MovIConst(_, _) => {}
-        Air::Fu32 => {
-            let float = f32::from_bits(rega.r() as u32);
-            println!(" | {} <- {}", float as u32 as u64, float);
-        }
-        Air::Read { dst, addr, width } => {
-            println!(
-                " | Reg({:?}) <- {:?} <- Read(Reg({:?}) = Addr({:#x})) @ {:?}",
-                dst,
-                stack.read_some_bits_with_addr(
-                    match addr {
-                        Reg::A => rega.r(),
-                        Reg::B => regb.r(),
-                    } as usize,
-                    *width
-                ),
-                addr,
-                match addr {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                },
-                width
-            );
-        }
-        Air::Write { data, addr, width } => {
-            println!(
-                " | Addr({:#x}) <- {:#x} @ {:?}",
-                match addr {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                },
-                match data {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                },
-                width
-            );
-        }
-        Air::XOR(mask) => {
-            println!(
-                " | Reg(A) <- {:#x} <- {:#x} XOR {:#x}",
-                mask.bitxor(rega.r()),
-                rega.r(),
-                mask
-            );
-        }
-        Air::PushIVar { dst, width, src } => {
-            println!(" | {dst:?} <- {:?}", stack.read_some_bits(*src, *width));
-        }
-        Air::PushIReg { dst, width, src } => {
-            println!(
-                " | {dst:?} <- {} @ {width:?}",
-                match src {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                },
-            );
-        }
-        Air::PrintCStr => {
-            println!(" | print_c_str @ `{}`", rega.r());
-        }
-        Air::IfElse {
-            condition,
-            then,
-            otherwise,
-        } => {
-            println!(
-                " | if ({:#x}), then {:?}, otherwise {:?}",
-                match condition {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                },
-                then,
-                otherwise
-            );
-        }
-        Air::SAlloc(var, bytes) => {
-            if !stack.allocated(*var) {
-                println!(" | Addr({:?}) <- {:#x}", var, stack.sp());
-                println!(" | SP({:?}) += {}", stack.sp(), bytes);
-            } else {
-                println!(" | Already allocated, skipping");
-            }
-        }
-        Air::MemCpy { dst, src, bytes } => {
-            println!(
-                " | memcpy {:#x} <- {:#x} @ {bytes} bytes",
-                match dst {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                },
-                match src {
-                    Reg::A => rega.r(),
-                    Reg::B => regb.r(),
-                }
-            );
-        }
-        Air::Addr(_, var) => {
-            let addr = unsafe { stack.var_ptr_mut(*var).addr() };
-            println!(" | Addr({:?}) = {:#x}", var.var, addr);
-            println!(" | Offset({})", var.offset);
-        }
-        Air::MovIVar(reg, var, width) => {
-            let int = stack.read_some_bits(*var, *width);
-            println!(" | {reg:?} <- {int:?}");
-        }
-        Air::Ret => {
-            match call_stack.stack.last() {
-                Some((LR { func, instr }, _, _)) => {
-                    if let Some(f) = current_func {
-                        println!(
-                            " | proc {} -> proc {} @ instr #{}",
-                            ctx.expect_ident(f.func.sig.ident),
-                            ctx.expect_ident(func.func.sig.ident),
-                            instr
-                        );
-                    } else {
-                        println!(
-                            " | ??? -> proc {} @ instr #{}",
-                            ctx.expect_ident(func.func.sig.ident),
-                            instr
-                        );
-                    }
-                }
-                None => {
-                    if let Some(f) = current_func {
-                        println!(" | proc {} -> ???", ctx.expect_ident(f.func.sig.ident),);
-                    } else {
-                        println!(" | ??? -> ???");
-                    }
-                }
-            }
-            println!(" | A = {:#x}", rega.r());
-        }
-        Air::Call(sig, args) => {
-            println!(
-                " | call proc [{}({:?})]",
-                ctx.expect_ident(sig.ident),
-                &args
-                    .vars
-                    .iter()
-                    .map(|(ty, var)| (ctx.ty_str(*ty), var))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        Air::AddAB(_) => {
-            let result = rega.r() + regb.r();
-            println!(" | A <- {} <- A({}) + B({})", result, rega.r(), regb.r());
-        }
-        Air::SubAB(_) => {
-            let result = rega.r() - regb.r();
-            println!(" | A <- {} <- A({}) - B({})", result, rega.r(), regb.r());
-        }
-        Air::MulAB(_) => {
-            let result = rega.r() * regb.r();
-            println!(" | A <- {} <- A({}) * B({})", result, rega.r(), regb.r());
-        }
-        Air::DivAB(_) => {
-            let result = rega.r() / regb.r();
-            println!(" | A <- {} <- A({}) / B({})", result, rega.r(), regb.r());
-        }
-
-        Air::XorAB(_) => {
-            let result = rega.r() ^ regb.r();
-            println!(" | A <- {} <- A({}) ^ B({})", result, rega.r(), regb.r());
-        }
-
-        Air::EqAB(_) => {
-            let result = rega.r() == regb.r();
-            println!(" | A <- {} <- A({}) == B({})", result, rega.r(), regb.r());
-        }
-
-        Air::FAddAB(_) => {
-            let lhs = rega.r();
-            let rhs = regb.r();
-            let result = f64::from_bits(lhs) + f64::from_bits(rhs);
-            println!(" | A <- {:.4} <- A({}) + B({})", result, lhs, rhs);
-        }
-        Air::FSubAB(_) => {
-            let lhs = rega.r();
-            let rhs = regb.r();
-            let result = f64::from_bits(lhs) - f64::from_bits(rhs);
-            println!(" | A <- {:.4} <- A({}) - B({})", result, lhs, rhs);
-        }
-        Air::FMulAB(_) => {
-            let lhs = rega.r();
-            let rhs = regb.r();
-            let result = f64::from_bits(lhs) * f64::from_bits(rhs);
-            println!(" | A <- {:.4} <- A({}) * B({})", result, lhs, rhs);
-        }
-        Air::FDivAB(_) => {
-            let lhs = rega.r();
-            let rhs = regb.r();
-            let result = f64::from_bits(lhs) / f64::from_bits(rhs);
-            println!(" | A <- {:.4} <- A({}) / B({})", result, lhs, rhs);
-        }
-
-        Air::FEqAB(_) => {
-            let lhs = rega.r();
-            let rhs = regb.r();
-            let result = f64::from_bits(lhs) == f64::from_bits(rhs);
-            println!(" | A <- {} <- A({}) == B({})", result, lhs, rhs);
-        }
-
-        Air::FSqrt(ty) => {
-            let arg = rega.r();
-            match ty {
-                FloatTy::F32 => {
-                    let result = f32::from_bits(arg as u32).sqrt();
-                    println!(" | A <- {:.4} <- A({})", result, arg);
-                }
-                FloatTy::F64 => {
-                    let result = f64::from_bits(arg).sqrt();
-                    println!(" | A <- {:.4} <- A({})", result, arg);
-                }
-            }
-        }
-    }
 }
 
 impl Ty<'_> {

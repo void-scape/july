@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Struct {
+    #[allow(unused)]
     pub span: Span,
     pub name: Ident,
     pub fields: Vec<Field>,

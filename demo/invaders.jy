@@ -144,22 +144,13 @@ main: () -> i32 {
         return 1;
     }
 
-    let bullet = load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer);
-    if bullet == NULL {
-        return 1;
-    }
-
-    // printf("%\n", guts);
     let textures = [bebop, guts];
     let index: u64 = 0;
     let selected_texture = textures[index];
-    // exit(1);
-    // printf("%\n", selected_texture);
 
-    let arr_ptr = &textures;
-    printf("arr_ptr: %\n", arr_ptr);
-    for t in textures {
-        printf("texture: %\n", t);
+    let bullet = load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer);
+    if bullet == NULL {
+        return 1;
     }
 
     let bindex = 0;
@@ -206,11 +197,6 @@ main: () -> i32 {
                 if event.key == SDLK_N {
                     index = index ^ 1;
                     selected_texture = textures[index];
-                    printf("%\n", selected_texture);
-                    printf("arr_ptr: %\n", arr_ptr);
-                    for tt in textures {
-                        printf("texture: %\n", tt);
-                    }
                 }
             }
 
@@ -228,14 +214,11 @@ main: () -> i32 {
         if move_dir[RIGHT] { mov_vec.x += 1.; }
         if move_dir[LEFT]  { mov_vec.x -= 1.; }
 
-        let x2 = mov_vec.x * mov_vec.x;
-        let y2 = mov_vec.y * mov_vec.y;
-        if x2 + y2 == 0. {} else {
-            let mag = sqrt_f32(x2 + y2);
-            let dx = mov_vec.x * SPEED / mag;
-            let dy = mov_vec.y * SPEED / mag;
-            pos.x += dx;
-            pos.y += dy;
+        let mag = sqrt_f32(mov_vec.x * mov_vec.x + mov_vec.y * mov_vec.y);
+        if mag != 0. {
+            let norm = SPEED / mag;
+            pos.x += mov_vec.x * norm;
+            pos.y += mov_vec.y * norm;
         }
 
         if !SDL_RenderClear(renderer) {

@@ -1,3 +1,4 @@
+#![allow(unused)]
 use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
 use super::mem::Layout;

@@ -1,3 +1,4 @@
+#![allow(unused)]
 use super::{Next, ParserRule, RResult};
 use crate::diagnostic::Msg;
 use crate::lex::buffer::*;

@@ -2,7 +2,7 @@ use crate::unit::source::Source;
 use buffer::{Span, Token, TokenBuffer};
 use kind::TokenKind;
 use winnow::ascii::float;
-use winnow::combinator::{delimited, opt, preceded};
+use winnow::combinator::{delimited, preceded};
 use winnow::stream::Stream;
 use winnow::{combinator::alt, stream::AsChar, token::take_while, LocatingSlice, PResult, Parser};
 

@@ -1,7 +1,7 @@
 use self::matc::{Any, Colon, Ident, MatchTokenKind};
 use self::rules::prelude::{Const, Enum, ExternFunc, Func, Struct};
 use self::rules::{PErr, ParserRule};
-use crate::diagnostic::Diag;
+use crate::diagnostic::{self, Diag};
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
 
@@ -10,10 +10,9 @@ mod matc;
 pub mod rules;
 mod stream;
 
-pub const PARSE_ERR: &'static str = "failed to parse";
-
 #[derive(Debug)]
 pub enum Item {
+    #[allow(unused)]
     Enum(Enum),
     Struct(Struct),
     Func(Func),
@@ -24,11 +23,11 @@ pub enum Item {
 pub struct Parser;
 
 impl Parser {
-    pub fn parse<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, Vec<Diag<'a>>> {
+    pub fn parse<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, ()> {
         Self::parse_buffer(buffer)
     }
 
-    fn parse_buffer<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, Vec<Diag<'a>>> {
+    fn parse_buffer<'a>(buffer: &'a TokenBuffer<'a>) -> Result<Vec<Item>, ()> {
         let mut items = Vec::new();
         let mut diags = Vec::new();
         let mut stream = buffer.stream();
@@ -144,7 +143,8 @@ impl Parser {
         }
 
         if !diags.is_empty() {
-            Err(diags.into_iter().map(PErr::into_diag).collect())
+            diagnostic::report(Diag::bundle(diags.into_iter().map(PErr::into_diag)));
+            Err(())
         } else {
             Ok(items)
         }

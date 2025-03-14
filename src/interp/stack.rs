@@ -14,24 +14,20 @@ impl Stack {
         self.stack.len()
     }
 
-    pub fn allocated(&self, var: Var) -> bool {
-        self.vars.contains_key(&var)
+    pub fn bytes(&self) -> usize {
+        self.len() * 8
     }
 
     pub fn anon_alloc(&mut self, bytes: usize) -> Addr {
-        let lhs = self.stack.len() * 8;
-        let rhs = self.sp + bytes;
-        if lhs <= rhs {
-            for _ in lhs..rhs {
-                self.stack.push(0x69);
-            }
+        let sp = self.sp as u64;
+        self.sp += bytes;
+        self.sp = (self.sp + 7) & !7; // what the fuck?
+
+        for _ in self.stack.len()..self.sp / 8 {
+            self.stack.push(0x6969696969696969);
         }
 
-        let sp = self.sp;
-        self.sp += bytes;
-        let remainder = 8 - (self.sp % 8);
-        self.sp += remainder;
-        unsafe { self.stack.as_ptr().cast::<u8>().add(sp).addr() as u64 }
+        self.start_addr() as u64 + sp
     }
 
     pub fn alloc(&mut self, var: Var, bytes: usize) {
@@ -39,12 +35,22 @@ impl Stack {
         self.anon_alloc(bytes);
     }
 
+    pub fn sp(&self) -> usize {
+        self.sp
+    }
+
     pub fn sp_mut(&mut self) -> &mut usize {
         &mut self.sp
     }
 
-    pub fn sp(&self) -> usize {
-        self.sp
+    pub fn var_addr(&self, var: OffsetVar) -> usize {
+        unsafe { self.var_ptr(var).addr() }
+    }
+
+    /// Vars cannot overlap and their spacing is maintained by sp. Caller must uphold type safety.
+    pub unsafe fn var_ptr(&self, var: OffsetVar) -> *const u8 {
+        let offset = self.addr(var.var) + var.offset;
+        unsafe { self.stack.as_ptr().cast::<u8>().add(offset) }
     }
 
     /// Vars cannot overlap and their spacing is maintained by sp. Caller must uphold type safety.
@@ -53,21 +59,22 @@ impl Stack {
         unsafe { self.stack.as_mut_ptr().cast::<u8>().add(offset) }
     }
 
+    /// `dst` and `src` must not overlap.
+    pub unsafe fn memcpy(&mut self, dst: usize, src: usize, bytes: usize) {
+        unsafe { std::ptr::copy_nonoverlapping(src as *mut u8, dst as *mut u8, bytes) };
+    }
+
     #[track_caller]
-    pub fn addr(&self, var: Var) -> usize {
+    fn addr(&self, var: Var) -> usize {
         *self
             .vars
             .get(&var)
             .unwrap_or_else(|| panic!("invalid var: {var:?}"))
     }
 
-    pub unsafe fn memcpy(&mut self, dst: usize, src: usize, bytes: usize) {
-        unsafe { std::ptr::copy_nonoverlapping(src as *mut u8, dst as *mut u8, bytes) };
-    }
-
     #[track_caller]
     pub fn read_some_bits(&mut self, var: OffsetVar, width: Width) -> Bits {
-        let addr = unsafe { self.var_ptr_mut(var).addr() };
+        let addr = self.var_addr(var);
         self.read_some_bits_with_addr(addr, width)
     }
 
@@ -81,29 +88,21 @@ impl Stack {
     }
 
     pub fn push_some_bits(&mut self, var: OffsetVar, bits: Bits) {
-        let addr = self.addr(var.var) + var.offset;
+        let addr = self.var_addr(var);
         match bits {
-            Bits::B8(bits) => self.push::<u8>(bits, addr),
-            Bits::B16(bits) => self.push::<u16>(bits, addr),
-            Bits::B32(bits) => self.push::<u32>(bits, addr),
-            Bits::B64(bits) => self.push::<u64>(bits, addr),
+            Bits::B8(bits) => self.write::<u8>(bits, addr),
+            Bits::B16(bits) => self.write::<u16>(bits, addr),
+            Bits::B32(bits) => self.write::<u32>(bits, addr),
+            Bits::B64(bits) => self.write::<u64>(bits, addr),
         }
     }
 
     pub fn read_var<I: Read>(&self, var: OffsetVar) -> I {
-        self.read(self.addr(var.var) + var.offset)
+        self.read(self.var_addr(var))
     }
 
     pub fn push_var<I: WriteBits>(&mut self, var: OffsetVar, bits: I) {
-        self.push(bits, self.addr(var.var) + var.offset);
-    }
-
-    fn read<I: Read>(&self, addr: usize) -> I {
-        assert!(addr < self.stack.len(), "invalid stack memory");
-        I::read(
-            unsafe { std::mem::transmute::<&[i64], &[u8]>(self.stack.as_slice()) },
-            addr,
-        )
+        self.write(bits, self.var_addr(var));
     }
 
     fn read_bits<I: ReadBits>(&self, addr: usize) -> Bits {
@@ -120,28 +119,61 @@ impl Stack {
         }
     }
 
-    fn push<I: WriteBits>(&mut self, bits: I, addr: usize) {
-        let size = std::mem::size_of::<I>();
-        if addr + size >= self.stack.len() {
-            for _ in self.stack.len()..(addr + size) {
-                self.stack.push(0x69);
-            }
-        }
+    fn read<I: Read>(&self, addr: usize) -> I {
+        assert!(
+            addr <= self.end_addr(),
+            "invalid stack memory: read from {addr:#x}, stack ends at {:#x}",
+            self.end_addr()
+        );
+        assert!(
+            addr >= self.start_addr(),
+            "invalid stack memory: read from {addr:#x}, stack starts at {:#x}",
+            self.start_addr()
+        );
 
-        bits.write_bits(unsafe { self.stack.as_mut_ptr().cast::<u8>().add(addr) });
+        let index = addr - self.start_addr();
+        unsafe {
+            I::read(
+                std::slice::from_raw_parts(self.start_addr() as *mut u8, self.bytes()),
+                index,
+            )
+        }
+    }
+
+    fn write<I: WriteBits>(&mut self, bits: I, addr: usize) {
+        assert!(
+            addr <= self.end_addr(),
+            "invalid stack memory: write to {addr:#x}, stack ends at {:#x}",
+            self.end_addr()
+        );
+        assert!(
+            addr >= self.start_addr(),
+            "invalid stack memory: write to {addr:#x}, stack start at {:#x}",
+            self.start_addr()
+        );
+
+        bits.write_bits(addr as *mut u8);
+    }
+
+    fn start_addr(&self) -> usize {
+        self.stack.as_ptr().addr()
+    }
+
+    fn end_addr(&self) -> usize {
+        self.sp() + self.stack.as_ptr().addr()
     }
 }
 
 pub trait Read {
-    fn read(stack: &[u8], addr: usize) -> Self;
+    fn read(stack: &[u8], index: usize) -> Self;
 }
 
 macro_rules! impl_read {
     ($ty:ident) => {
         impl Read for $ty {
-            fn read(stack: &[u8], addr: usize) -> Self {
+            fn read(stack: &[u8], index: usize) -> Self {
                 $ty::from_le_bytes(
-                    stack[addr..addr + std::mem::size_of::<$ty>()]
+                    stack[index..index + std::mem::size_of::<$ty>()]
                         .try_into()
                         .unwrap(),
                 )

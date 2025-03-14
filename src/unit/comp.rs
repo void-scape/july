@@ -1,10 +1,9 @@
 use super::source::Source;
 use crate::air::ctx::AirCtx;
-use crate::diagnostic::Diag;
 use crate::lex::buffer::TokenBuffer;
 use crate::lex::Lexer;
-use crate::parse::{Item, Parser};
-use crate::{air, diagnostic, interp, ir};
+use crate::parse::Parser;
+use crate::{air, interp, ir};
 use std::path::Path;
 
 pub struct CompUnit {
@@ -18,14 +17,16 @@ impl CompUnit {
         })
     }
 
-    pub fn compile<'a>(&'a self, log: bool) {
-        fn compile<'a>(
-            buf: &'a TokenBuffer<'a>,
-            items: &'a [Item],
-            log: bool,
-        ) -> Result<(), Vec<Diag<'a>>> {
-            let (ctx, key, const_eval_order) = ir::lower(&buf, items).map_err(|_| Vec::new())?;
-            let mut air_ctx = AirCtx::new(&ctx, &key);
+    pub fn compile(&self, log: bool) -> Result<i32, ()> {
+        let (lex_dur, buf) =
+            self.record_time::<TokenBuffer>(|unit| Lexer::new(&unit.source).lex().unwrap());
+        let (parse_dur, items) = self.record_time(|_| Parser::parse(&buf));
+        let items = items?;
+        let (lower_dur, ir) = self.record_time(|_| ir::lower(&buf, &items));
+        let (ctx, key, const_eval_order) = ir?;
+
+        let mut air_ctx = AirCtx::new(&ctx, &key);
+        let (air_dur, (air_funcs, consts)) = self.record_time(|_| {
             let consts = const_eval_order
                 .into_iter()
                 .flat_map(|id| air::lower_const(&mut air_ctx, ctx.tys.get_const(id).unwrap()))
@@ -35,36 +36,31 @@ impl CompUnit {
                 .iter()
                 .map(|func| air::lower_func(&mut air_ctx, func))
                 .collect::<Vec<_>>();
-            println!(
-                "{:#?}",
-                ctx.tys.structs().iter().map(|s| (
-                    ctx.expect_ident(s.name.id),
-                    ctx.tys.struct_layout(ctx.tys.expect_struct_id(s.name.id))
-                )).collect::<Vec<_>>()
-            );
-            let exit = interp::run(&ctx, &air_funcs, &consts, log).unwrap();
-            println!("exit: {exit}");
+            (air_funcs, consts)
+        });
 
-            //io::write("out.o", &codegen::codegen(&ctx, &key, &air_funcs)).unwrap();
-            Ok(())
-        }
+        let lines = buf.source().raw().lines().count();
+        println!("{lines} lines");
+        self.report_time("lex", lex_dur);
+        self.report_time("parse", parse_dur);
+        self.report_time("lower", lower_dur);
+        self.report_time("air", air_dur);
+        self.report_time("total", lex_dur + parse_dur + lower_dur + air_dur);
+        println!();
 
-        let buf = Lexer::new(&self.source).lex().unwrap();
-        match Parser::parse(&buf) {
-            Err(diags) => {
-                for diag in diags.into_iter() {
-                    diagnostic::report(diag);
-                }
-                return;
-            }
-            Ok(items) => {
-                if let Err(diags) = compile(&buf, &items, log) {
-                    for diag in diags.into_iter() {
-                        diagnostic::report(diag);
-                    }
-                    return;
-                }
-            }
-        };
+        Ok(interp::run(&ctx, &air_funcs, &consts, log))
+    }
+
+    fn record_time<'a, R>(&'a self, f: impl FnOnce(&'a Self) -> R) -> (f32, R) {
+        let start = std::time::Instant::now();
+        let result = f(self);
+        let end = std::time::Instant::now()
+            .duration_since(start)
+            .as_secs_f32();
+        (end, result)
+    }
+
+    fn report_time(&self, title: &'static str, time: f32) {
+        println!("{:>5} ... {:.4}s", title, time);
     }
 }

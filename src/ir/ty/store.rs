@@ -1,4 +1,4 @@
-use super::{FloatTy, IntTy, Sign, VarHash};
+use super::{FloatTy, IntTy, Sign};
 use crate::diagnostic::Diag;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
@@ -72,10 +72,6 @@ impl<'a> TyStore<'a> {
         self.struct_ty_map.insert(StructId(idx), ty_id);
         self.structs.push(strukt);
         StructId(idx)
-    }
-
-    pub fn structs(&self) -> &[Struct] {
-        &self.structs
     }
 
     pub fn store_const(&mut self, konst: &'a Const<'a>) {

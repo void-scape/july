@@ -1,9 +1,8 @@
 use self::store::TyId;
 use super::ctx::Ctx;
-use super::ident::IdentId;
+use super::ident::{Ident, IdentId};
 use super::mem::Layout;
 use super::strukt::StructId;
-use super::FuncHash;
 use std::collections::HashMap;
 
 pub mod infer;
@@ -52,10 +51,6 @@ impl<'a> Ty<'a> {
 
     pub fn is_ref(&self) -> bool {
         matches!(self, Self::Ref(_))
-    }
-
-    pub fn is_array(&self) -> bool {
-        matches!(self, Self::Array(_, _))
     }
 
     pub fn layout(&self, ctx: &Ctx) -> Layout {
@@ -257,36 +252,28 @@ pub struct TyVar(usize);
 
 #[derive(Debug, Default)]
 pub struct TypeKey {
-    key: HashMap<VarHash, TyId>,
-}
-
-// TODO: rename to VarPath
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum VarHash {
-    Func { ident: IdentId, func: FuncHash },
-    Const(IdentId),
-}
-
-impl VarHash {
-    pub fn ident(&self) -> IdentId {
-        match self {
-            Self::Func { ident, .. } => *ident,
-            Self::Const(id) => *id,
-        }
-    }
+    key: HashMap<IdentId, Vec<(Ident, TyId)>>,
 }
 
 impl TypeKey {
-    pub fn insert(&mut self, var: VarHash, ty: TyId) {
-        self.key.insert(var, ty);
+    pub fn insert(&mut self, ident: Ident, ty: TyId) {
+        let entry = self.key.entry(ident.id).or_default();
+        let elem = (ident, ty);
+        if entry.contains(&elem) {
+            assert!(entry
+                .iter()
+                .filter(|(i, _)| *i == ident)
+                .all(|(_, t)| *t == ty))
+        } else {
+            entry.push(elem);
+            entry.sort_unstable_by_key(|(ident, _)| ident.span.start);
+        }
     }
 
-    #[track_caller]
-    pub fn ty(&self, ident: IdentId, func: FuncHash) -> TyId {
-        *self
-            .key
-            .get(&VarHash::Func { ident, func })
-            .or_else(|| self.key.get(&VarHash::Const(ident)))
-            .expect("variable is not keyed")
+    pub fn ident_set(&self, ident: IdentId) -> &[(Ident, TyId)] {
+        self.key
+            .get(&ident)
+            .map(Vec::as_slice)
+            .unwrap_or_else(|| &[])
     }
 }

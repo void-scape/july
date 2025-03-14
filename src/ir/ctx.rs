@@ -111,11 +111,6 @@ impl<'a> Ctx<'a> {
         self.funcs.extend(funcs.into_iter());
     }
 
-    pub fn struct_name(&self, id: StructId) -> &str {
-        let strukt = self.tys.strukt(id);
-        self.expect_ident(strukt.name.id)
-    }
-
     #[track_caller]
     pub fn expect_struct_id(&self, id: IdentId) -> StructId {
         self.tys.expect_struct_id(id)

@@ -12,40 +12,35 @@ use crate::ir::ty::{TyVar, TypeKey};
 use crate::lex::buffer::Span;
 use std::fmt::Debug;
 
-pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Vec<Diag<'a>>> {
+pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag<'a>> {
     let mut errors = Vec::new();
     let mut infer = InferCtx::default();
 
     for konst in ctx.tys.consts() {
-        // the `Ident` constraint expected the consts to already be registered
-        infer.register_const(konst.name, konst.ty, konst.span);
+        // place the global consts in highest scope
+        let var = infer.new_var(konst.name);
+        infer.eq(var, konst.ty, konst.span);
     }
 
     // TODO: do better
     let funcs = std::mem::take(&mut ctx.funcs);
     for func in funcs.iter() {
-        infer.for_func(func);
-        init_params(&mut infer, func);
-
-        if let Err(err) =
+        match infer.in_scope(ctx, |ctx, infer| {
+            init_params(infer, func);
             func.block
-                .ty_constrain(ctx, &mut infer, func.sig, func.sig.ty, func.sig.span)
-        {
-            errors.push(err);
-        }
-
-        match infer.finish(ctx) {
+                .ty_constrain(ctx, infer, func.sig, func.sig.ty, func.sig.span)
+        }) {
             Ok(_) => {}
-            Err(diags) => errors.extend(diags),
+            Err(diag) => errors.push(diag),
         }
     }
 
     ctx.funcs = funcs;
 
-    if errors.is_empty() {
-        Ok(infer.into_key())
+    if !errors.is_empty() {
+        Err(Diag::bundle(errors))
     } else {
-        Err(errors)
+        infer.unify_top_scope(ctx).map(|_| infer.into_key())
     }
 }
 
@@ -77,14 +72,14 @@ impl<'a> Expr<'a> {
                 LitKind::Float(_) => InferTy::Float,
             }),
             Self::Ident(ident) => {
-                let Some(var) = infer.get_var(ident.id) else {
+                let Some(var) = infer.var(ident.id) else {
                     return Err(ctx.undeclared(ident));
                 };
 
                 infer
                     .guess_var_ty(ctx, var)
                     .map(|t| InferTy::Ty(t))
-                    .or_else(|| infer.is_var_integral(ctx, var).then_some(InferTy::Int))
+                    .or_else(|| infer.is_var_integral(var).then_some(InferTy::Int))
             }
             Self::Access(access) => Some(InferTy::Ty(aquire_access_ty(ctx, infer, access)?.1)),
             Self::Call(call) => Some(InferTy::Ty(call.sig.ty)),
@@ -108,7 +103,7 @@ impl<'a> Expr<'a> {
                         (Some(ty), None) | (None, Some(ty)) => Some(ty),
                         _ => None,
                     },
-                    BinOpKind::Eq => Some(InferTy::Ty(TyId::BOOL)),
+                    BinOpKind::Eq | BinOpKind::Ne => Some(InferTy::Ty(TyId::BOOL)),
                 }
             }
             Self::Bool(_) => Some(InferTy::Ty(TyId::BOOL)),
@@ -374,7 +369,7 @@ impl<'a> BinOp<'a> {
         ty: TyId,
         source: Span,
     ) -> Result<(), Diag<'a>> {
-        if self.kind == BinOpKind::Eq && ty == TyId::BOOL {
+        if (self.kind == BinOpKind::Eq || self.kind == BinOpKind::Ne) && ty == TyId::BOOL {
             Ok(())
         } else {
             self.lhs.ty_constrain(ctx, infer, sig, ty, source)?;
@@ -389,7 +384,7 @@ impl<'a> BinOp<'a> {
         sig: &Sig<'a>,
         var: TyVar,
     ) -> Result<(), Diag<'a>> {
-        if self.kind == BinOpKind::Eq {
+        if self.kind == BinOpKind::Eq || self.kind == BinOpKind::Ne {
             //infer.eq(var, TyId::BOOL, self.span);
             Ok(())
         } else {
@@ -435,12 +430,9 @@ fn find_ty_var_in_expr<'a>(
     expr: &Expr,
 ) -> Result<Option<TyVar>, Diag<'a>> {
     match expr {
-        Expr::Ident(ident) => match infer.get_var(ident.id) {
+        Expr::Ident(ident) => match infer.var(ident.id) {
             Some(var) => Ok(Some(var)),
-            None => match ctx.tys.get_const(ident.id) {
-                Some(konst) => Ok(Some(infer.get_const(konst.name.id).unwrap())),
-                None => Err(ctx.undeclared(ident)),
-            },
+            None => Err(ctx.undeclared(ident)),
         },
         Expr::Bin(bin) => find_ty_var_in_bin_op(ctx, infer, bin),
         Expr::Call(_)
@@ -794,21 +786,16 @@ impl<'a> Constrain<'a> for Call<'a> {
             for (expr, param) in self.args.iter().zip(self.sig.params.iter()) {
                 expr.constrain(ctx, infer, sig)?;
                 match expr {
-                    Expr::Ident(ident) => {
-                        match infer
-                            .get_var(ident.id)
-                            .or_else(|| infer.get_const(ident.id))
-                        {
-                            Some(var) => {
-                                if ctx.expect_ident(ident.id) != "NULL" {
-                                    infer.eq(var, param.ty, param.span);
-                                }
-                            }
-                            None => {
-                                errors.push(ctx.undeclared(ident));
+                    Expr::Ident(ident) => match infer.var(ident.id) {
+                        Some(var) => {
+                            if ctx.expect_ident(ident.id) != "NULL" {
+                                infer.eq(var, param.ty, param.span);
                             }
                         }
-                    }
+                        None => {
+                            errors.push(ctx.undeclared(ident));
+                        }
+                    },
                     _ => {
                         if let Err(diag) = expr.ty_constrain(ctx, infer, sig, param.ty, param.span)
                         {
@@ -857,8 +844,8 @@ impl<'a> Constrain<'a> for Call<'a> {
     }
 }
 
-impl<'a> Constrain<'a> for Block<'a> {
-    fn constrain(
+impl<'a> Block<'a> {
+    fn block_constrain(
         &self,
         ctx: &mut Ctx<'a>,
         infer: &mut InferCtx,
@@ -884,6 +871,17 @@ impl<'a> Constrain<'a> for Block<'a> {
             Ok(())
         }
     }
+}
+
+impl<'a> Constrain<'a> for Block<'a> {
+    fn constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+    ) -> Result<(), Diag<'a>> {
+        infer.in_scope(ctx, |ctx, infer| self.block_constrain(ctx, infer, sig))
+    }
 
     fn ty_constrain(
         &self,
@@ -893,22 +891,21 @@ impl<'a> Constrain<'a> for Block<'a> {
         ty: TyId,
         source: Span,
     ) -> Result<(), Diag<'a>> {
-        self.constrain(ctx, infer, sig)?;
-        if let Some(end) = self.end {
-            match end {
-                Expr::Ident(ident) => {
-                    let var = infer
-                        .get_var(ident.id)
-                        .ok_or_else(|| ctx.undeclared(ident))?;
-                    infer.eq(var, ty, source);
-                }
-                _ => {
-                    end.ty_constrain(ctx, infer, sig, ty, source)?;
+        infer.in_scope(ctx, |ctx, infer| {
+            self.block_constrain(ctx, infer, sig)?;
+            if let Some(end) = self.end {
+                match end {
+                    Expr::Ident(ident) => {
+                        let var = infer.var(ident.id).ok_or_else(|| ctx.undeclared(ident))?;
+                        infer.eq(var, ty, source);
+                    }
+                    _ => {
+                        end.ty_constrain(ctx, infer, sig, ty, source)?;
+                    }
                 }
             }
-        }
-
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -986,45 +983,50 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
         validate_loop_block(ctx, sig, &self.block)?;
-        match self.iterable {
-            Expr::Range(range) => {
-                match (range.start, range.end) {
-                    (Some(start), Some(end)) => {
-                        let var = infer.new_var(self.iter);
-                        start.apply_constraint(ctx, infer, sig, var)?;
-                        end.apply_constraint(ctx, infer, sig, var)?;
+        infer.in_scope(ctx, |ctx, infer| {
+            match self.iterable {
+                Expr::Range(range) => {
+                    match (range.start, range.end) {
+                        (Some(start), Some(end)) => {
+                            let var = infer.new_var(self.iter);
+                            start.apply_constraint(ctx, infer, sig, var)?;
+                            end.apply_constraint(ctx, infer, sig, var)?;
+                        }
+                        _ => {
+                            return Err(ctx.report_error(
+                                self.iterable.span(),
+                                "expression is not iterable: range must have a start and end",
+                            ));
+                        }
                     }
-                    _ => {
-                        return Err(ctx.report_error(
-                            self.iterable.span(),
-                            "expression is not iterable: range must have a start and end",
-                        ));
-                    }
+                    Ok(())
                 }
-                Ok(())
-            }
-            Expr::Ident(_) => match self.iterable.resolve_infer(ctx, infer)? {
-                Some(InferTy::Int) | Some(InferTy::Float) => {
-                    Err(ctx.report_error(self.iterable.span(), "expression is not iterable"))
-                }
-                Some(InferTy::Ty(ty)) => match ctx.tys.ty(ty) {
-                    Ty::Array(_, inner) => {
-                        let var = infer.new_var(self.iter);
-                        infer.eq(var, ctx.tys.ty_id(&Ty::Ref(inner)), self.iterable.span());
-                        Ok(())
+                Expr::Ident(_) => match self.iterable.resolve_infer(ctx, infer)? {
+                    Some(InferTy::Int) | Some(InferTy::Float) => {
+                        Err(ctx.report_error(self.iterable.span(), "expression is not iterable"))
                     }
-                    _ => Err(ctx.report_error(self.iterable.span(), "expression is not iterable")),
+                    Some(InferTy::Ty(ty)) => {
+                        match ctx.tys.ty(ty) {
+                            Ty::Array(_, inner) => {
+                                let var = infer.new_var(self.iter);
+                                infer.eq(var, ctx.tys.ty_id(&Ty::Ref(inner)), self.iterable.span());
+                                Ok(())
+                            }
+                            _ => Err(ctx
+                                .report_error(self.iterable.span(), "expression is not iterable")),
+                        }
+                    }
+                    None => Err(ctx.report_error(
+                        self.iterable.span(),
+                        "expression is not iterable: failed to infer expression type",
+                    )),
                 },
-                None => Err(ctx.report_error(
-                    self.iterable.span(),
-                    "expression is not iterable: failed to infer expression type",
-                )),
-            },
-            _ => Err(ctx.report_error(self.iterable.span(), "expression is not iterable")),
-        }?;
+                _ => Err(ctx.report_error(self.iterable.span(), "expression is not iterable")),
+            }?;
 
-        self.iterable.constrain(ctx, infer, sig)?;
-        self.block.constrain(ctx, infer, sig)
+            self.iterable.constrain(ctx, infer, sig)?;
+            self.block.constrain(ctx, infer, sig)
+        })
     }
 
     fn ty_constrain(
@@ -1328,10 +1330,7 @@ impl<'a> Constrain<'a> for IndexOf<'a> {
         let index_ty = ctx.tys.builtin(Ty::Int(IntTy::USIZE));
         match self.index {
             Expr::Ident(ident) => {
-                let Some(var) = infer
-                    .get_var(ident.id)
-                    .or_else(|| infer.get_const(ident.id))
-                else {
+                let Some(var) = infer.var(ident.id) else {
                     return Err(ctx.undeclared(ident));
                 };
 
@@ -1500,11 +1499,7 @@ impl<'a> Constrain<'a> for Ident {
         infer: &mut InferCtx,
         _sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
-        if infer
-            .get_var(self.id)
-            .or_else(|| infer.get_const(self.id))
-            .is_none()
-        {
+        if infer.var(self.id).is_none() {
             Err(ctx.undeclared(self))
         } else {
             Ok(())
@@ -1519,15 +1514,18 @@ impl<'a> Constrain<'a> for Ident {
         ty: TyId,
         source: Span,
     ) -> Result<(), Diag<'a>> {
-        match infer.get_var(self.id) {
+        match infer.var(self.id) {
             Some(var) => {
-                if let Some(_ty_var) = infer.guess_var_ty(ctx, var) {
-                    // TODO: if there are only integral constraints on a type up to this point, it
-                    // will confidently return the default integer type, even if later it will be
-                    // constrained to some other integer type
-                    //if ty_var != ty {
-                    //    return Err(ctx.mismatch(self.span, ty, ty_var));
-                    //}
+                //if let Some(_ty_var) = infer.guess_var_ty(ctx, var) {
+                //    // TODO: if there are only integral constraints on a type up to this point, it
+                //    // will confidently return the default integer type, even if later it will be
+                //    // constrained to some other integer type
+                //    //if ty_var != ty {
+                //    //    return Err(ctx.mismatch(self.span, ty, ty_var));
+                //    //}
+                //}
+
+                if infer.var_ident(ctx, var) != "NULL" {
                     infer.eq(var, ty, source);
                 }
             }
@@ -1567,10 +1565,7 @@ impl<'a> Constrain<'a> for Ident {
         {
             // hard coded special case for null atm
         } else {
-            let other_ty = infer
-                .get_var(self.id)
-                .or_else(|| infer.get_const(self.id))
-                .ok_or_else(|| ctx.undeclared(self))?;
+            let other_ty = infer.var(self.id).ok_or_else(|| ctx.undeclared(self))?;
             infer.var_eq(ctx, var, other_ty);
         }
         Ok(())
@@ -1713,9 +1708,7 @@ pub fn aquire_access_ty<'a>(
     access: &Access,
 ) -> Result<(Span, TyId), Diag<'a>> {
     let ty_var = match access.lhs {
-        Expr::Ident(ident) => infer
-            .get_var(ident.id)
-            .ok_or_else(|| ctx.undeclared(ident))?,
+        Expr::Ident(ident) => infer.var(ident.id).ok_or_else(|| ctx.undeclared(ident))?,
         _ => unimplemented!(),
     };
 

@@ -5,7 +5,7 @@ use crate::{
 };
 use crate::{
     lex::buffer::{TokenBuffer, TokenId},
-    parse::{stream::TokenStream, TokenQuery, PARSE_ERR},
+    parse::{stream::TokenStream, TokenQuery},
 };
 use std::{marker::PhantomData, panic::Location};
 
@@ -159,8 +159,7 @@ where
         };
 
         PErr::Recover(
-            Diag::sourced(PARSE_ERR, buffer.source(), Msg::error(span, msg))
-                .loc(Location::caller()),
+            Diag::sourced(msg, buffer.source(), Msg::error_span(span)).loc(Location::caller()),
         )
     }
 }

@@ -1,19 +1,47 @@
 use super::store::TyId;
-use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey, VarHash};
+use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey};
 use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
-use crate::ir::{Func, FuncHash};
 use crate::lex::buffer::Span;
 use std::collections::HashMap;
+
+#[derive(Debug)]
+pub struct SymbolTable<T> {
+    table: HashMap<IdentId, Vec<(Ident, T)>>,
+}
+
+impl<T> Default for SymbolTable<T> {
+    fn default() -> Self {
+        Self {
+            table: HashMap::default(),
+        }
+    }
+}
+
+impl<T> SymbolTable<T> {
+    #[track_caller]
+    pub fn register(&mut self, ident: Ident, data: T) {
+        self.table.entry(ident.id).or_default().push((ident, data));
+    }
+
+    pub fn symbol(&self, ident: IdentId) -> Option<&(Ident, T)> {
+        self.table.get(&ident).and_then(|idents| idents.last())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&T, &Ident)> {
+        self.table
+            .iter()
+            .flat_map(|(_, idents)| idents.iter().map(|(ident, var)| (var, ident)))
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct InferCtx {
     key: TypeKey,
-    vars: HashMap<VarHash, (TyVar, Span)>,
-    constraints: HashMap<TyVar, (VarHash, Vec<Cnst>)>,
+    tables: Vec<SymbolTable<TyVar>>,
+    constraints: HashMap<TyVar, (Ident, Vec<Cnst>)>,
     var_index: usize,
-    hash: Option<FuncHash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -31,66 +59,85 @@ pub enum CnstKind {
     Equate(TyVar),
 }
 
+const INVALID: &'static str = "invalid ty var";
+
 impl InferCtx {
-    pub fn for_func(&mut self, func: &Func) {
-        self.hash = Some(func.hash());
-    }
-
-    pub fn finish<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Vec<Diag<'a>>> {
-        self.unify(ctx)
-    }
-
     pub fn into_key(self) -> TypeKey {
         self.key
     }
 
+    pub fn in_scope<'a, R>(
+        &mut self,
+        ctx: &mut Ctx<'a>,
+        f: impl FnOnce(&mut Ctx<'a>, &mut Self) -> Result<R, Diag<'a>>,
+    ) -> Result<R, Diag<'a>> {
+        self.tables.push(SymbolTable::default());
+        let result = f(ctx, self);
+        let unify_result = self.unify_top_scope(ctx);
+        match result {
+            Ok(inner) => unify_result.map(|_| inner),
+            Err(diag) => match unify_result {
+                Ok(_) => Err(diag),
+                Err(unify_err) => Err(diag.wrap(unify_err)),
+            },
+        }
+    }
+
     #[track_caller]
     pub fn new_var(&mut self, ident: Ident) -> TyVar {
-        let var = self.init_var(self.var(ident.id));
-        self.vars.insert(self.var(ident.id), (var, ident.span));
-        var
+        let ty_var = self.init_var(ident);
+        if self.tables.is_empty() {
+            self.tables.push(SymbolTable::default());
+        }
+
+        match self.tables.last_mut() {
+            Some(scope) => scope.register(ident, ty_var),
+            None => unreachable!(),
+        }
+
+        ty_var
     }
 
-    pub fn register_const(&mut self, ident: Ident, ty: TyId, source: Span) {
-        let var = self.init_var(self.konst(ident.id));
-        self.vars.insert(self.konst(ident.id), (var, ident.span));
-        self.eq(var, ty, source);
+    fn init_var(&mut self, ident: Ident) -> TyVar {
+        let idx = self.var_index;
+        self.var_index += 1;
+        self.constraints.insert(TyVar(idx), (ident, Vec::new()));
+        TyVar(idx)
     }
 
-    pub fn get_var(&self, ident: IdentId) -> Option<TyVar> {
-        self.vars.get(&self.var(ident)).map(|(var, _)| *var)
+    pub fn var_meta(&self, ident: IdentId) -> Option<&(Ident, TyVar)> {
+        self.tables.iter().rev().find_map(|t| t.symbol(ident))
     }
 
-    pub fn get_const(&self, ident: IdentId) -> Option<TyVar> {
-        self.vars.get(&self.konst(ident)).map(|(var, _)| *var)
+    pub fn var(&self, ident: IdentId) -> Option<TyVar> {
+        self.var_meta(ident).map(|(_, var)| *var)
     }
 
     #[track_caller]
     pub fn var_ident<'a>(&self, ctx: &Ctx<'a>, var: TyVar) -> &'a str {
-        ctx.expect_ident(
-            self.constraints
-                .get(&var)
-                .expect("invalid ty var")
-                .0
-                .ident(),
-        )
+        self.constraints
+            .get(&var)
+            .map(|(ident, _)| ctx.expect_ident(ident.id))
+            .expect(INVALID)
     }
 
     #[track_caller]
-    pub fn var_span(&self, var: TyVar) -> Span {
-        let hash = self.constraints.get(&var).expect("invalid ty var").0;
-        self.vars.get(&hash).expect("invalid hash").1
+    pub fn var_span<'a>(&self, var: TyVar) -> Span {
+        self.constraints
+            .get(&var)
+            .map(|(ident, _)| ident.span)
+            .expect(INVALID)
     }
 
     // TODO: if there are any conflicting absolute types, say from a parameter binding or a struct
     // definition, then this will return none and cause spurious type errors
     pub fn guess_var_ty(&self, ctx: &Ctx, var: TyVar) -> Option<TyId> {
-        let cnsts = self.constraints.get(&var).expect("invalid ty var");
+        let cnsts = self.constraints.get(&var).expect(INVALID);
         self.unify_constraints(ctx, var, &cnsts.1).ok()
     }
 
-    pub fn is_var_integral(&self, ctx: &Ctx, var: TyVar) -> bool {
-        let cnsts = self.constraints.get(&var).expect("invalid ty var");
+    pub fn is_var_integral(&self, var: TyVar) -> bool {
+        let cnsts = self.constraints.get(&var).expect(INVALID);
         cnsts
             .1
             .iter()
@@ -100,7 +147,7 @@ impl InferCtx {
     #[track_caller]
     pub fn integral(&mut self, integral: Integral, var: TyVar, src: Span) {
         let span = self.var_span(var);
-        let (_, cnsts) = self.constraints.get_mut(&var).expect("invalid ty var");
+        let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
         cnsts.push(Cnst {
             loc: std::panic::Location::caller().to_string(),
             kind: CnstKind::Integral(integral),
@@ -112,7 +159,7 @@ impl InferCtx {
     #[track_caller]
     pub fn eq(&mut self, var: TyVar, ty: TyId, src: Span) {
         let span = self.var_span(var);
-        let (_, cnsts) = self.constraints.get_mut(&var).expect("invalid ty var");
+        let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
         cnsts.push(Cnst {
             loc: std::panic::Location::caller().to_string(),
             kind: CnstKind::Ty(ty),
@@ -130,7 +177,7 @@ impl InferCtx {
         } else {
             let span = self.var_span(var);
             let other_span = self.var_span(other);
-            let (_, cnsts) = self.constraints.get_mut(&var).expect("invalid ty var");
+            let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
             cnsts.push(Cnst {
                 loc: std::panic::Location::caller().to_string(),
                 kind: CnstKind::Equate(other),
@@ -140,25 +187,16 @@ impl InferCtx {
         }
     }
 
-    #[track_caller]
-    fn fn_hash(&self) -> FuncHash {
-        self.hash
-            .expect("called `InferCtx::fn_hash` without first calling `InferCtx::for_func`")
-    }
-
-    fn unify<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Vec<Diag<'a>>> {
+    pub fn unify_top_scope<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
         let mut errors = Vec::new();
 
-        let map = self
-            .vars
+        let top_scope = self.tables.pop();
+        let map = top_scope
             .iter()
-            .map(|(hash, (var, span))| (var, (hash, span)))
-            .collect::<HashMap<&TyVar, (&VarHash, &Span)>>();
+            .flat_map(|t| t.iter())
+            .collect::<HashMap<&TyVar, &Ident>>();
         for (var, constraints) in self.constraints.iter() {
-            let Some((ident, _)) = map.get(&var) else {
-                //errors.push(ctx.report_error(Span::empty(), "Unkown"));
-                //break;
-                // TODO: why does this ever happen?
+            let Some(ident) = map.get(&var) else {
                 continue;
             };
 
@@ -172,18 +210,14 @@ impl InferCtx {
             }
         }
 
-        self.vars
-            .retain(|hash, _| matches!(hash, VarHash::Const(_)));
-        self.constraints
-            .retain(|_, (hash, _)| matches!(hash, VarHash::Const(_)));
-
         if !errors.is_empty() {
-            Err(errors)
+            Err(Diag::bundle(errors))
         } else {
             Ok(())
         }
     }
 
+    // TODO: need better error reporting. this will not cut it
     fn unify_constraints<'a>(
         &self,
         ctx: &Ctx<'a>,
@@ -275,7 +309,7 @@ impl InferCtx {
                         new_constraints.extend(
                             self.constraints
                                 .get(&other)
-                                .expect("invalid ty var")
+                                .expect(INVALID)
                                 .1
                                 .iter()
                                 .cloned()
@@ -300,23 +334,6 @@ impl InferCtx {
             constraints.extend(new_constraints);
             self.resolve_equates(ctx, constraints, resolved);
         }
-    }
-
-    #[track_caller]
-    fn var(&self, ident: IdentId) -> VarHash {
-        let func = self.fn_hash();
-        VarHash::Func { ident, func }
-    }
-
-    fn konst(&self, ident: IdentId) -> VarHash {
-        VarHash::Const(ident)
-    }
-
-    fn init_var(&mut self, hash: VarHash) -> TyVar {
-        let idx = self.var_index;
-        self.var_index += 1;
-        self.constraints.insert(TyVar(idx), (hash, Vec::new()));
-        TyVar(idx)
     }
 }
 
