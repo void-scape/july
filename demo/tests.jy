@@ -1,24 +1,17 @@
 main: () -> i32 {
-    let i = 0;
-    loop {
-        if i == 16 {
-            break;
-        }
-        test(double(2) == 4);
-        test(double(4) == 8);
-        test(double(28) == 56);
-        test(seed() == 42);
-        test(var_2_var() == 16);
-        test(simple_if_then(true, 4) == 2);
-        test(24 == 24);
-        test(simple_float() == 0.7 * 2.);
-        test(0.7 * 2. == 0.7 * 2.);
-        test((1. * 4.) / 1.2 == 1. * 4. / 1.2)
-        test(1. * 4. / 1.2 == 1. * (4. / 1.2))
-        simple_for();
-        scope();
-        i += 1;
-    }
+    test(double(2) == 4);
+    test(double(4) == 8);
+    test(double(28) == 56);
+    test(seed() == 42);
+    test(var_2_var() == 16);
+    test(simple_if_then(true, 4) == 2);
+    test(24 == 24);
+    test(simple_float() == 0.7 * 2.);
+    test(0.7 * 2. == 0.7 * 2.);
+    test((1. * 4.) / 1.2 == 1. * 4. / 1.2)
+    test(1. * 4. / 1.2 == 1. * (4. / 1.2))
+    simple_for();
+    scope();
 
     0
 }
@@ -77,10 +70,6 @@ Bread: struct {
 //     <expr: i32>
 // }
 // ```
-
-return_statement: () -> i64 {
-    return 42;
-}
 
 int_lit: () -> i32 {
     12
@@ -205,7 +194,7 @@ simple_if_then: (condition: bool, x: i32) -> i32 {
         x
     } else {
         let some = x - 2;
-        return some;
+        some
     }
 }
 
@@ -250,26 +239,26 @@ simple_for: ()  {
     // printf("builtin:\n");
 
     let x = [true, false, false, true, false, true, true];
+    let y = &x;
+    let val = x[0];
 
     for b in x {
-        // printf("% => %\n", b, b^);
-        // printf("%\n", b);
+        printf("% => %\n", b, b*);
     }
 
     let ints = [12, 24, 48];
 
     // printf("\n");
     for int in ints {
-        // printf("% => %\n", b, b^);
-        // printf("%\n", int);
+        printf("%\n", int);
     }
 
     for val in 0..7 {
-        // printf("%\n", x[val]);
+        printf("%\n", x[val]);
     }
 
     for it in 2..10 {
-        // printf("%\n", it);
+        printf("%\n", it);
     }
 }
 
@@ -284,14 +273,16 @@ scope: () {
     assert(other == 5);
 
     if true {
+        // shadow
         let other = 10;
+        assert(other == 10);
+
         if false {
             let double = 1;
         }
     }
 
     assert(other == 5);
-    // assert(test == 10);
     // assert(double == 1);
 }
 

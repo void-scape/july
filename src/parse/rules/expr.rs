@@ -229,28 +229,21 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
         }
 
         let term = match stream.peek_kind() {
-            Some(TokenKind::Ident) => {
-                match stream.peekn(1).map(|t| stream.kind(t)) {
-                    Some(TokenKind::OpenParen) => {
-                        let ident = stream.expect();
-                        let (span, args) = ArgsRule::parse(stream).map_err(PErr::fail)?;
-                        Ok(Expr::Call {
-                            func: ident,
-                            span,
-                            args,
-                        })
-                    }
-                    Some(TokenKind::OpenCurly) => Ok(Expr::StructDef(
-                        StructDefRule::parse(stream).map_err(PErr::fail)?,
-                    )),
-                    //Some(TokenKind::Caret) => Ok(Expr::Unary(
-                    //    stream.expect(),
-                    //    UOpKind::Deref,
-                    //    Box::new(Expr::Ident(ident)),
-                    //)),
-                    _ => Ok(Expr::Ident(stream.expect())),
+            Some(TokenKind::Ident) => match stream.peekn(1).map(|t| stream.kind(t)) {
+                Some(TokenKind::OpenParen) => {
+                    let ident = stream.expect();
+                    let (span, args) = ArgsRule::parse(stream).map_err(PErr::fail)?;
+                    Ok(Expr::Call {
+                        func: ident,
+                        span,
+                        args,
+                    })
                 }
-            }
+                Some(TokenKind::OpenCurly) => Ok(Expr::StructDef(
+                    StructDefRule::parse(stream).map_err(PErr::fail)?,
+                )),
+                _ => Ok(Expr::Ident(stream.expect())),
+            },
             Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Expr::Lit(stream.expect())),
             Some(TokenKind::True) | Some(TokenKind::False) => Ok(Expr::Bool(stream.expect())),
             Some(TokenKind::Str) => Ok(Expr::Str(stream.expect())),
@@ -359,9 +352,20 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                     array: Box::new(term_result),
                     index: Box::new(index_expr),
                 };
-            //} else if stream.match_peek::<Caret>() {
-            //    let caret = stream.expect();
-            //    term_result = Expr::Unary(caret, UOpKind::Deref, Box::new(term_result));
+            } else if stream.match_peek::<Asterisk>() {
+                let chk = *stream;
+                let _caret = stream.expect();
+                match TermRule::parse(stream) {
+                    Ok(_) => {
+                        *stream = chk;
+                        break;
+                    }
+                    Err(_) => {
+                        *stream = chk;
+                        term_result =
+                            Expr::Unary(stream.expect(), UOpKind::Deref, Box::new(term_result))
+                    }
+                }
             } else {
                 break;
             }

@@ -165,6 +165,7 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         !c.is_whitespace()
             && c != '.'
             && c != '^'
+            && c != '*'
             && c != ','
             && c != ':'
             && c != ';'

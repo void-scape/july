@@ -1,4 +1,4 @@
-use super::store::TyId;
+use super::store::{TyId, TyStore};
 use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey};
 use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::Ctx;
@@ -142,6 +142,22 @@ impl InferCtx {
             .1
             .iter()
             .any(|c| matches!(c.kind, CnstKind::Integral(_)))
+    }
+
+    pub fn is_var_integral_int(&self, var: TyVar) -> bool {
+        let cnsts = self.constraints.get(&var).expect(INVALID);
+        cnsts
+            .1
+            .iter()
+            .any(|c| matches!(c.kind, CnstKind::Integral(Integral::Int)))
+    }
+
+    pub fn is_var_integral_float(&self, var: TyVar) -> bool {
+        let cnsts = self.constraints.get(&var).expect(INVALID);
+        cnsts
+            .1
+            .iter()
+            .any(|c| matches!(c.kind, CnstKind::Integral(Integral::Float)))
     }
 
     #[track_caller]

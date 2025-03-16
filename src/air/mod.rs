@@ -943,7 +943,7 @@ fn assign_expr_deref<'a>(ctx: &mut AirCtx<'a>, addr: OffsetVar, ty: TyId, expr: 
         Expr::Bool(bool) => {
             assert_eq!(ty, TyId::BOOL);
             ctx.ins_set([
-                Air::MovIVar(Reg::A, addr, Width::SIZE),
+                Air::MovIVar(Reg::A, addr, Width::PTR),
                 Air::MovIConst(
                     Reg::B,
                     ConstData::Bits(if bool.val { Bits::TRUE } else { Bits::FALSE }),
