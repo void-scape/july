@@ -15,9 +15,15 @@ impl TyId {
     pub const UNIT: Self = TyId(0);
     pub const BOOL: Self = TyId(1);
     pub const STR_LIT: Self = TyId(2);
+
     pub const USIZE: Self = TyId(8);
+    pub const ISIZE: Self = TyId(12);
+
+    pub const F32: Self = TyId(3);
+    pub const F64: Self = TyId(4);
+
     /// Useful when the inner type does not matter and access to `TyStore` is immutable.
-    pub const ANON_PTR: Self = TyId(13);
+    pub const ANON_PTR: Self = Self::USIZE;
 }
 
 #[derive(Debug, Default, Clone)]
@@ -52,7 +58,6 @@ impl<'a> TyStore<'a> {
         slf.store_ty(Ty::Int(IntTy::new_16(Sign::I)));
         slf.store_ty(Ty::Int(IntTy::new_32(Sign::I)));
         slf.store_ty(Ty::Int(IntTy::new_64(Sign::I)));
-        slf.store_ty(Ty::Int(IntTy::new_64(Sign::U)));
 
         slf
     }

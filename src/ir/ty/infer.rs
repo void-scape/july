@@ -136,6 +136,11 @@ impl InferCtx {
         self.unify_constraints(ctx, var, &cnsts.1).ok()
     }
 
+    pub fn is_var_absolute(&self, var: TyVar) -> bool {
+        let cnsts = self.constraints.get(&var).expect(INVALID);
+        cnsts.1.iter().any(|c| matches!(c.kind, CnstKind::Ty(_)))
+    }
+
     pub fn is_var_integral_int(&self, var: TyVar) -> bool {
         let cnsts = self.constraints.get(&var).expect(INVALID);
         cnsts

@@ -83,12 +83,22 @@ impl<'a> Expr<'a> {
                     return Err(ctx.undeclared(ident));
                 };
 
-                infer
-                    .guess_var_ty(ctx, var)
-                    .map(|t| InferTy::Ty(t))
-                    .or_else(|| infer.is_var_integral_int(var).then_some(InferTy::Int))
-                    .or_else(|| infer.is_var_integral_float(var).then_some(InferTy::Float))
-                    .ok_or_else(|| ctx.report_error(ident.span, "could not infer type"))?
+                match infer.guess_var_ty(ctx, var) {
+                    Some(ty) => {
+                        if ty == TyId::ISIZE && !infer.is_var_absolute(var) {
+                            InferTy::Int
+                        } else if ty == TyId::F64 && !infer.is_var_absolute(var) {
+                            InferTy::Float
+                        } else {
+                            InferTy::Ty(ty)
+                        }
+                    }
+                    None => infer
+                        .is_var_integral_int(var)
+                        .then_some(InferTy::Int)
+                        .or_else(|| infer.is_var_integral_float(var).then_some(InferTy::Float))
+                        .ok_or_else(|| ctx.report_error(ident.span, "could not infer type"))?,
+                }
             }
             Self::Access(access) => InferTy::Ty(aquire_access_ty(ctx, infer, access)?.1),
             Self::Call(call) => InferTy::Ty(call.sig.ty),
