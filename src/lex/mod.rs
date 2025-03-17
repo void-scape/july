@@ -191,6 +191,7 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         "return" => TokenKind::Ret,
         "continue" => TokenKind::Continue,
         "break" => TokenKind::Break,
+        "as" => TokenKind::As,
         "struct" => TokenKind::Struct,
         "enum" => TokenKind::Enum,
         "loop" => TokenKind::Loop,

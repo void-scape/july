@@ -178,3 +178,4 @@ impl_tkt_for!(For);
 impl_tkt_for!(In);
 impl_tkt_for!(Const);
 impl_tkt_for!(Caret);
+impl_tkt_for!(As);

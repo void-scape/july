@@ -163,7 +163,13 @@ impl<'a, 's> ParserRule<'a, 's> for ToFirstOpenCurlyExprButSubjectToChangeInOthe
         stream.eat_n(offset);
         assert!(stream.match_peek::<OpenCurly>());
         match ExprRule::parse(&mut slice) {
-            Ok(expr) => Ok(expr),
+            Ok(expr) => {
+                if slice.remaining() > 0 {
+                    Err(slice.fail("left over tokens"))
+                } else {
+                    Ok(expr)
+                }
+            }
             Err(diag) => Err(diag.fail()),
         }
     }

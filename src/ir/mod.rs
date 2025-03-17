@@ -759,6 +759,7 @@ pub enum Expr<'a> {
     Array(ArrDef<'a>),
     IndexOf(IndexOf<'a>),
     Range(Range<'a>),
+    Cast(Cast<'a>),
 }
 
 impl Expr<'_> {
@@ -783,6 +784,7 @@ impl Expr<'_> {
             Self::Array(arr) => arr.span,
             Self::IndexOf(index) => index.span,
             Self::Range(range) => range.span,
+            Self::Cast(cast) => cast.span,
         }
     }
 
@@ -799,6 +801,7 @@ impl Expr<'_> {
             | Self::Lit(_)
             | Self::Range(_)
             | Self::IndexOf(_)
+            | Self::Cast(_)
             | Self::Bool(_) => false,
             Self::Call(call) => ctx.tys.is_unit(call.sig.ty),
             Self::If(if_) => {
@@ -850,6 +853,7 @@ impl Expr<'_> {
                 },
                 other => panic!("invalid array type for index of: {:?}", other),
             },
+            Self::Cast(cast) => InferTy::Ty(cast.ty),
             Self::Unary(unary) => match unary.kind {
                 UOpKind::Deref => match unary.inner.infer(ctx) {
                     InferTy::Ty(ty) => match ctx.tys.ty(ty) {
@@ -868,7 +872,7 @@ impl Expr<'_> {
                 },
                 UOpKind::Not => unary.inner.infer(ctx),
             },
-            ty => todo!("{ty:?}"),
+            ty => todo!("infer: {ty:?}"),
         }
     }
 
@@ -951,6 +955,13 @@ pub fn aquire_access_ty<'a>(ctx: &AirCtx<'a>, access: &Access) -> TyId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct Cast<'a> {
+    pub span: Span,
+    pub lhs: &'a Expr<'a>,
+    pub ty: TyId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct Range<'a> {
     pub span: Span,
     pub start: Option<&'a Expr<'a>>,
@@ -993,6 +1004,26 @@ pub enum InferTy {
 }
 
 impl InferTy {
+    pub fn equiv(self, other: Self, ctx: &Ctx) -> bool {
+        match self {
+            Self::Int => match other {
+                Self::Float => false,
+                Self::Int => true,
+                Self::Ty(ty) => ctx.tys.ty(ty).is_int(),
+            },
+            Self::Float => match other {
+                Self::Float => true,
+                Self::Int => false,
+                Self::Ty(ty) => ctx.tys.ty(ty).is_float(),
+            },
+            Self::Ty(ty) => match other {
+                Self::Int => ctx.tys.ty(ty).is_int(),
+                Self::Float => ctx.tys.ty(ty).is_float(),
+                Self::Ty(other_ty) => other_ty == ty,
+            },
+        }
+    }
+
     pub fn to_string(self, ctx: &Ctx) -> String {
         match self {
             Self::Int => "{integer}".to_owned(),
@@ -1117,15 +1148,6 @@ pub struct BinOp<'a> {
     pub rhs: &'a Expr<'a>,
 }
 
-impl BinOp<'_> {
-    ///// Contains all integral components.
-    //pub fn is_integral(&self, ctx: &Ctx) -> Option<bool> {
-    //    self.lhs
-    //        .is_integral(ctx)
-    //        .map(|i| self.rhs.is_integral(ctx).map(|o| i && o))?
-    //}
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
     Add,
@@ -1145,6 +1167,20 @@ impl BinOpKind {
             Self::Add | Self::Sub | Self::Mul | Self::Div => true,
             Self::Xor => true,
             Self::Ne | Self::Eq => false,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+
+            Self::Xor => "^",
+
+            Self::Eq => "==",
+            Self::Ne => "!=",
         }
     }
 }
@@ -1279,6 +1315,14 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>
             }
         }),
         rules::Expr::Paren(inner) => pexpr(ctx, inner)?,
+        rules::Expr::Cast { span, lhs, ty, .. } => {
+            let lhs = pexpr(ctx, lhs)?;
+            Expr::Cast(Cast {
+                span: *span,
+                lhs: ctx.intern(lhs),
+                ty: ptype(ctx, ty)?.1,
+            })
+        }
         //rules::Expr::Deref(asterisk, inner) => Expr::Deref(deref(ctx, *asterisk, inner)?),
         expr => todo!("{expr:#?}"),
     })

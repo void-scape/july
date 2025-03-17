@@ -1,6 +1,6 @@
 use super::ctx::AirCtx;
 use super::{eval_expr, OffsetVar};
-use crate::air::{generate_args, Air, Bits, ConstData, Reg};
+use crate::air::{assign_expr, generate_args, Air, Bits, ConstData, Reg};
 use crate::ir::lit::LitKind;
 use crate::ir::ty::store::TyId;
 use crate::ir::ty::{FloatTy, IntTy, Sign, Ty, Width};
@@ -338,6 +338,12 @@ fn prepare_expr<'a>(ctx: &mut AirCtx<'a>, ty: TyId, expr: &'a Expr) -> BinOpArg 
         Expr::Bin(bin) => {
             let var = OffsetVar::zero(ctx.anon_var(ty));
             assign_bin_op(ctx, var, ty, bin);
+            BinOpArg::Var(var)
+        }
+        Expr::Cast(cast) => {
+            assert_eq!(cast.ty, ty);
+            let var = OffsetVar::zero(ctx.anon_var(ty));
+            assign_expr(ctx, var, ty, expr);
             BinOpArg::Var(var)
         }
         Expr::If(_) | Expr::IndexOf(_) | Expr::Block(_) | Expr::Array(_) => todo!(),

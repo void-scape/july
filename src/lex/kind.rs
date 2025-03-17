@@ -42,6 +42,7 @@ pub enum TokenKind {
     Ampersand,
     Bang,
     Caret,
+    As,
 }
 
 impl TokenKind {
@@ -88,6 +89,7 @@ impl TokenKind {
             Self::Float => "float",
             Self::Str => "string",
             Self::Ident => "identifier",
+            Self::As => "as",
         }
     }
 }

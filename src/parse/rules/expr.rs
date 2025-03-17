@@ -2,6 +2,7 @@ use super::arr::{ArrDef, ArrDefRule};
 use super::block::Block;
 use super::func::ArgsRule;
 use super::strukt::StructDef;
+use super::types::{PType, TypeRule};
 use super::{ParserRule, RResult};
 use crate::ir::{AssignKind, BinOpKind, UOpKind};
 use crate::lex::{buffer::*, kind::*};
@@ -54,6 +55,12 @@ pub enum Expr {
         end: Option<Box<Expr>>,
         inclusive: bool,
     },
+    Cast {
+        span: Span,
+        ass: TokenId,
+        lhs: Box<Expr>,
+        ty: PType,
+    },
     Loop(TokenId, Block),
     Unary(TokenId, UOpKind, Box<Expr>),
 }
@@ -91,6 +98,7 @@ impl Expr {
             Self::For { span, .. } => *span,
             Self::Range { span, .. } => *span,
             Self::Loop(t, block) => Span::from_spans(token_buffer.span(*t), block.span),
+            Self::Cast { span, .. } => *span,
             Self::Unary(t, _, expr) => {
                 Span::from_spans(token_buffer.span(*t), expr.span(token_buffer))
             }
@@ -364,6 +372,26 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                         *stream = chk;
                         term_result =
                             Expr::Unary(stream.expect(), UOpKind::Deref, Box::new(term_result))
+                    }
+                }
+            } else if stream.match_peek::<As>() {
+                let chk = *stream;
+                let ass = stream.expect();
+                match TypeRule::parse(stream) {
+                    Ok(ty) => {
+                        term_result = Expr::Cast {
+                            span: Span::from_spans(
+                                term_result.span(stream.token_buffer()),
+                                ty.span(stream.token_buffer()),
+                            ),
+                            ass,
+                            lhs: Box::new(term_result),
+                            ty,
+                        }
+                    }
+                    Err(_) => {
+                        *stream = chk;
+                        return Err(stream.fail("expected a type"));
                     }
                 }
             } else {

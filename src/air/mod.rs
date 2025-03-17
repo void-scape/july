@@ -837,6 +837,15 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
         Expr::If(if_) => {
             assign_if(ctx, dst, ty, if_);
         }
+        Expr::Cast(cast) => match cast.lhs.infer(ctx) {
+            InferTy::Int | InferTy::Float => todo!(),
+            InferTy::Ty(ty) => match ctx.tys.ty(ty) {
+                Ty::Ref(&Ty::Str) => panic!("invalid cast"),
+                Ty::Ref(_) => assign_expr(ctx, dst, ty, cast.lhs),
+                Ty::Int(int_ty) if int_ty == IntTy::USIZE => assign_expr(ctx, dst, ty, cast.lhs),
+                _ => panic!("invalid cast"),
+            },
+        },
         Expr::Unary(unary) => match unary.kind {
             UOpKind::Ref => {
                 assert!(ctx.tys.ty(ty).is_ref());
@@ -1309,6 +1318,9 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
     match &expr {
         Expr::IndexOf(_) => todo!(),
         Expr::Access(_) | Expr::Str(_) | Expr::Lit(_) | Expr::Bool(_) | Expr::Ident(_) => {}
+        Expr::Cast(cast) => {
+            eval_expr(ctx, cast.lhs);
+        }
         Expr::Bin(bin) => {
             eval_bin_op(ctx, bin);
         }

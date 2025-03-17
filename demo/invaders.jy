@@ -124,23 +124,23 @@ main: () -> i32 {
     }
 
     let window = SDL_CreateWindow(cs("Invaders\0"), WIDTH, HEIGHT, 0);
-    if window == NULL {
+    if window as u64 == NULL {
         report_error("failed to create window\n");
         return 1;
     }
 
     let renderer = SDL_CreateRenderer(window, empty_cs());
-    if renderer == NULL {
+    if renderer as u64 == NULL {
         report_error("failed to create renderer\n");
         return 1;
     }
 
     let bebop = load_bmp_texture(cs("./demo/bebop.bmp\0"), renderer);
-    if bebop == NULL {
+    if bebop as u64 == NULL {
         return 1;
     }
     let guts = load_bmp_texture(cs("./demo/guts.bmp\0"), renderer);
-    if guts == NULL {
+    if guts as u64 == NULL {
         return 1;
     }
 
@@ -149,7 +149,7 @@ main: () -> i32 {
     let selected_texture = textures[index];
 
     let bullet = load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer);
-    if bullet == NULL {
+    if bullet as u64 == NULL {
         return 1;
     }
 
@@ -261,14 +261,14 @@ draw_texture: (renderer: &Renderer, texture: &Texture, dst: &FRect) -> bool {
 
 load_bmp_texture: (path: CStr, renderer: &Renderer) -> &Texture {
     let bmp = SDL_LoadBMP(path);
-    if bmp == NULL {
+    if bmp as u64 == NULL {
         report_error("failed to load bmp\n");
-        return NULL;
+        return NULL as &Texture;
     }
     let texture = SDL_CreateTextureFromSurface(renderer, bmp);
-    if texture == NULL {
+    if texture as u64 == NULL {
         report_error("failed to create bmp texture\n");
-        return NULL;
+        return NULL as &Texture;
     }
     SDL_DestroySurface(bmp);
     texture
@@ -281,7 +281,7 @@ report_error: (msg: &str) {
 
 empty_cs: () -> CStr {
     CStr {
-        str: NULL
+        str: NULL as &u8
     }
 }
 

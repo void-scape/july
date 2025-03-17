@@ -50,7 +50,7 @@ impl<'a> Ty<'a> {
     }
 
     pub fn is_ref(&self) -> bool {
-        matches!(self, Self::Ref(_))
+        matches!(self, Self::Ref(ty) if **ty != Ty::Str)
     }
 
     pub fn layout(&self, ctx: &Ctx) -> Layout {

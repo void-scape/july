@@ -1,6 +1,7 @@
 use super::ty::infer::Integral;
 use super::Stmt;
 use super::*;
+use crate::air::IntKind;
 use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::{Ctx, CtxFmt};
 use crate::ir::sig::Param;
@@ -24,7 +25,7 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag<'a>> {
 
     // TODO: do better
     let funcs = std::mem::take(&mut ctx.funcs);
-    for func in funcs.iter() {
+    for func in funcs.iter().filter(|f| !f.is_intrinsic()) {
         if let Err(diag) = infer.in_scope(ctx, |ctx, infer| {
             init_params(infer, func);
             func.block.block_constrain(ctx, infer, func.sig)?;
@@ -71,7 +72,6 @@ impl<'a> Expr<'a> {
     /// Fails when:
     ///     aquiring field access type Fails
     ///     ident is undefined
-    #[track_caller]
     pub fn resolve_infer(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<InferTy, Diag<'a>> {
         Ok(match self {
             Self::Lit(lit) => match lit.kind {
@@ -88,7 +88,7 @@ impl<'a> Expr<'a> {
                     .map(|t| InferTy::Ty(t))
                     .or_else(|| infer.is_var_integral_int(var).then_some(InferTy::Int))
                     .or_else(|| infer.is_var_integral_float(var).then_some(InferTy::Float))
-                    .unwrap()
+                    .ok_or_else(|| ctx.report_error(ident.span, "could not infer type"))?
             }
             Self::Access(access) => InferTy::Ty(aquire_access_ty(ctx, infer, access)?.1),
             Self::Call(call) => InferTy::Ty(call.sig.ty),
@@ -183,11 +183,11 @@ impl<'a> Expr<'a> {
                     InferTy::Float | InferTy::Int => panic!("invalid deref type"),
                 }),
             },
+            Self::Cast(cast) => InferTy::Ty(cast.ty),
             ty => todo!("{ty:?}"),
         })
     }
 
-    #[track_caller]
     pub fn infer_equality(
         &self,
         ctx: &mut Ctx<'a>,
@@ -281,7 +281,9 @@ impl<'a> Expr<'a> {
         match self {
             Expr::Ident(ident) => {
                 let var = infer.var(ident.id).ok_or_else(|| ctx.undeclared(ident))?;
+                self.infer_equality(ctx, infer, ty, source)?;
                 infer.eq(var, ty, source);
+
                 Ok(())
             }
             Expr::Block(block) => match block.end {
@@ -339,6 +341,29 @@ impl<'a> Expr<'a> {
                     }
                 }
             },
+            Expr::Bin(bin) => {
+                match bin.kind {
+                    BinOpKind::Eq | BinOpKind::Ne => {
+                        assert!(!bin.kind.output_is_input());
+                        if ty != TyId::BOOL {
+                            Err(ctx.mismatch(bin.span, ty, TyId::BOOL))
+                        } else {
+                            let infer_lhs = bin.lhs.resolve_infer(ctx, infer)?;
+                            let infer_rhs = bin.rhs.resolve_infer(ctx, infer)?;
+                            if !infer_lhs.equiv(infer_rhs, ctx) {
+                                Err(ctx.report_error(bin.span, "left hand side if of a different type than the right hand side"))
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    }
+                    _ => {
+                        assert!(bin.kind.output_is_input());
+                        bin.lhs.constrain_with(ctx, infer, sig, ty, source)?;
+                        bin.rhs.constrain_with(ctx, infer, sig, ty, source)
+                    }
+                }
+            }
             _ => self.infer_equality(ctx, infer, ty, source),
         }
     }
@@ -459,6 +484,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Array(arr) => arr.constrain(ctx, infer, sig),
             Self::IndexOf(index) => index.constrain(ctx, infer, sig),
             Self::Range(range) => range.constrain(ctx, infer, sig),
+            Self::Cast(cast) => cast.constrain(ctx, infer, sig),
             Self::Continue(_) | Self::Break(_) => Ok(()),
         }
     }
@@ -471,11 +497,34 @@ impl<'a> Constrain<'a> for BinOp<'a> {
         infer: &mut InferCtx,
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
-        self.lhs.constrain(ctx, infer, sig)?;
-        self.rhs.constrain(ctx, infer, sig)?;
+        match self.kind {
+            BinOpKind::Eq | BinOpKind::Ne => {
+                assert!(!self.kind.output_is_input());
+                self.lhs.constrain(ctx, infer, sig)?;
+                self.rhs.constrain(ctx, infer, sig)?;
 
-        // this will fail if branches are inferred as different types
-        Expr::Bin(*self).resolve_infer(ctx, infer).map(|_| ())
+                let infer_lhs = self.lhs.resolve_infer(ctx, infer)?;
+                let infer_rhs = self.rhs.resolve_infer(ctx, infer)?;
+                if !infer_lhs.equiv(infer_rhs, ctx) {
+                    Err(ctx.report_error(
+                        self.span,
+                        format!(
+                            "operation terms are of different types: `{}` {} `{}`",
+                            infer_lhs.to_string(ctx),
+                            self.kind.as_str(),
+                            infer_rhs.to_string(ctx)
+                        ),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            kind => {
+                assert!(self.kind.output_is_input(), "{kind:?}");
+                self.lhs.constrain(ctx, infer, sig)?;
+                self.rhs.constrain(ctx, infer, sig)
+            }
+        }
     }
 }
 
@@ -761,6 +810,118 @@ fn validate_loop_block<'a>(
     Ok(())
 }
 
+impl<'a> Constrain<'a> for Cast<'a> {
+    fn constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+    ) -> Result<(), Diag<'a>> {
+        self.lhs.constrain(ctx, infer, sig)?;
+        let target = ctx.tys.ty(self.ty);
+        match self.lhs.resolve_infer(ctx, infer)? {
+            InferTy::Int => {
+                if !target.is_float() && !target.is_int() {
+                    Err(ctx.report_error(
+                        self.span,
+                        format!(
+                            "an value of type `{{integer}}` cannot be cast to `{}`",
+                            target.to_string(ctx)
+                        ),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            InferTy::Float => {
+                if !target.is_float() && !target.is_int() {
+                    Err(ctx.report_error(
+                        self.span,
+                        format!(
+                            "a value of type `{{float}}` cannot be cast to `{}`",
+                            target.to_string(ctx)
+                        ),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            InferTy::Ty(ty) => {
+                let src = ctx.tys.ty(ty);
+                match src {
+                    Ty::Int(int_ty) => {
+                        // hard coded case for casting an int (NULL) to a ref
+                        if int_ty == IntTy::USIZE && target.is_ref() {
+                            return Ok(());
+                        }
+
+                        if !target.is_float() && !target.is_int() {
+                            Err(ctx.report_error(
+                                self.span,
+                                format!(
+                                    "an value of type `{{integer}}` cannot be cast to `{}`",
+                                    target.to_string(ctx)
+                                ),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    Ty::Float(_) => {
+                        if !target.is_float() && !target.is_int() {
+                            Err(ctx.report_error(
+                                self.span,
+                                format!(
+                                    "a value of type `{{float}}` cannot be cast to `{}`",
+                                    target.to_string(ctx)
+                                ),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    Ty::Bool => {
+                        if !target.is_int() {
+                            Err(ctx.report_error(
+                                self.span,
+                                format!(
+                                    "a value of type `bool` cannot be cast to `{}`",
+                                    target.to_string(ctx)
+                                ),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    // hard coded case for casting ref to int to check for null
+                    Ty::Ref(ty) if *ty != Ty::Str => {
+                        if !matches!(target, Ty::Int(IntTy::USIZE)) {
+                            Err(ctx.report_error(
+                                self.lhs.span(),
+                                format!(
+                                    "a value of type `{}` cannot be cast to `{}`",
+                                    src.to_string(ctx),
+                                    target.to_string(ctx)
+                                ),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    _ => Err(ctx.report_error(
+                        self.lhs.span(),
+                        format!(
+                            "a value of type `{}` cannot be cast to `{}`",
+                            src.to_string(ctx),
+                            target.to_string(ctx)
+                        ),
+                    )),
+                }
+            }
+        }
+    }
+}
+
 impl<'a> Constrain<'a> for Unary<'a> {
     fn constrain(
         &self,
@@ -1040,7 +1201,6 @@ pub fn aquire_access_ty<'a>(
     for (i, acc) in access.accessors.iter().rev().enumerate() {
         let Some(ty) = strukt.get_field_ty(acc.id) else {
             return Err(ctx.report_error(
-                //Span::from_spans(acc.span, access.accessors.last().unwrap().span),
                 acc.span,
                 format!(
                     "invalid access: `{}` has no field `{}`",
