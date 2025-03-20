@@ -142,6 +142,7 @@ macro_rules! impl_tkt_for {
     };
 }
 
+impl_tkt_for!(Impl);
 impl_tkt_for!(If);
 impl_tkt_for!(Else);
 impl_tkt_for!(True);
@@ -158,6 +159,8 @@ impl_tkt_for!(Int);
 impl_tkt_for!(Semi);
 impl_tkt_for!(Plus);
 impl_tkt_for!(Asterisk);
+impl_tkt_for!(OpenAngle);
+impl_tkt_for!(CloseAngle);
 impl_tkt_for!(OpenCurly);
 impl_tkt_for!(CloseCurly);
 impl_tkt_for!(OpenParen);
@@ -165,7 +168,6 @@ impl_tkt_for!(CloseParen);
 impl_tkt_for!(OpenBracket);
 impl_tkt_for!(CloseBracket);
 impl_tkt_for!(Hyphen);
-impl_tkt_for!(Greater);
 impl_tkt_for!(Comma);
 impl_tkt_for!(Dot);
 impl_tkt_for!(DoubleDot);
@@ -179,3 +181,4 @@ impl_tkt_for!(In);
 impl_tkt_for!(Const);
 impl_tkt_for!(Caret);
 impl_tkt_for!(As);
+impl_tkt_for!(Slf);

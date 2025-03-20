@@ -1,3 +1,4 @@
+use crate::ir::ctx::CtxFmt;
 use crate::ir::lit::{Lit, LitKind};
 use crate::ir::sig::{Param, Sig};
 use crate::ir::strukt::StructDef;
@@ -32,7 +33,7 @@ pub enum Air<'a> {
     MovIVar(Reg, OffsetVar, Width),
     MovIConst(Reg, ConstData),
 
-    SAlloc(Var, Bytes),
+    SAlloc(Var, usize),
 
     /// Load address of `Var` into `Reg`.
     Addr(Reg, OffsetVar),
@@ -77,19 +78,26 @@ pub enum Air<'a> {
         data: Reg,
         width: Width,
     },
+    /// Point `dst` to the address in `addr`.
+    Deref {
+        dst: OffsetVar,
+        addr: Reg,
+    },
 
     /// Binary operations use [`Reg::A`] and [`Reg::B`], then store result in [`Reg::A`].
     ///
     /// TODO: need sign and overflow settings
-    AddAB(Width),
-    SubAB(Width),
-    MulAB(Width),
-    DivAB(Width),
+    AddAB(Width, Sign),
+    SubAB(Width, Sign),
+    MulAB(Width, Sign),
+    DivAB(Width, Sign),
 
-    XorAB(Width),
+    XorAB,
 
-    EqAB(Width),
-    NEqAB(Width),
+    EqAB(Width, Sign),
+    NEqAB(Width, Sign),
+    LtAB(Width, Sign),
+    GtAB(Width, Sign),
 
     FAddAB(Width),
     FSubAB(Width),
@@ -98,12 +106,14 @@ pub enum Air<'a> {
 
     FEqAB(Width),
     NFEqAB(Width),
+    FLtAB(Width),
+    FGtAB(Width),
 
-    /// Bitwise operations read from, evaluate, then load back into [`Reg::A`].
-    XOR(Mask),
-
-    /// Cast [`Reg::A`] from an f32 to a u32.
-    Fu32,
+    CastA {
+        from: Prim,
+        to: Prim,
+        width: Width,
+    },
 
     FSqrt(FloatTy),
 
@@ -113,8 +123,82 @@ pub enum Air<'a> {
     PrintCStr,
 }
 
-pub type Addr = u64;
-pub type Mask = u64;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prim {
+    UInt,
+    Int,
+    Float,
+    Bool,
+}
+
+/// A value allocated on the stack. Created by [`Air::SAlloc`]. `Var`
+/// represents a location in memory.
+///
+/// It is up to the consumer of [`Air`] instructions to track variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Var(usize);
+
+/// Primary registers for binary operations and return values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reg {
+    A,
+    B,
+}
+
+/// A reference optionally `offset` from `var`.
+#[derive(Debug, Clone, Copy)]
+pub struct OffsetVar {
+    pub var: Var,
+    pub offset: usize,
+}
+
+impl OffsetVar {
+    pub fn new(var: Var, offset: impl Sized) -> Self {
+        Self {
+            var,
+            offset: offset.size(),
+        }
+    }
+
+    pub fn zero(var: Var) -> Self {
+        Self::new(var, 0)
+    }
+
+    pub fn add(&self, offset: impl Sized) -> Self {
+        Self {
+            var: self.var,
+            offset: self.offset + offset.size(),
+        }
+    }
+}
+
+pub trait Sized {
+    fn size(&self) -> usize;
+}
+
+impl Sized for usize {
+    fn size(&self) -> usize {
+        *self
+    }
+}
+
+impl Sized for Width {
+    fn size(&self) -> usize {
+        self.bytes()
+    }
+}
+
+impl Sized for IntKind {
+    fn size(&self) -> usize {
+        self.size()
+    }
+}
+
+impl Sized for IntTy {
+    fn size(&self) -> usize {
+        self.kind().size()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Bits {
@@ -294,78 +378,6 @@ pub struct Args {
     pub vars: Vec<(TyId, Var)>,
 }
 
-/// A value allocated on the stack. Created by [`Air::SAlloc`]. `Var`
-/// represents a location in memory.
-///
-/// It is up to the consumer of [`Air`] instructions to track variables.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Var(usize);
-
-/// Primary registers for binary operations and return values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reg {
-    A,
-    B,
-}
-
-/// A reference optionally `offset` from `var`.
-#[derive(Debug, Clone, Copy)]
-pub struct OffsetVar {
-    pub var: Var,
-    pub offset: ByteOffset,
-}
-
-impl OffsetVar {
-    pub fn new(var: Var, offset: impl Sized) -> Self {
-        Self {
-            var,
-            offset: offset.size(),
-        }
-    }
-
-    pub fn zero(var: Var) -> Self {
-        Self::new(var, 0)
-    }
-
-    pub fn add(&self, offset: impl Sized) -> Self {
-        Self {
-            var: self.var,
-            offset: self.offset + offset.size(),
-        }
-    }
-}
-
-pub trait Sized {
-    fn size(&self) -> usize;
-}
-
-impl Sized for usize {
-    fn size(&self) -> usize {
-        *self
-    }
-}
-
-impl Sized for Width {
-    fn size(&self) -> usize {
-        self.bytes()
-    }
-}
-
-impl Sized for IntKind {
-    fn size(&self) -> usize {
-        self.size()
-    }
-}
-
-impl Sized for IntTy {
-    fn size(&self) -> usize {
-        self.kind().size()
-    }
-}
-
-pub type ByteOffset = usize;
-pub type Bytes = usize;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntKind {
     I8,
@@ -427,6 +439,127 @@ impl IntTy {
             },
         }
     }
+}
+
+impl Expr<'_> {
+    /// Panics is an `IndexOf` array type is not an array.
+    #[track_caller]
+    pub fn infer<'a>(&self, ctx: &mut AirCtx<'a>) -> InferTy {
+        match self {
+            Self::Lit(lit) => match lit.kind {
+                LitKind::Int(_) => InferTy::Int,
+                LitKind::Float(_) => InferTy::Float,
+            },
+            Self::Ident(ident) => {
+                // instead of `var_ty` with the ident, we use this to avoid grabbing the most
+                // recent type definition of ident, because it may be shadowed within the same line
+                //
+                // e.g.
+                //
+                // let var = 10;
+                // let var = returns_different_type(var) + 2;
+                //     ^^^                          ^^^
+                //      |                           `var_ty` would grab the type defined here
+                //      |                                                                 |
+                //      |-----------------------------------------------------------------|
+                InferTy::Ty(ctx.expect_var_ty(ctx.expect_var(ident.id)))
+            }
+            Self::Access(access) => InferTy::Ty(aquire_access_ty(ctx, access)),
+            Self::Call(call) => InferTy::Ty(call.sig.ty),
+            Self::Str(_) => InferTy::Ty(TyId::STR_LIT),
+            Self::Bin(bin) => {
+                let lhs = bin.lhs.infer(ctx);
+                let rhs = bin.lhs.infer(ctx);
+                assert_eq!(lhs, rhs);
+                match bin.kind {
+                    BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Xor => lhs,
+                    BinOpKind::Eq | BinOpKind::Ne | BinOpKind::Gt | BinOpKind::Lt => {
+                        InferTy::Ty(TyId::BOOL)
+                    }
+                }
+            }
+            Self::Bool(_) => InferTy::Ty(TyId::BOOL),
+            Self::IndexOf(index) => match index.array.infer(ctx) {
+                InferTy::Ty(arr_ty) => match ctx.tys.ty(arr_ty) {
+                    Ty::Array(_, inner) => InferTy::Ty(ctx.tys.get_ty_id(inner).unwrap()),
+                    other => panic!("invalid array type for index of: {:?}", other),
+                },
+                other => panic!("invalid array type for index of: {:?}", other),
+            },
+            Self::Cast(cast) => InferTy::Ty(cast.ty),
+            Self::Unary(unary) => match unary.kind {
+                UOpKind::Deref => match unary.inner.infer(ctx) {
+                    InferTy::Ty(ty) => match ctx.tys.ty(ty) {
+                        Ty::Ref(inner) => InferTy::Ty(ctx.tys.ty_id(inner)),
+                        _ => unreachable!(),
+                    },
+                    InferTy::Int | InferTy::Float => unreachable!(),
+                },
+                UOpKind::Ref => match unary.inner.infer(ctx) {
+                    InferTy::Ty(ty) => {
+                        InferTy::Ty(ctx.tys.ty_id(&Ty::Ref(ctx.intern(ctx.tys.ty(ty)))))
+                    }
+                    InferTy::Int | InferTy::Float => {
+                        todo!("how do you describe a reference to these?")
+                    }
+                },
+                UOpKind::Not | UOpKind::Neg => unary.inner.infer(ctx),
+            },
+            ty => todo!("infer: {ty:?}"),
+        }
+    }
+
+    pub fn infer_abs<'a>(&self, ctx: &mut AirCtx<'a>) -> Option<TyId> {
+        match self.infer(ctx) {
+            InferTy::Float | InferTy::Int => None,
+            InferTy::Ty(ty) => Some(ty),
+        }
+    }
+}
+
+fn aquire_access_ty<'a>(ctx: &mut AirCtx<'a>, access: &Access) -> TyId {
+    let infer = access.lhs.infer_abs(ctx).unwrap();
+    let ty = ctx.tys.ty(infer);
+    let id = match ty {
+        Ty::Struct(id) => id,
+        Ty::Array(_, _)
+        | Ty::Int(_)
+        | Ty::Unit
+        | Ty::Bool
+        | Ty::Ref(_)
+        | Ty::Str
+        | Ty::Float(_) => {
+            unreachable!()
+        }
+    };
+    let mut strukt = ctx.tys.strukt(id);
+
+    for (i, acc) in access.accessors.iter().rev().enumerate() {
+        let ty = strukt.field_ty(acc.id);
+        if i == access.accessors.len() - 1 {
+            return ty;
+        }
+
+        match ctx.tys.ty(ty) {
+            Ty::Struct(id) => {
+                strukt = ctx.tys.strukt(id);
+            }
+            Ty::Array(_, _)
+            | Ty::Int(_)
+            | Ty::Unit
+            | Ty::Bool
+            | Ty::Ref(_)
+            | Ty::Str
+            | Ty::Float(_) => {
+                unreachable!()
+            }
+        }
+    }
+    unreachable!()
 }
 
 pub fn lower_const<'a>(ctx: &mut AirCtx<'a>, konst: &Const) -> Vec<Air<'a>> {
@@ -491,7 +624,6 @@ pub fn lower_intrinsic<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFu
             "printf" => printf(ctx, func),
             "cs" => c_str(ctx, func),
             "print_cs" => print_c_str(ctx, func),
-            "fu32" => fu32(ctx, func),
             "sqrt_f32" => sqrt_f32(ctx, func),
             i => unimplemented!("intrinsic: {i}"),
         }
@@ -500,7 +632,9 @@ pub fn lower_intrinsic<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFu
 
 pub fn exit<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start_func(func);
-    let Param { ident, .. } = func.sig.params.iter().next().unwrap();
+    let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
+        unreachable!()
+    };
 
     let var = ctx.expect_var(ident.id);
     ctx.ins_set([
@@ -512,7 +646,9 @@ pub fn exit<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
 
 pub fn c_str<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start_func(func);
-    let Param { ident, .. } = func.sig.params.iter().next().unwrap();
+    let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
+        unreachable!()
+    };
 
     let var = ctx.expect_var(ident.id);
     ctx.ins_set([
@@ -524,7 +660,10 @@ pub fn c_str<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
 
 pub fn print_c_str<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start_func(func);
-    let Param { ident, .. } = func.sig.params.iter().next().unwrap();
+    let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
+        unreachable!()
+    };
+
     let var = ctx.expect_var(ident.id);
     ctx.ins_set([
         Air::MovIVar(Reg::A, OffsetVar::zero(var), Width::PTR),
@@ -541,23 +680,11 @@ pub fn printf<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.finish_func()
 }
 
-pub fn fu32<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
-    ctx.start_func(func);
-    let Param { ident, ty, .. } = func.sig.params.iter().next().unwrap();
-    ctx.new_var_registered_no_salloc(ident, *ty);
-
-    let var = ctx.expect_var(ident.id);
-    ctx.ins_set([
-        Air::MovIVar(Reg::A, OffsetVar::zero(var), Width::W32),
-        Air::Fu32,
-        Air::Ret,
-    ]);
-    ctx.finish_func()
-}
-
 pub fn sqrt_f32<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {
     ctx.start_func(func);
-    let Param { ident, .. } = func.sig.params.iter().next().unwrap();
+    let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
+        unreachable!()
+    };
 
     let var = ctx.expect_var(ident.id);
     ctx.ins_set([
@@ -569,8 +696,13 @@ pub fn sqrt_f32<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> 
 }
 
 fn init_params(ctx: &mut AirCtx, func: &Func) {
-    for Param { ident, ty, .. } in func.sig.params.iter() {
-        ctx.func_arg_var(*ident, *ty);
+    for param in func.sig.params.iter() {
+        match param {
+            Param::Named { ident, ty, .. } => {
+                ctx.func_arg_var(*ident, *ty);
+            }
+            _ => todo!(),
+        }
     }
 }
 
@@ -622,8 +754,10 @@ fn air_let_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Let) {
     match &stmt.lhs {
         LetTarget::Ident(ident) => {
             let ty = ctx.var_ty(ident);
-            let dst = ctx.new_var_registered(ident, ty);
+            let dst = ctx.anon_var(ty);
             assign_expr(ctx, OffsetVar::zero(dst), ty, &stmt.rhs);
+            // defer registering so that something in stmt.rhs isn't shadowed
+            ctx.register_var(ident, dst);
         }
     }
 }
@@ -644,7 +778,7 @@ fn load_addr_index_of<'a>(ctx: &mut AirCtx<'a>, index: &'a IndexOf, dst: Reg) ->
             Reg::B,
             ConstData::Bits(Bits::from_u64(ctx.tys.ty(ty).size(ctx) as u64)),
         ),
-        Air::MulAB(Width::SIZE),
+        Air::MulAB(Width::SIZE, Sign::U),
         Air::PushIReg {
             dst: index_var,
             width: Width::SIZE,
@@ -665,22 +799,13 @@ fn load_addr_index_of<'a>(ctx: &mut AirCtx<'a>, index: &'a IndexOf, dst: Reg) ->
     ctx.ins_set([
         Air::MovIVar(ptr_offset_reg, index_var, Width::PTR),
         // the address of the array is in `A` and the offset is in `B`
-        Air::AddAB(Width::PTR),
+        Air::AddAB(Width::PTR, Sign::U),
     ]);
 
     if dst == Reg::B {
         ctx.ins(Air::SwapReg);
     } else {
         assert_eq!(dst, Reg::A);
-    }
-
-    match ctx.tys.ty(ty) {
-        //Ty::Int(int) => {}
-        //Ty::Bool => {}
-        //Ty::Float(_float) => {}
-        Ty::Ref(&Ty::Str) => todo!(),
-        Ty::Bool | Ty::Ref(_) => {}
-        _ => {} //ty => todo!("load addr of ty: {ty:#?}"),
     }
 
     ty
@@ -704,13 +829,26 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
             ]);
         }
         Expr::Array(arr) => match ctx.tys.ty(ty) {
-            Ty::Array(len, inner) => {
-                assert_eq!(len, arr.exprs.len());
-                let inner_id = ctx.tys.get_ty_id(inner).unwrap();
-                for (i, expr) in arr.exprs.iter().enumerate() {
-                    assign_expr(ctx, dst.add(i * inner.size(ctx)), inner_id, expr);
+            Ty::Array(len, inner) => match arr {
+                ArrDef::Elems { exprs, .. } => {
+                    assert_eq!(len, exprs.len());
+                    let inner_id = ctx.tys.get_ty_id(inner).unwrap();
+                    for (i, expr) in exprs.iter().enumerate() {
+                        assign_expr(ctx, dst.add(i * inner.size(ctx)), inner_id, expr);
+                    }
                 }
-            }
+                ArrDef::Repeated { expr, .. } => {
+                    // TODO: assert the length is equal to the type
+                    //
+                    //assert_eq!(*num, len);
+                    let inner_id = ctx.tys.get_ty_id(inner).unwrap();
+                    let the_expr = OffsetVar::zero(ctx.anon_var(inner_id));
+                    assign_expr(ctx, the_expr, inner_id, expr);
+                    for i in 0..len {
+                        assign_var_other(ctx, dst.add(i * inner.size(ctx)), the_expr, inner_id);
+                    }
+                }
+            },
             _ => unreachable!(),
         },
         Expr::Bool(bool) => {
@@ -837,83 +975,84 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
         Expr::If(if_) => {
             assign_if(ctx, dst, ty, if_);
         }
-        Expr::Cast(cast) => match cast.lhs.infer(ctx) {
-            InferTy::Int | InferTy::Float => todo!(),
-            InferTy::Ty(ty) => match ctx.tys.ty(ty) {
-                Ty::Ref(&Ty::Str) => panic!("invalid cast"),
-                Ty::Ref(_) => assign_expr(ctx, dst, ty, cast.lhs),
-                Ty::Int(int_ty) if int_ty == IntTy::USIZE => assign_expr(ctx, dst, ty, cast.lhs),
-                _ => panic!("invalid cast"),
-            },
-        },
-        Expr::Unary(unary) => match unary.kind {
-            UOpKind::Ref => {
-                assert!(ctx.tys.ty(ty).is_ref());
-                match unary.inner {
-                    Expr::Ident(ident) => {
-                        let var = ctx.expect_var(ident.id);
-                        ctx.ins_set([
-                            Air::Addr(Reg::A, OffsetVar::zero(var)),
-                            Air::PushIReg {
-                                dst,
-                                width: Width::PTR,
-                                src: Reg::A,
-                            },
-                        ]);
-                    }
-                    Expr::Lit(lit) => match lit.kind {
-                        LitKind::Int(int) => {
-                            let Some(Ok(inner_ty)) = ctx.tys.ty(ty).ref_inner_ty(ctx) else {
-                                unreachable!()
-                            };
+        Expr::Cast(cast) => {
+            let infer = cast.lhs.infer_abs(ctx).unwrap();
+            assert!(ctx.tys.ty(infer).is_castable());
 
-                            let var = OffsetVar::zero(ctx.anon_var(inner_ty));
-                            let width = ctx.tys.ty(inner_ty).expect_int().width();
-                            ctx.ins_set([
-                                Air::PushIConst(
-                                    var,
-                                    ConstData::Bits(Bits::from_width(*int as u64, width)),
-                                ),
-                                Air::Addr(Reg::A, var),
-                                Air::PushIReg {
-                                    dst,
-                                    width: Width::PTR,
-                                    src: Reg::A,
-                                },
-                            ])
-                        }
-                        LitKind::Float(_) => panic!("invalid op"),
-                    },
-                    _ => todo!(),
+            let var = extract_var_from_expr(ctx, infer, cast.lhs);
+            assert!(ctx.tys.ty(ty).is_castable());
+            assert_eq!(ty, cast.ty);
+
+            let (from, width) = match ctx.tys.ty(infer) {
+                Ty::Int(int) => match int.sign() {
+                    Sign::I => (Prim::Int, int.width()),
+                    Sign::U => (Prim::UInt, int.width()),
+                },
+                Ty::Float(float) => (Prim::Float, float.width()),
+                Ty::Bool => (Prim::Bool, Width::BOOL),
+                Ty::Ref(&Ty::Str) => unreachable!(),
+                Ty::Ref(_) => {
+                    assert!(matches!(ctx.tys.ty(ty), Ty::Int(IntTy::PTR)));
+                    (Prim::UInt, Width::PTR)
                 }
-            }
+                _ => unreachable!(),
+            };
+
+            let to = match ctx.tys.ty(ty) {
+                Ty::Int(_) => Prim::Int,
+                Ty::Float(_) => Prim::Float,
+                Ty::Bool => Prim::Bool,
+                Ty::Ref(&Ty::Str) => unreachable!(),
+                Ty::Ref(_) => {
+                    assert_eq!(width, Width::PTR);
+                    assert_eq!(from, Prim::UInt);
+                    Prim::UInt
+                }
+                _ => unreachable!(),
+            };
+
+            ctx.ins_set([
+                Air::MovIVar(Reg::A, var, width),
+                Air::CastA { from, to, width },
+                Air::PushIReg {
+                    dst,
+                    width,
+                    src: Reg::A,
+                },
+            ]);
+        }
+        Expr::Unary(unary) => match unary.kind {
+            UOpKind::Ref => match ctx.tys.ty(ty) {
+                Ty::Ref(inner) => {
+                    let ty = ctx.tys.ty_id(inner);
+                    let var = extract_var_from_expr(ctx, ty, unary.inner);
+                    ctx.ins_set([
+                        Air::Addr(Reg::A, var),
+                        Air::PushIReg {
+                            dst,
+                            width: Width::PTR,
+                            src: Reg::A,
+                        },
+                    ]);
+                }
+                _ => unreachable!(),
+            },
             UOpKind::Deref => {
                 match unary.inner.infer(ctx) {
                     InferTy::Int | InferTy::Float => panic!(),
                     InferTy::Ty(ty) => assert!(ctx.tys.ty(ty).is_ref()),
                 }
 
-                // load the address into `addr_reg`
-                let ptr_var = extract_var_from_expr(ctx, unary.inner);
+                let ref_ty = ctx.tys.ty_id(&Ty::Ref(ctx.intern(ctx.tys.ty(ty))));
+                let ptr_var = extract_var_from_expr(ctx, ref_ty, unary.inner);
                 let addr_reg = Reg::A;
-                ctx.ins(Air::MovIVar(addr_reg, ptr_var, Width::PTR));
-
-                let inner_ty = ctx.tys.ty(ty);
-                match inner_ty {
-                    Ty::Bool => ctx.ins_set([
-                        Air::Read {
-                            dst: Reg::A,
-                            addr: addr_reg,
-                            width: Width::BOOL,
-                        },
-                        Air::PushIReg {
-                            dst,
-                            width: Width::BOOL,
-                            src: Reg::A,
-                        },
-                    ]),
-                    _ => todo!(),
-                }
+                ctx.ins_set([
+                    Air::MovIVar(addr_reg, ptr_var, Width::PTR),
+                    Air::Deref {
+                        dst,
+                        addr: addr_reg,
+                    },
+                ]);
             }
             UOpKind::Not => {
                 let (width, mask) = match ctx.tys.ty(ty) {
@@ -925,13 +1064,57 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
                 assign_expr(ctx, result, ty, unary.inner);
                 ctx.ins_set([
                     Air::MovIVar(Reg::A, result, width),
-                    Air::XOR(mask),
+                    Air::MovIConst(Reg::B, ConstData::Bits(Bits::from_u64(mask))),
+                    Air::XorAB,
                     Air::PushIReg {
                         dst,
                         width,
                         src: Reg::A,
                     },
                 ]);
+            }
+            UOpKind::Neg => {
+                let result = OffsetVar::zero(ctx.anon_var(ty));
+                assign_expr(ctx, result, ty, unary.inner);
+
+                match ctx.tys.ty(ty) {
+                    Ty::Int(int_ty) => {
+                        let width = int_ty.width();
+                        let mask = u64::MAX;
+                        ctx.ins_set([
+                            Air::MovIVar(Reg::A, result, width),
+                            Air::MovIConst(Reg::B, ConstData::Bits(Bits::from_u64(mask))),
+                            Air::XorAB,
+                            Air::MovIConst(Reg::B, ConstData::Bits(Bits::from_u64(1))),
+                            Air::AddAB(width, Sign::I),
+                            Air::PushIReg {
+                                dst,
+                                width,
+                                src: Reg::A,
+                            },
+                        ]);
+                    }
+                    Ty::Float(float_ty) => {
+                        let width = float_ty.width();
+                        let mask = if float_ty == FloatTy::F32 {
+                            0x80000000
+                        } else {
+                            0x8000000000000000
+                        };
+
+                        ctx.ins_set([
+                            Air::MovIVar(Reg::A, result, width),
+                            Air::MovIConst(Reg::B, ConstData::Bits(Bits::from_u64(mask))),
+                            Air::XorAB,
+                            Air::PushIReg {
+                                dst,
+                                width,
+                                src: Reg::A,
+                            },
+                        ]);
+                    }
+                    _ => unreachable!(),
+                }
             }
         },
         Expr::Enum(_) | Expr::Block(_) => todo!(),
@@ -940,242 +1123,78 @@ fn assign_expr<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, expr: &'a Exp
     }
 }
 
-fn extract_var_from_expr(ctx: &mut AirCtx, expr: &Expr) -> OffsetVar {
+fn extract_var_from_expr<'a>(ctx: &mut AirCtx<'a>, ty: TyId, expr: &'a Expr) -> OffsetVar {
     match expr {
-        Expr::Ident(ident) => OffsetVar::zero(ctx.expect_var(ident.id)),
-        _ => todo!(),
+        Expr::Ident(ident) => {
+            let var = ctx.expect_var(ident.id);
+            let var_ty = ctx.expect_var_ty(var);
+            assert_eq!(
+                var_ty,
+                ty,
+                "{} != {} @ {}",
+                var_ty.to_string(ctx),
+                ty.to_string(ctx),
+                ctx.expect_ident(ident.id)
+            );
+            OffsetVar::zero(var)
+        }
+        Expr::Access(access) => aquire_accessor_field(ctx, access).0,
+        Expr::IndexOf(index) => {
+            let addr_reg = Reg::A;
+            let ty = load_addr_index_of(ctx, index, addr_reg);
+            let var = OffsetVar::zero(ctx.anon_var_no_salloc(ty));
+            ctx.ins(Air::Deref {
+                dst: var,
+                addr: addr_reg,
+            });
+
+            var
+        }
+        Expr::Unary(unary) if unary.kind == UOpKind::Deref => {
+            let addr_reg = Reg::A;
+            let inner_ty = ctx.intern(ctx.tys.ty(ty));
+            let inner_ty = ctx.tys.ty_id(&Ty::Ref(inner_ty));
+            let inner = extract_var_from_expr(ctx, inner_ty, unary.inner);
+            let var = OffsetVar::zero(ctx.anon_var_no_salloc(ty));
+            ctx.ins_set([
+                Air::MovIVar(addr_reg, inner, Width::PTR),
+                Air::Deref {
+                    dst: var,
+                    addr: addr_reg,
+                },
+            ]);
+
+            var
+        }
+        Expr::Break(_) | Expr::Continue(_) | Expr::Loop(_) | Expr::For(_) => unreachable!(),
+        _ => {
+            let dst = OffsetVar::zero(ctx.anon_var(ty));
+            assign_expr(ctx, dst, ty, expr);
+            dst
+        }
     }
 }
 
-fn assign_expr_deref<'a>(ctx: &mut AirCtx<'a>, addr: OffsetVar, ty: TyId, expr: &'a Expr) {
-    match &expr {
-        Expr::Bool(bool) => {
-            assert_eq!(ty, TyId::BOOL);
-            ctx.ins_set([
-                Air::MovIVar(Reg::A, addr, Width::PTR),
-                Air::MovIConst(
-                    Reg::B,
-                    ConstData::Bits(if bool.val { Bits::TRUE } else { Bits::FALSE }),
-                ),
-                Air::Write {
-                    addr: Reg::A,
-                    data: Reg::B,
-                    width: Width::BOOL,
-                },
-            ]);
-        }
-        _ => todo!(),
-        //Expr::IndexOf(index) => {
-        //    load_addr_index_of(ctx, index, Reg::A);
-        //    ctx.ins_set([
-        //        Air::Read {
-        //            dst: Reg::A,
-        //            addr: Reg::A,
-        //            width: Width::PTR,
-        //        },
-        //        Air::PushIReg {
-        //            dst,
-        //            width: Width::PTR,
-        //            src: Reg::A,
-        //        },
-        //    ]);
-        //}
-        //Expr::Array(arr) => match ctx.tys.ty(ty) {
-        //    Ty::Array(len, inner) => {
-        //        assert_eq!(len, arr.exprs.len());
-        //        let inner_id = ctx.tys.get_ty_id(inner).unwrap();
-        //        for (i, expr) in arr.exprs.iter().enumerate() {
-        //            assign_expr(ctx, dst.add(i * inner.size(ctx)), inner_id, expr);
-        //        }
-        //    }
-        //    _ => unreachable!(),
-        //},
-        //Expr::Str(str) => {
-        //    assert_eq!(ty, TyId::STR_LIT);
-        //    let (entry, len) = ctx.str_lit(str.val);
-        //    ctx.ins_set([
-        //        Air::PushIConst(dst, ConstData::Bits(Bits::from_u64(len as u64))),
-        //        Air::PushIConst(dst.add(IntKind::U64), ConstData::Ptr(entry)),
-        //    ]);
-        //}
-        //Expr::Lit(lit) => {
-        //    assign_lit(ctx, lit, dst, ty);
-        //}
-        //Expr::Bin(bin) => {
-        //    assign_bin_op(ctx, dst, ty, bin);
-        //}
-        //Expr::Struct(def) => {
-        //    assert_eq!(ty, ctx.tys.struct_ty_id(def.id));
-        //    define_struct(ctx, def, dst);
-        //}
-        //Expr::Call(call) => {
-        //    assert_eq!(ty, call.sig.ty);
-        //
-        //    let args = generate_args(ctx, call);
-        //    ctx.ins(Air::Call(&call.sig, args));
-        //    match ctx.tys.ty(call.sig.ty) {
-        //        Ty::Int(ty) => {
-        //            ctx.ins(Air::PushIReg {
-        //                dst,
-        //                width: ty.width(),
-        //                src: Reg::A,
-        //            });
-        //        }
-        //        Ty::Float(ty) => {
-        //            ctx.ins(Air::PushIReg {
-        //                dst,
-        //                width: ty.width(),
-        //                src: Reg::A,
-        //            });
-        //        }
-        //        Ty::Ref(&Ty::Str) => {
-        //            todo!();
-        //            //ctx.ins_set([
-        //            //    Air::PushIReg {
-        //            //        dst,
-        //            //        width: Width::PTR,
-        //            //        src: Reg::A,
-        //            //    },
-        //            //    Air::PushIReg {
-        //            //        dst: dst.add(Width::PTR),
-        //            //        width: Width::PTR,
-        //            //        src: Reg::A,
-        //            //    },
-        //            //]);
-        //        }
-        //        Ty::Ref(_) => {
-        //            ctx.ins(Air::PushIReg {
-        //                dst,
-        //                width: Width::PTR,
-        //                src: Reg::A,
-        //            });
-        //        }
-        //        Ty::Array(len, inner) => {
-        //            let bytes = inner.size(ctx) * len;
-        //            ctx.ins_set([
-        //                Air::Addr(Reg::B, dst),
-        //                Air::MemCpy {
-        //                    dst: Reg::B,
-        //                    src: {
-        //                        // the destination is supplied by the callee
-        //                        const _: () = assert!(matches!(RET_REG, Reg::A));
-        //                        Reg::A
-        //                    },
-        //                    bytes,
-        //                },
-        //            ]);
-        //        }
-        //        Ty::Struct(s) => {
-        //            let bytes = ctx.tys.struct_layout(s).size;
-        //            ctx.ins_set([
-        //                Air::Addr(Reg::B, dst),
-        //                Air::MemCpy {
-        //                    dst: Reg::B,
-        //                    src: {
-        //                        // the destination is supplied by the callee
-        //                        const _: () = assert!(matches!(RET_REG, Reg::A));
-        //                        Reg::A
-        //                    },
-        //                    bytes,
-        //                },
-        //            ]);
-        //        }
-        //        Ty::Bool => {
-        //            ctx.ins(Air::PushIReg {
-        //                dst,
-        //                width: Width::BOOL,
-        //                src: Reg::A,
-        //            });
-        //        }
-        //        Ty::Str => {
-        //            panic!("cannot assign to str");
-        //        }
-        //        Ty::Unit => todo!(),
-        //    }
-        //}
-        //Expr::Ident(ident) => {
-        //    let other = OffsetVar::zero(ctx.expect_var(ident.id));
-        //    assign_var_other(ctx, dst, other, ty);
-        //}
-        //Expr::Access(access) => {
-        //    let (other, field_ty) = aquire_accessor_field(ctx, access);
-        //    assert_eq!(field_ty, ty);
-        //    assign_var_other(ctx, dst, other, field_ty);
-        //}
-        //Expr::If(_if_) => {
-        //    todo!();
-        //    //assign_if(ctx, dst, ty, if_);
-        //}
-        //Expr::Loop(_) => {
-        //    // this means that a loop is the last statement, and in order to leave we must return, so
-        //    // just ignore this for now
-        //    //assert_eq!(ty, TyId::UNIT);
-        //    eval_expr(ctx, expr);
-        //}
-        //Expr::Unary(unary) => match unary.kind {
-        //    UOpKind::Ref => {
-        //        assert!(ctx.tys.ty(ty).is_ref());
-        //        match unary.inner {
-        //            Expr::Ident(ident) => {
-        //                let var = ctx.expect_var(ident.id);
-        //                ctx.ins_set([
-        //                    Air::Addr(Reg::A, OffsetVar::zero(var)),
-        //                    Air::PushIReg {
-        //                        dst,
-        //                        width: Width::PTR,
-        //                        src: Reg::A,
-        //                    },
-        //                ]);
-        //            }
-        //            Expr::Lit(lit) => match lit.kind {
-        //                LitKind::Int(int) => {
-        //                    let Some(Ok(inner_ty)) = ctx.tys.ty(ty).ref_inner_ty(ctx) else {
-        //                        unreachable!()
-        //                    };
-        //
-        //                    let var = OffsetVar::zero(ctx.anon_var(inner_ty));
-        //                    let width = ctx.tys.ty(inner_ty).expect_int().width();
-        //                    ctx.ins_set([
-        //                        Air::PushIConst(
-        //                            var,
-        //                            ConstData::Bits(Bits::from_width(*int as u64, width)),
-        //                        ),
-        //                        Air::Addr(Reg::A, var),
-        //                        Air::PushIReg {
-        //                            dst,
-        //                            width: Width::PTR,
-        //                            src: Reg::A,
-        //                        },
-        //                    ])
-        //                }
-        //                LitKind::Float(_) => panic!("invalid op"),
-        //            },
-        //            _ => todo!(),
-        //        }
-        //    }
-        //    UOpKind::Not => {
-        //        let (width, mask) = match ctx.tys.ty(ty) {
-        //            Ty::Bool => (Width::BOOL, 1),
-        //            Ty::Int(ty) => (ty.width(), u64::MAX),
-        //            _ => unreachable!(),
-        //        };
-        //        let result = OffsetVar::zero(ctx.anon_var(ty));
-        //        assign_expr(ctx, result, ty, unary.inner);
-        //        ctx.ins_set([
-        //            Air::MovIVar(Reg::A, result, width),
-        //            Air::XOR(mask),
-        //            Air::PushIReg {
-        //                dst,
-        //                width,
-        //                src: Reg::A,
-        //            },
-        //        ]);
-        //    }
-        //    _ => todo!(),
-        //},
-        //Expr::Enum(_) | Expr::Block(_) => todo!(),
-    }
-}
+//fn assign_expr_deref<'a>(ctx: &mut AirCtx<'a>, addr: OffsetVar, ty: TyId, expr: &'a Expr) {
+//    match &expr {
+//        Expr::Bool(bool) => {
+//            assert_eq!(ty, TyId::BOOL);
+//            ctx.ins_set([
+//                Air::MovIVar(Reg::A, addr, Width::PTR),
+//                Air::MovIConst(
+//                    Reg::B,
+//                    ConstData::Bits(if bool.val { Bits::TRUE } else { Bits::FALSE }),
+//                ),
+//                Air::Write {
+//                    addr: Reg::A,
+//                    data: Reg::B,
+//                    width: Width::BOOL,
+//                },
+//            ]);
+//        }
+//        _ => todo!(),
+//    }
+//}
 
 fn assign_var_other<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, other: OffsetVar, ty: TyId) {
     match ctx.tys.ty(ty) {
@@ -1261,11 +1280,10 @@ fn assign_if<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, if_: &If<'a>) {
 
 fn eval_or_assign_if<'a>(ctx: &mut AirCtx<'a>, if_: &If<'a>, dst: Option<(OffsetVar, TyId)>) {
     ctx.in_var_scope(|ctx| {
-        let bool_ = ctx.tys.bool();
-        let condition = OffsetVar::zero(ctx.anon_var(bool_));
+        let condition = OffsetVar::zero(ctx.anon_var(TyId::BOOL));
 
         ctx.push_pop_sp(|ctx| {
-            assign_expr(ctx, condition, bool_, if_.condition);
+            assign_expr(ctx, condition, TyId::BOOL, if_.condition);
             ctx.ins(Air::MovIVar(Reg::A, condition, Width::BOOL));
 
             match (if_.block, if_.otherwise) {
@@ -1363,6 +1381,11 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
                     ctx.in_var_scope(|ctx| {
                         ctx.push_pop_sp(|ctx| {
                             let ty = ctx.var_ty(&for_.iter);
+                            let sign = match ctx.tys.ty(ty) {
+                                Ty::Int(int) => int.sign(),
+                                _ => unreachable!(),
+                            };
+
                             let anon_it = OffsetVar::zero(ctx.anon_var(ty));
                             assign_expr(ctx, anon_it, ty, range.start.unwrap());
                             let it = OffsetVar::zero(ctx.new_var_registered(&for_.iter, ty));
@@ -1373,7 +1396,7 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
                             let end = OffsetVar::zero(ctx.anon_var(ty));
                             assign_expr(ctx, end, ty, range.end.unwrap());
                             if range.inclusive {
-                                add!(ctx, width, end, end, 1);
+                                add!(ctx, width, sign, end, end, 1);
                             }
 
                             let continue_ = OffsetVar::zero(ctx.anon_var(TyId::BOOL));
@@ -1388,12 +1411,12 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
                                     air_block(ctx, &for_.block);
 
                                     // add assign anon_it
-                                    add!(ctx, width, anon_it, anon_it, 1);
+                                    add!(ctx, width, sign, anon_it, anon_it, 1);
                                     ctx.ins(Air::Jmp(loop_block));
                                 });
 
                                 // break if end is met
-                                eq!(ctx, width, continue_, anon_it, end);
+                                eq!(ctx, width, sign, continue_, anon_it, end);
                                 ctx.ins(Air::IfElse {
                                     condition: Reg::A,
                                     then: exit,
@@ -1445,13 +1468,20 @@ fn eval_expr<'a>(ctx: &mut AirCtx<'a>, expr: &'a Expr) {
 
                                     air_block(ctx, &for_.block);
 
-                                    add!(ctx, Width::SIZE, it_count, it_count, 1);
-                                    add!(ctx, Width::SIZE, arr_ptr, arr_ptr, elem_size as u64);
+                                    add!(ctx, Width::SIZE, Sign::U, it_count, it_count, 1);
+                                    add!(
+                                        ctx,
+                                        Width::SIZE,
+                                        Sign::U,
+                                        arr_ptr,
+                                        arr_ptr,
+                                        elem_size as u64
+                                    );
                                     ctx.ins(Air::Jmp(loop_block));
                                 });
 
                                 // break if end is met
-                                eq!(ctx, Width::SIZE, continue_, it_count, len as u64);
+                                eq!(ctx, Width::SIZE, Sign::U, continue_, it_count, len as u64);
                                 ctx.ins(Air::IfElse {
                                     condition: Reg::A,
                                     then: exit,
@@ -1495,11 +1525,16 @@ fn generate_args<'a>(ctx: &mut AirCtx<'a>, call: &'a Call) -> Args {
     };
 
     for (expr, param) in call.args.iter().zip(call.sig.params.iter()) {
-        let var = ctx.func_arg_var(param.ident, param.ty);
-        ctx.ins(Air::SAlloc(var, ctx.tys.ty(param.ty).size(ctx)));
+        let (ident, ty) = match param {
+            Param::Named { ident, ty, .. } => (*ident, *ty),
+            param => panic!("invalid param: {param:#?}"),
+        };
+
+        let var = ctx.func_arg_var(ident, ty);
+        ctx.ins(Air::SAlloc(var, ctx.tys.ty(ty).size(ctx)));
         let the_fn_param = OffsetVar::zero(var);
-        assign_expr(ctx, the_fn_param, param.ty, expr);
-        args.vars.push((param.ty, the_fn_param.var));
+        assign_expr(ctx, the_fn_param, ty, expr);
+        args.vars.push((ty, the_fn_param.var));
     }
 
     args
@@ -1542,43 +1577,10 @@ fn define_struct<'a>(ctx: &mut AirCtx<'a>, def: &'a StructDef, dst: OffsetVar) {
     }
 }
 
-fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, stmt: &'a Assign) {
-    match &stmt.lhs {
-        Expr::Ident(ident) => {
-            assign_stmt_with_var_and_ty(
-                ctx,
-                stmt,
-                OffsetVar::zero(ctx.expect_var(ident.id)),
-                ctx.var_ty(ident),
-            );
-        }
-        Expr::Access(access) => {
-            let (var, ty) = aquire_accessor_field(ctx, access);
-            assign_stmt_with_var_and_ty(ctx, stmt, var, ty);
-        }
-        Expr::IndexOf(index) => {
-            let addr_reg = Reg::A;
-            let inner = load_addr_index_of(ctx, index, addr_reg);
-            let addr = OffsetVar::zero(ctx.anon_var(ctx.tys.builtin(Ty::Int(IntTy::PTR))));
-            ctx.ins(Air::PushIReg {
-                dst: addr,
-                width: Width::PTR,
-                src: addr_reg,
-            });
-
-            // TODO: run time bounds check
-            match stmt.kind {
-                AssignKind::Equals => match ctx.tys.ty(inner) {
-                    Ty::Bool => {
-                        assign_expr_deref(ctx, addr, inner, &stmt.rhs);
-                    }
-                    _ => todo!(),
-                },
-                _ => todo!(),
-            }
-        }
-        assign => todo!("assign target: {assign:#?}"),
-    };
+fn air_assign_stmt<'a>(ctx: &mut AirCtx<'a>, assign: &'a Assign) {
+    let ty = assign.lhs.infer_abs(ctx).unwrap();
+    let var = extract_var_from_expr(ctx, ty, &assign.lhs);
+    assign_stmt_with_var_and_ty(ctx, assign, var, ty);
 }
 
 fn assign_stmt_with_var_and_ty<'a>(
@@ -1597,12 +1599,13 @@ fn assign_stmt_with_var_and_ty<'a>(
             match ctx.tys.ty(ty) {
                 Ty::Int(int_ty) => {
                     let width = int_ty.width();
+                    let sign = int_ty.sign();
                     match stmt.kind {
                         AssignKind::Add => {
-                            add!(ctx, width, var, var, other);
+                            add!(ctx, width, sign, var, var, other);
                         }
                         AssignKind::Sub => {
-                            sub!(ctx, width, var, var, other);
+                            sub!(ctx, width, sign, var, var, other);
                         }
                         AssignKind::Equals => unreachable!(),
                     }

@@ -55,6 +55,24 @@ KeyboardEvent: struct {
     padding: [88] u8,
 }
 
+new_keyboard_event: () -> KeyboardEvent {
+    KeyboardEvent {
+        event_type: 0,
+        reserved: 0,
+        timestamp: 0,
+        window_id: 0,
+        keyboard_id: 0,
+        scancode: 0,
+        key: 0,
+        keymod: 0,
+        raw: 0,
+        down: false,
+        repeat: false,
+
+        padding: [0; 88]
+    }
+}
+
 Surface: struct {
     flags: u32,
     format: i32,
@@ -106,6 +124,16 @@ Vec2: struct {
     y: f32,
 }
 
+// impl Vec2 {
+//     length_squared: (self) -> f32 {
+//         (self.x * self.x) + (self.y * self.y)
+//     }
+//
+//     length: (self) -> f32 {
+//         sqrt_f32(self.length_squared())
+//     }
+// }
+
 DOWN  : const u64 = 0;
 UP    : const u64 = 1;
 RIGHT : const u64 = 2;
@@ -113,9 +141,20 @@ LEFT  : const u64 = 3;
 
 Bullet: struct {
     pos: Vec2,
-    ticks: u32,
+    tick: u32,
     alive: bool,
 }
+
+new_bullet: () -> Bullet {
+    Bullet {
+        pos: Vec2 { x: 0., y: 0. },
+        tick: 0,
+        alive: false,
+    }
+}
+
+NUM_BULLETS : const u32 = 5;
+BULLET_SPEED: const f32 = 15.;
 
 main: () -> i32 {
     if !SDL_Init(SDL_INIT_VIDEO) {
@@ -148,21 +187,20 @@ main: () -> i32 {
     let index: u64 = 0;
     let selected_texture = textures[index];
 
-    let bullet = load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer);
-    if bullet as u64 == NULL {
+    let bullet_bmp = load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer);
+    if bullet_bmp as u64 == NULL {
         return 1;
     }
 
     let bindex = 0;
-    let bullets = [
-        Bullet {},
-    ];
+    let bullets = [new_bullet(); 5];
 
     let move_dir = [false, false, false, false];
     let pos = Vec2 { x: 900. / 2., y: 400. };
-    let event = KeyboardEvent {};
+    let event = new_keyboard_event();
 
     loop {
+        // input
         if SDL_PollEvent(&event) {
             if event.event_type == SDL_QUIT {
                 return 0;
@@ -177,20 +215,19 @@ main: () -> i32 {
                 if event.key == SDLK_A { move_dir[LEFT]  = true; }
 
                 if event.key == SDLK_SPACE {
-                    // printf("SHOOT!\n");
-                    // let x = 0;
-                    // for bul in bullets {
-                    //     if x == bindex {
-                    //         printf("%\n", bul.alive);
-                    //         bul.alive = true;
-                    //         printf("%\n", bul.alive);
-                    //     }
-                    //     x += 1;
-                    // }
-                    // bindex += 1;
-                    // if bindex == 1 {
-                    //     bindex = 0;
-                    // }
+                    let x = 0;
+                    for bullet in bullets {
+                        if x == bindex {
+                            bullet*.alive = true;
+                            bullet*.pos = pos;
+                        }
+                        x += 1;
+                    }
+
+                    bindex += 1;
+                    if bindex == NUM_BULLETS {
+                        bindex = 0;
+                    }
                 }
 
                 // flip texture
@@ -208,33 +245,50 @@ main: () -> i32 {
             }
         }
 
+        // update
         let mov_vec = Vec2 { x: 0., y: 0. };
         if move_dir[DOWN]  { mov_vec.y += 1.; }
         if move_dir[UP]    { mov_vec.y -= 1.; }
         if move_dir[RIGHT] { mov_vec.x += 1.; }
         if move_dir[LEFT]  { mov_vec.x -= 1.; }
 
-        let mag = sqrt_f32(mov_vec.x * mov_vec.x + mov_vec.y * mov_vec.y);
-        if mag != 0. {
-            let norm = SPEED / mag;
+        // let length = pos.length();
+        let length = sqrt_f32(mov_vec.x * mov_vec.x + mov_vec.y * mov_vec.y);
+        if length != 0. {
+            let norm = SPEED / length;
             pos.x += mov_vec.x * norm;
             pos.y += mov_vec.y * norm;
         }
 
+        for bullet in bullets {
+            if bullet*.alive {
+                bullet*.pos.y -= BULLET_SPEED;
+
+                if bullet*.pos.y < 0.  {
+                    bullet*.alive = false;
+                }
+            }
+        }
+
+        // render
         if !SDL_RenderClear(renderer) {
             report_error("failed to render clear\n");
             return 1;
         }
 
-        let dst = FRect { x: pos.x, y: pos.y, w: 100., h: 100. };
-        draw_texture(renderer, selected_texture, &dst);
+        let dst = FRect { x: 0., y: 0., w: 100., h: 100. };
 
-        // for blt in bullets {
-        //     if blt.alive {
-        //         let blt_dst = FRect { x: 100., y: 100., w: 100., h: 100. };
-        //         draw_texture(renderer, bullet, &blt_dst);
-        //     }
-        // }
+        for bullet in bullets {
+            if bullet*.alive {
+                dst.x = bullet*.pos.x;
+                dst.y = bullet*.pos.y;
+                draw_texture(renderer, bullet_bmp, &dst);
+            }
+        }
+
+        dst.x = pos.x;
+        dst.y = pos.y;
+        draw_texture(renderer, selected_texture, &dst);
 
         if !SDL_RenderPresent(renderer) {
             report_error("failed to render\n");
@@ -303,9 +357,6 @@ print_cs: (str: CStr) {}
 
 #[intrinsic]
 cs: (str: &str) -> CStr {}
-
-#[intrinsic]
-fu32: (f: f32) -> u32 {}
 
 #[intrinsic]
 sqrt_f32: (f: f32) -> f32 {}

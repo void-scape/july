@@ -42,6 +42,12 @@ pub enum Expr {
         func: TokenId,
         args: Vec<Expr>,
     },
+    MethodCall {
+        span: Span,
+        lhs: Box<Expr>,
+        method: TokenId,
+        args: Vec<Expr>,
+    },
     If(TokenId, Box<Expr>, Block, Option<Block>),
     For {
         span: Span,
@@ -57,7 +63,6 @@ pub enum Expr {
     },
     Cast {
         span: Span,
-        ass: TokenId,
         lhs: Box<Expr>,
         ty: PType,
     },
@@ -84,7 +89,10 @@ impl Expr {
             }
             Self::StructDef(def) => def.span,
             //Self::EnumDef(def) => def.span,
-            Self::Array(def) => def.span,
+            Self::Array(def) => match def {
+                ArrDef::Repeated { span, .. } => *span,
+                ArrDef::Elems { span, .. } => *span,
+            },
             Self::Access { span, .. } => *span,
             Self::IndexOf { span, .. } => *span,
             Self::Call { span, .. } => *span,
@@ -102,6 +110,7 @@ impl Expr {
             Self::Unary(t, _, expr) => {
                 Span::from_spans(token_buffer.span(*t), expr.span(token_buffer))
             }
+            Self::MethodCall { span, .. } => *span,
         }
     }
 }
@@ -123,9 +132,10 @@ impl Precedence for BinOpKind {
     fn precedence(&self) -> usize {
         match self {
             Self::Eq | Self::Ne => 1,
-            Self::Xor => 2,
-            Self::Add | Self::Sub => 3,
-            Self::Mul | Self::Div => 4,
+            Self::Gt | Self::Lt => 2,
+            Self::Xor => 3,
+            Self::Add | Self::Sub => 4,
+            Self::Mul | Self::Div => 5,
         }
     }
 }
@@ -182,6 +192,8 @@ impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
             Some(TokenKind::Asterisk) => BinOpKind::Mul,
             Some(TokenKind::Caret) => BinOpKind::Xor,
             Some(TokenKind::Slash) => BinOpKind::Div,
+            Some(TokenKind::OpenAngle) => BinOpKind::Lt,
+            Some(TokenKind::CloseAngle) => BinOpKind::Gt,
             kind => {
                 return Err(PErr::Recover(stream.error(format!(
                     "expected binary operator, got `{}`",
@@ -252,9 +264,15 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 )),
                 _ => Ok(Expr::Ident(stream.expect())),
             },
+            Some(TokenKind::Slf) => Ok(Expr::Ident(stream.expect())),
             Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Expr::Lit(stream.expect())),
             Some(TokenKind::True) | Some(TokenKind::False) => Ok(Expr::Bool(stream.expect())),
             Some(TokenKind::Str) => Ok(Expr::Str(stream.expect())),
+            Some(TokenKind::Hyphen) => Ok(Expr::Unary(
+                stream.expect(),
+                UOpKind::Neg,
+                Box::new(TermRule::parse(stream)?),
+            )),
             Some(TokenKind::Bang) => Ok(Expr::Unary(
                 stream.expect(),
                 UOpKind::Not,
@@ -338,11 +356,22 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 }
 
                 let field = stream.expect();
-                term_result = Expr::Access {
-                    span: Span::from_spans(start_span, stream.span(field)),
-                    lhs: Box::new(term_result),
-                    field,
-                };
+
+                if stream.match_peek::<OpenParen>() {
+                    let (span, args) = ArgsRule::parse(stream).map_err(PErr::fail)?;
+                    term_result = Expr::MethodCall {
+                        span,
+                        method: field,
+                        lhs: Box::new(term_result),
+                        args,
+                    };
+                } else {
+                    term_result = Expr::Access {
+                        span: Span::from_spans(start_span, stream.span(field)),
+                        lhs: Box::new(term_result),
+                        field,
+                    };
+                }
             } else if stream.match_peek::<OpenBracket>() {
                 let open_bracket = stream.expect();
                 let index_expr = ExprRule::parse(stream)?;
@@ -376,7 +405,7 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 }
             } else if stream.match_peek::<As>() {
                 let chk = *stream;
-                let ass = stream.expect();
+                let _as = stream.expect();
                 match TypeRule::parse(stream) {
                     Ok(ty) => {
                         term_result = Expr::Cast {
@@ -384,7 +413,6 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                                 term_result.span(stream.token_buffer()),
                                 ty.span(stream.token_buffer()),
                             ),
-                            ass,
                             lhs: Box::new(term_result),
                             ty,
                         }

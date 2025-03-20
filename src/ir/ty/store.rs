@@ -8,6 +8,10 @@ use crate::ir::ty::Ty;
 use crate::ir::Const;
 use std::collections::HashMap;
 
+pub const BUILTIN_TYPES: &[&str] = &[
+    "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "str",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyId(usize);
 
@@ -83,29 +87,13 @@ impl<'a> TyStore<'a> {
         self.const_map.insert(konst.name.id, konst);
     }
 
-    pub fn bool(&self) -> TyId {
-        TyId::BOOL
-    }
-
-    pub fn str_lit(&self) -> TyId {
-        TyId::STR_LIT
-    }
-
-    pub fn unit(&self) -> TyId {
-        TyId::UNIT
-    }
-
     pub fn is_unit(&self, ty: TyId) -> bool {
-        ty == self.unit()
+        ty == TyId::UNIT
     }
 
     /// Used during the construction of types, where [`Ty`]s are not easily accessible.
     pub fn is_builtin(&self, ident: &str) -> bool {
-        match ident {
-            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
-            | "bool" | "str" => true,
-            _ => false,
-        }
+        BUILTIN_TYPES.contains(&ident)
     }
 
     #[track_caller]

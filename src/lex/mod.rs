@@ -78,7 +78,7 @@ fn str_lit<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
     let (sym, span) = alt((
-        ".", ",", ";", "+", "*", "=", ":", "-", ">", "#", "&", "!", "^", "/",
+        ".", ",", ";", "+", "*", "=", ":", "-", "#", "&", "!", "^", "/",
     ))
     .with_span()
     .parse_next(input)?;
@@ -101,7 +101,6 @@ fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         ":" => TokenKind::Colon,
         "-" => TokenKind::Hyphen,
         "!" => TokenKind::Bang,
-        ">" => TokenKind::Greater,
         "&" => TokenKind::Ampersand,
         "/" => TokenKind::Slash,
         "#" => TokenKind::Pound,
@@ -113,10 +112,12 @@ fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
 }
 
 fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
-    let (delim, span) = alt(('{', '}', '(', ')', '[', ']'))
+    let (delim, span) = alt(('<', '>', '{', '}', '(', ')', '[', ']'))
         .with_span()
         .parse_next(input)?;
     let token = match delim {
+        '<' => TokenKind::OpenAngle,
+        '>' => TokenKind::CloseAngle,
         '{' => TokenKind::OpenCurly,
         '}' => TokenKind::CloseCurly,
         '(' => TokenKind::OpenParen,
@@ -188,11 +189,13 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> PResult<Token> {
         "for" => TokenKind::For,
         "in" => TokenKind::In,
         "fn" => TokenKind::Fn,
+        "self" => TokenKind::Slf,
         "return" => TokenKind::Ret,
         "continue" => TokenKind::Continue,
         "break" => TokenKind::Break,
         "as" => TokenKind::As,
         "struct" => TokenKind::Struct,
+        "impl" => TokenKind::Impl,
         "enum" => TokenKind::Enum,
         "loop" => TokenKind::Loop,
         "const" => TokenKind::Const,

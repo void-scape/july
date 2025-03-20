@@ -1,6 +1,7 @@
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
 use crate::lex::buffer::*;
+use crate::lex::kind::TokenKind;
 use crate::parse::rules::PErr;
 use crate::parse::stream::TokenStream;
 use crate::parse::{combinator::prelude::*, matc::*, rules::prelude::*};
@@ -21,7 +22,14 @@ impl Func {
         stream: &TokenStream<'a, 's>,
         attr: &Attribute,
     ) -> Result<(), PErr<'s>> {
-        assert!(attr.tokens.len() == 1, "add more attribute parsing");
+        assert!(
+            attr.tokens.len() == 1,
+            "add more attribute parsing: {:#?}",
+            attr.tokens
+                .iter()
+                .map(|t| stream.as_str(*t))
+                .collect::<Vec<_>>()
+        );
 
         match stream.as_str(attr.tokens[0]) {
             "intrinsic" => {
@@ -72,10 +80,14 @@ impl ExternFunc {
 }
 
 #[derive(Debug)]
-pub struct Param {
-    pub name: TokenId,
-    pub colon: TokenId,
-    pub ty: PType,
+pub enum Param {
+    Slf(TokenId),
+    SlfRef(TokenId),
+    Named {
+        name: TokenId,
+        colon: TokenId,
+        ty: PType,
+    },
 }
 
 #[derive(Default)]
@@ -89,14 +101,7 @@ impl<'a, 's> ParserRule<'a, 's> for FnRule {
             Next<Ident>,
             Next<Colon>,
             ParamsRule,
-            XNor<(
-                Next<Hyphen>,
-                Next<Greater>,
-                TypeRule,
-                //Reported<Next<Hyphen>, FnType>,
-                //Reported<Next<Greater>, FnType>,
-                //Reported<TypeRule, MissingType>,
-            )>,
+            XNor<(Next<Hyphen>, Next<CloseAngle>, TypeRule)>,
         )>::parse(stream)
         {
             Ok(res) => {
@@ -159,7 +164,7 @@ impl<'a, 's> ParserRule<'a, 's> for ExternFnRule {
             return Err(PErr::Recover(stream.error("expected `extern`")));
         }
 
-        match Spanned::<(
+        let res = Spanned::<(
             Next<Extern>,
             Next<OpenParen>,
             Next<Str>,
@@ -171,47 +176,35 @@ impl<'a, 's> ParserRule<'a, 's> for ExternFnRule {
                     Next<Ident>,
                     Next<Colon>,
                     ParamsRule,
-                    XNor<(
-                        Next<Hyphen>,
-                        Next<Greater>,
-                        TypeRule,
-                        //Reported<Next<Hyphen>, FnType>,
-                        //Reported<Next<Greater>, FnType>,
-                        //Reported<TypeRule, MissingType>,
-                    )>,
+                    XNor<(Next<Hyphen>, Next<CloseAngle>, TypeRule)>,
                     Next<Semi>,
                 )>,
             >,
             Next<CloseCurly>,
         )>::parse(stream)
-        {
-            Ok(res) => {
-                let (_, _, convention, _, _, funcs, _) = res.into_inner();
-                Ok(funcs
-                    .into_iter()
-                    .map(|spanned| {
-                        let span = spanned.span();
-                        let (name, _, params, ty, _) = spanned.into_inner();
-                        ExternFunc {
-                            ty: ty.map(|(_, _, t)| t),
-                            params,
-                            span,
-                            name,
-                            convention,
-                            link: None,
-                        }
-                    })
-                    .collect())
-            }
-            Err(e) => {
-                stream.eat_until_consume::<Semi>();
-                Err(e.fail())
-            }
-        }
+        .map_err(PErr::fail)?;
+
+        let (_, _, convention, _, _, funcs, _) = res.into_inner();
+        Ok(funcs
+            .into_iter()
+            .map(|spanned| {
+                let span = spanned.span();
+                let (name, _, params, ty, _) = spanned.into_inner();
+                ExternFunc {
+                    ty: ty.map(|(_, _, t)| t),
+                    params,
+                    span,
+                    name,
+                    convention,
+                    link: None,
+                }
+            })
+            .collect())
     }
 }
 
-struct ParamsRule;
+#[derive(Debug, Default)]
+pub struct ParamsRule;
 
 impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
     type Output = Vec<Param>;
@@ -228,27 +221,46 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
         if !stream.match_peek::<CloseParen>() {
             let index = stream.find_matched_delim_offset::<Paren>();
             let mut slice = stream.slice(index);
-            let params = match While::<
-                NextToken<Any>,
-                (
-                    Next<Ident>,
-                    Next<Colon>,
-                    //Reported<Next<Colon>, MissingTyBinding>,
-                    TypeRule,
-                    Opt<Next<Comma>>,
-                ),
-            >::parse(&mut slice)
-            {
-                Err(err) => {
-                    *stream = str;
-                    return Err(err);
-                }
-                Ok(args) => args,
-            };
-
             stream.eat_n(index + 1);
+
+            let mut params = Vec::new();
+            loop {
+                if slice.is_empty() {
+                    break;
+                }
+
+                match slice.peek_kind() {
+                    Some(TokenKind::Ampersand) => {
+                        let _ref = slice.expect();
+                        if slice.match_peek::<Slf>() {
+                            let _self = slice.expect();
+                            let comma = Opt::<Next<Comma>>::parse(&mut slice)?;
+                            params.push((comma, Param::SlfRef(_self)));
+                        } else {
+                            return Err(slice.fail("expected `self` or `{identifier}`"));
+                        }
+                    }
+                    Some(TokenKind::Slf) => {
+                        let _self = slice.expect();
+                        let comma = Opt::<Next<Comma>>::parse(&mut slice)?;
+                        params.push((comma, Param::Slf(_self)));
+                    }
+                    _ => {
+                        let (name, colon, ty, comma) =
+                            <(
+                                Next<Ident>,
+                                Next<Colon>,
+                                //Reported<Next<Colon>, MissingTyBinding>,
+                                TypeRule,
+                                Opt<Next<Comma>>,
+                            )>::parse(&mut slice)?;
+                        params.push((comma, Param::Named { name, colon, ty }));
+                    }
+                }
+            }
+
             if params.len() > 1 {
-                for (i, (_, _, _, comma)) in params.iter().enumerate() {
+                for (i, (comma, param)) in params.iter().enumerate() {
                     if i < params.len() - 1 {
                         if comma.is_none() {
                             return Err(PErr::Fail(stream.error(format!(
@@ -259,10 +271,7 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
                 }
             }
 
-            Ok(params
-                .into_iter()
-                .map(|(name, colon, ty, _)| Param { name, colon, ty })
-                .collect())
+            Ok(params.into_iter().map(|(_, param)| param).collect())
         } else {
             stream.expect();
             Ok(Vec::new())

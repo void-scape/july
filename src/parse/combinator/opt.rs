@@ -10,6 +10,7 @@ where
 {
     type Output = Option<<T as ParserRule<'a, 's>>::Output>;
 
+    #[track_caller]
     fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let chck = *stream;
 
@@ -35,6 +36,7 @@ macro_rules! impl_xnor {
         {
             type Output = Option<($(<$T as ParserRule<'a, 's>>::Output,)*)>;
 
+            #[track_caller]
             fn parse(
                 stream: &mut TokenStream<'a, 's>,
             ) -> RResult<'s, Self::Output> {

@@ -2,6 +2,7 @@ use super::strukt::Struct;
 use super::{Next, PErr, ParserRule};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::IdentId;
+use crate::ir::ty::store::BUILTIN_TYPES;
 use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
 use crate::parse::combinator::spanned::Spanned;
@@ -68,6 +69,12 @@ impl<'a, 's> ParserRule<'a, 's> for TypeRule {
     type Output = PType;
 
     fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
+        if let Some(str) = stream.peek().map(|t| stream.as_str(t)) {
+            if BUILTIN_TYPES.contains(&str) {
+                return Ok(PType::Simple(stream.expect()));
+            }
+        }
+
         let mut slice =
             stream.slice(
                 stream

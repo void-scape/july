@@ -53,6 +53,21 @@ impl<'a> Ty<'a> {
         matches!(self, Self::Ref(ty) if **ty != Ty::Str)
     }
 
+    pub fn is_arr(&self) -> bool {
+        matches!(self, Self::Array(_, _))
+    }
+
+    pub fn is_castable(&self) -> bool {
+        match self {
+            Self::Struct(_)
+            | Self::Ref(&Self::Str)
+            | Self::Str
+            | Self::Array(_, _)
+            | Self::Unit => false,
+            Self::Int(_) | Self::Float(_) | Self::Bool | Self::Ref(_) => true,
+        }
+    }
+
     pub fn layout(&self, ctx: &Ctx) -> Layout {
         match self {
             Self::Unit => Layout::new(0, 1),
@@ -101,13 +116,20 @@ impl<'a> Ty<'a> {
         }
     }
 
-    pub fn peel_refs(&self) -> (&Ty, usize) {
+    pub fn peel_refs(&self) -> (&Ty<'a>, usize) {
         match self {
             Self::Ref(inner) => {
                 let (ty, level) = inner.peel_refs();
                 (ty, level + 1)
             }
             inner => (inner, 0),
+        }
+    }
+
+    pub fn peel_one_ref(&self) -> &Ty {
+        match self {
+            Self::Ref(inner) => inner,
+            inner => inner,
         }
     }
 
@@ -127,7 +149,7 @@ pub struct IntTy {
 
 impl IntTy {
     pub const BOOL: Self = IntTy::new_8(Sign::U);
-    pub const PTR: Self = IntTy::new_64(Sign::I);
+    pub const PTR: Self = IntTy::new_64(Sign::U);
     pub const ISIZE: Self = IntTy::new_64(Sign::I);
     pub const USIZE: Self = IntTy::new_64(Sign::U);
 
@@ -275,5 +297,9 @@ impl TypeKey {
             .get(&ident)
             .map(Vec::as_slice)
             .unwrap_or_else(|| &[])
+    }
+
+    pub fn ident_set_mut(&mut self, ident: IdentId) -> Option<&mut Vec<(Ident, TyId)>> {
+        self.key.get_mut(&ident)
     }
 }

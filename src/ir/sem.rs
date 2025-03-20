@@ -1,4 +1,3 @@
-use super::ctx::CtxFmt;
 use super::*;
 use crate::lex::buffer::Buffer;
 use std::ops::Deref;
@@ -7,7 +6,6 @@ pub fn sem_analysis_pre_typing<'a>(ctx: &'a Ctx<'a>) -> Result<(), ()> {
     let mut ctx = SemCtx::new(ctx);
 
     ctx.sem_try(entry);
-    ctx.sem_try(unique_funcs);
     ctx.sem_func(end_is_return);
 
     if ctx.diags.is_empty() {
@@ -95,36 +93,15 @@ fn entry<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
     }
 }
 
-fn unique_funcs<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
-    let mut set = HashSet::with_capacity(ctx.funcs.len());
-    for f in ctx.funcs.iter() {
-        if !set.insert(f.sig.ident) {
-            let ident = f.sig.ident;
-            let occurences = ctx
-                .funcs
-                .iter()
-                .filter(|f| f.sig.ident == ident)
-                .collect::<Vec<_>>();
-
-            return Err(ctx.errors(
-                format!("`{}` defined multiple times", ident.to_string(ctx)),
-                occurences.iter().map(|f| Msg::error(f.name_span, "")),
-            ));
-        }
-    }
-
-    Ok(())
-}
-
 fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
-    if func.sig.ty == ctx.tys.unit() && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
+    if func.sig.ty == TyId::UNIT && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
         Err(ctx
             .report_error(
                 func.block.end.as_ref().unwrap().span(),
                 "invalid return type: expected `()`",
             )
             .msg(Msg::help(func.sig.span, "function has no return type")))
-    } else if func.sig.ty != ctx.tys.unit() && func.block.end.is_none() {
+    } else if func.sig.ty != TyId::UNIT && func.block.end.is_none() {
         if let Some(stmt) = func.block.stmts.last() {
             match stmt {
                 Stmt::Semi(semi) => match semi {

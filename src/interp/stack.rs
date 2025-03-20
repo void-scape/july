@@ -1,12 +1,22 @@
-use crate::air::{Addr, Bits, OffsetVar, Var};
+use crate::air::{Bits, OffsetVar, Var};
 use crate::ir::ty::Width;
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Stack {
     vars: HashMap<Var, usize>,
-    stack: Vec<i64>,
+    stack: Vec<u64>,
     sp: usize,
+}
+
+impl Default for Stack {
+    fn default() -> Self {
+        Self {
+            vars: HashMap::default(),
+            stack: vec![0; 1_000_000],
+            sp: 0,
+        }
+    }
 }
 
 impl Stack {
@@ -18,21 +28,20 @@ impl Stack {
         self.len() * 8
     }
 
-    pub fn anon_alloc(&mut self, bytes: usize) -> Addr {
-        let sp = self.sp as u64;
+    pub fn anon_alloc(&mut self, bytes: usize) -> usize {
+        let sp = self.sp;
         self.sp += bytes;
-        self.sp = (self.sp + 7) & !7; // what the fuck?
-
-        for _ in self.stack.len()..self.sp / 8 {
-            self.stack.push(0x6969696969696969);
-        }
-
-        self.start_addr() as u64 + sp
+        self.sp = (self.sp + 7) & !7;
+        self.start_addr() + sp
     }
 
     pub fn alloc(&mut self, var: Var, bytes: usize) {
-        self.vars.insert(var, self.sp);
-        self.anon_alloc(bytes);
+        let addr = self.anon_alloc(bytes);
+        self.vars.insert(var, addr);
+    }
+
+    pub fn point(&mut self, var: Var, addr: usize) {
+        self.vars.insert(var, addr);
     }
 
     pub fn sp(&self) -> usize {
@@ -49,14 +58,14 @@ impl Stack {
 
     /// Vars cannot overlap and their spacing is maintained by sp. Caller must uphold type safety.
     pub unsafe fn var_ptr(&self, var: OffsetVar) -> *const u8 {
-        let offset = self.addr(var.var) + var.offset;
-        unsafe { self.stack.as_ptr().cast::<u8>().add(offset) }
+        let addr = self.addr(var.var) + var.offset;
+        addr as *const u8
     }
 
     /// Vars cannot overlap and their spacing is maintained by sp. Caller must uphold type safety.
     pub unsafe fn var_ptr_mut(&mut self, var: OffsetVar) -> *mut u8 {
-        let offset = self.addr(var.var) + var.offset;
-        unsafe { self.stack.as_mut_ptr().cast::<u8>().add(offset) }
+        let addr = self.addr(var.var) + var.offset;
+        addr as *mut u8
     }
 
     /// `dst` and `src` must not overlap.
@@ -97,6 +106,7 @@ impl Stack {
         }
     }
 
+    #[track_caller]
     pub fn read_var<I: Read>(&self, var: OffsetVar) -> I {
         self.read(self.var_addr(var))
     }
@@ -119,6 +129,7 @@ impl Stack {
         }
     }
 
+    //#[track_caller]
     fn read<I: Read>(&self, addr: usize) -> I {
         assert!(
             addr <= self.end_addr(),
@@ -160,7 +171,7 @@ impl Stack {
     }
 
     fn end_addr(&self) -> usize {
-        self.sp() + self.stack.as_ptr().addr()
+        self.start_addr() + self.sp().min(self.start_addr() + 8_000_000)
     }
 }
 

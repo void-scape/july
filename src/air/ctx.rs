@@ -2,7 +2,7 @@ use super::data::{Bss, BssEntry};
 use super::{Air, AirFunc, AirFuncBuilder, BlockId, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
-use crate::ir::sig::Sig;
+use crate::ir::sig::{Param, Sig};
 use crate::ir::ty::infer::SymbolTable;
 use crate::ir::ty::store::{TyId, TyStore};
 use crate::ir::ty::{Ty, TypeKey, Width};
@@ -12,10 +12,10 @@ use std::ops::Deref;
 
 pub struct AirCtx<'a> {
     pub tys: TyStore<'a>,
-    ctx: &'a Ctx<'a>,
-    key: &'a TypeKey,
-    var_index: usize,
+    pub key: &'a TypeKey,
     pub tables: Vec<SymbolTable<Var>>,
+    ctx: &'a Ctx<'a>,
+    var_index: usize,
     func_args: HashMap<Ident, Var>,
     ty_map: HashMap<Var, TyId>,
     bss: Bss,
@@ -170,12 +170,6 @@ impl<'a> AirCtx<'a> {
         builder.loop_ctx = loop_ctx;
     }
 
-    pub fn new_var_registered_no_salloc(&mut self, ident: &Ident, ty: TyId) -> Var {
-        let var = self.anon_var_no_salloc(ty);
-        self.register_var(ident, var);
-        var
-    }
-
     #[track_caller]
     pub fn new_var_registered(&mut self, ident: &Ident, ty: TyId) -> Var {
         let var = self.anon_var(ty);
@@ -190,7 +184,7 @@ impl<'a> AirCtx<'a> {
         var
     }
 
-    fn register_var(&mut self, ident: &Ident, var: Var) {
+    pub fn register_var(&mut self, ident: &Ident, var: Var) {
         if self.tables.is_empty() {
             self.tables.push(SymbolTable::default());
         }
@@ -235,15 +229,25 @@ impl<'a> AirCtx<'a> {
     pub fn expect_var(&self, ident: IdentId) -> Var {
         let builder = self.expect_func_builder();
 
+        let ident_str = self.expect_ident(ident);
         self.var(ident)
             .or_else(|| {
-                builder
-                    .func
-                    .sig
-                    .params
-                    .iter()
-                    .find(|p| p.ident.id == ident)
-                    .map(|p| self.func_args.get(&p.ident).copied().unwrap())
+                builder.func.sig.params.iter().find_map(|p| match p {
+                    Param::Named { ident: name, .. } => {
+                        if name.id == ident {
+                            self.func_args.get(&name).copied()
+                        } else {
+                            None
+                        }
+                    }
+                    Param::Slf(ident) | Param::SlfRef(ident) => {
+                        if ident_str == "self" {
+                            self.func_args.get(&ident).copied()
+                        } else {
+                            None
+                        }
+                    }
+                })
             })
             .expect("invalid var ident")
     }

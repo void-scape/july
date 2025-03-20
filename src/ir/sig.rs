@@ -38,9 +38,23 @@ impl Linkage<'_> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Param {
-    pub span: Span,
-    pub ty_binding: Span,
-    pub ident: Ident,
-    pub ty: TyId,
+pub enum Param {
+    Slf(Ident),
+    SlfRef(Ident),
+    Named {
+        span: Span,
+        ty_binding: Span,
+        ident: Ident,
+        ty: TyId,
+    },
+}
+
+impl Param {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Slf(ident) => ident.span,
+            Self::SlfRef(ident) => ident.span,
+            Self::Named { span, .. } => *span,
+        }
+    }
 }

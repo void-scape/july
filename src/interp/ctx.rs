@@ -3,7 +3,7 @@ use super::InstrResult;
 use crate::air::{Air, AirFunc, BlockId, Reg};
 use crate::ir::ctx::Ctx;
 use crate::ir::ty::FloatTy;
-use std::ops::{BitXor, Deref};
+use std::ops::Deref;
 use std::slice;
 
 #[derive(Default)]
@@ -50,6 +50,32 @@ impl<'a> Deref for InterpCtx<'a> {
     fn deref(&self) -> &Self::Target {
         self.ctx
     }
+}
+
+macro_rules! debug_op {
+    ($self:expr, $op:tt) => {{
+        let result = $self.a.r() $op $self.b.r();
+        println!(
+            " | A <- {} <- A({}) {} B({})",
+            result,
+            $self.a.r(),
+            stringify!($op),
+            $self.b.r()
+        );
+    }};
+}
+
+macro_rules! debug_flop {
+    ($self:expr, $op:tt) => {{
+        let result = f64::from_bits($self.a.r()) $op f64::from_bits($self.b.r());
+        println!(
+            " | A <- {:.2} <- A({:.2}) {} B({:.2})",
+            result,
+            f64::from_bits($self.a.r()),
+            stringify!($op),
+            f64::from_bits($self.b.r())
+        );
+    }}
 }
 
 impl<'a> InterpCtx<'a> {
@@ -174,11 +200,8 @@ impl<'a> InterpCtx<'a> {
             | Air::SwapReg
             | Air::ReadSP(_)
             | Air::WriteSP(_)
+            | Air::CastA { .. }
             | Air::MovIConst(_, _) => {}
-            Air::Fu32 => {
-                let float = f32::from_bits(self.a.r() as u32);
-                println!(" | {} <- {}", float as u32 as u64, float);
-            }
             Air::Read { dst, addr, width } => {
                 println!(
                     " | Reg({:?}) <- {:?} <- Read(Reg({:?}) = Addr({:#x})) @ {:?}",
@@ -201,24 +224,13 @@ impl<'a> InterpCtx<'a> {
             Air::Write { data, addr, width } => {
                 println!(
                     " | Addr({:#x}) <- {:#x} @ {:?}",
-                    match addr {
-                        Reg::A => self.a.r(),
-                        Reg::B => self.b.r(),
-                    },
-                    match data {
-                        Reg::A => self.a.r(),
-                        Reg::B => self.b.r(),
-                    },
+                    self.r(*addr),
+                    self.r(*data),
                     width
                 );
             }
-            Air::XOR(mask) => {
-                println!(
-                    " | Reg(A) <- {:#x} <- {:#x} XOR {:#x}",
-                    mask.bitxor(self.a.r()),
-                    self.a.r(),
-                    mask
-                );
+            Air::Deref { dst, addr } => {
+                println!("| Var({dst:?}) @ Addr({:#x})", self.r(*addr));
             }
             Air::PushIVar { dst, width, src } => {
                 println!(
@@ -320,109 +332,28 @@ impl<'a> InterpCtx<'a> {
                         .collect::<Vec<_>>(),
                 );
             }
-            Air::AddAB(_) => {
-                let result = self.a.r() + self.b.r();
-                println!(
-                    " | A <- {} <- A({}) + B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
-            Air::SubAB(_) => {
-                let result = self.a.r() - self.b.r();
-                println!(
-                    " | A <- {} <- A({}) - B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
-            Air::MulAB(_) => {
-                let result = self.a.r() * self.b.r();
-                println!(
-                    " | A <- {} <- A({}) * B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
-            Air::DivAB(_) => {
-                let result = self.a.r() / self.b.r();
-                println!(
-                    " | A <- {} <- A({}) / B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
 
-            Air::XorAB(_) => {
-                let result = self.a.r() ^ self.b.r();
-                println!(
-                    " | A <- {} <- A({}) ^ B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
+            Air::AddAB(_, _) => debug_op!(self, +),
+            Air::SubAB(_, _) => debug_op!(self, -),
+            Air::MulAB(_, _) => debug_op!(self, *),
+            Air::DivAB(_, _) => debug_op!(self, /),
 
-            Air::EqAB(_) => {
-                let result = self.a.r() == self.b.r();
-                println!(
-                    " | A <- {} <- A({}) == B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
-            Air::NEqAB(_) => {
-                let result = self.a.r() != self.b.r();
-                println!(
-                    " | A <- {} <- A({}) != B({})",
-                    result,
-                    self.a.r(),
-                    self.b.r()
-                );
-            }
+            Air::XorAB => debug_op!(self, ^),
 
-            Air::FAddAB(_) => {
-                let lhs = self.a.r();
-                let rhs = self.b.r();
-                let result = f64::from_bits(lhs) + f64::from_bits(rhs);
-                println!(" | A <- {:.4} <- A({}) + B({})", result, lhs, rhs);
-            }
-            Air::FSubAB(_) => {
-                let lhs = self.a.r();
-                let rhs = self.b.r();
-                let result = f64::from_bits(lhs) - f64::from_bits(rhs);
-                println!(" | A <- {:.4} <- A({}) - B({})", result, lhs, rhs);
-            }
-            Air::FMulAB(_) => {
-                let lhs = self.a.r();
-                let rhs = self.b.r();
-                let result = f64::from_bits(lhs) * f64::from_bits(rhs);
-                println!(" | A <- {:.4} <- A({}) * B({})", result, lhs, rhs);
-            }
-            Air::FDivAB(_) => {
-                let lhs = self.a.r();
-                let rhs = self.b.r();
-                let result = f64::from_bits(lhs) / f64::from_bits(rhs);
-                println!(" | A <- {:.4} <- A({}) / B({})", result, lhs, rhs);
-            }
+            Air::EqAB(_, _) => debug_op!(self, ==),
+            Air::NEqAB(_, _) => debug_op!(self, !=),
+            Air::LtAB(_, _) => debug_op!(self, <),
+            Air::GtAB(_, _) => debug_op!(self, >),
 
-            Air::FEqAB(_) => {
-                let lhs = self.a.r();
-                let rhs = self.b.r();
-                let result = f64::from_bits(lhs) == f64::from_bits(rhs);
-                println!(" | A <- {} <- A({}) == B({})", result, lhs, rhs);
-            }
-            Air::NFEqAB(_) => {
-                let lhs = self.a.r();
-                let rhs = self.b.r();
-                let result = f64::from_bits(lhs) != f64::from_bits(rhs);
-                println!(" | A <- {} <- A({}) != B({})", result, lhs, rhs);
-            }
+            Air::FAddAB(_) => debug_flop!(self, +),
+            Air::FSubAB(_) => debug_flop!(self, -),
+            Air::FMulAB(_) => debug_flop!(self, *),
+            Air::FDivAB(_) => debug_flop!(self, /),
+
+            Air::FEqAB(_) => debug_flop!(self, ==),
+            Air::NFEqAB(_) => debug_flop!(self, !=),
+            Air::FLtAB(_) => debug_flop!(self, <),
+            Air::FGtAB(_) => debug_flop!(self, >),
 
             Air::FSqrt(ty) => {
                 let arg = self.a.r();

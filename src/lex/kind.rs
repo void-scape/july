@@ -1,6 +1,8 @@
 /// Definition of all kinds of tokens found within a source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    Slf,
+    Impl,
     Const,
     Loop,
     If,
@@ -33,7 +35,8 @@ pub enum TokenKind {
     Plus,
     Asterisk,
     Slash,
-    Greater,
+    OpenAngle,
+    CloseAngle,
     Hyphen,
     Comma,
     Dot,
@@ -48,6 +51,8 @@ pub enum TokenKind {
 impl TokenKind {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Slf => "self",
+            Self::Impl => "impl",
             Self::Extern => "extern",
             Self::Enum => "enum",
             Self::Struct => "struct",
@@ -57,16 +62,17 @@ impl TokenKind {
             Self::Semi => ";",
             Self::Colon => ":",
             Self::Equals => "=",
+            Self::OpenAngle => "<",
+            Self::CloseAngle => ">",
+            Self::OpenCurly => "{",
+            Self::CloseCurly => "}",
             Self::OpenParen => "(",
             Self::CloseParen => ")",
             Self::OpenBracket => "[",
             Self::CloseBracket => "]",
-            Self::OpenCurly => "{",
-            Self::CloseCurly => "}",
             Self::Plus => "+",
             Self::Asterisk => "*",
             Self::Slash => "/",
-            Self::Greater => ">",
             Self::Hyphen => "-",
             Self::Comma => ",",
             Self::Dot => ".",

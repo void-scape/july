@@ -1,16 +1,14 @@
 use self::ctx::InterpCtx;
-use crate::air::{Air, AirFunc, Bits, ConstData, IntKind, OffsetVar};
+use crate::air::{Air, AirFunc, Bits, ConstData, IntKind, OffsetVar, Prim};
 use crate::ir::ctx::Ctx;
-use crate::ir::sig::{Linkage, Sig};
+use crate::ir::sig::{Linkage, Param, Sig};
 use crate::ir::ty::store::TyId;
-use crate::ir::ty::{FloatTy, Ty, Width};
-use anstream::println;
+use crate::ir::ty::{FloatTy, Sign, Ty, Width};
 use core::str;
 use libffi::low::CodePtr;
 use libffi::middle::{Arg, Cif, Type};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_void};
-use std::ops::BitXor;
 
 mod ctx;
 mod stack;
@@ -74,8 +72,6 @@ fn entry(
 
         ctx.incr_instr();
     }
-
-    println!("\nstack: {:?} bytes", ctx.stack.len() * 8);
     ctx.a.r() as i32
 }
 
@@ -113,13 +109,31 @@ macro_rules! float_op {
 }
 
 macro_rules! int_op {
-    ($ctx:expr, $width:expr, $op:tt) => {
+    ($ctx:expr, $width:expr, $sign:expr, $op:tt) => {
         match $width {
-            Width::W8 => $ctx.a.w(($ctx.a.r() as u8 $op $ctx.b.r() as u8) as u64),
-            Width::W16 => $ctx.a.w(($ctx.a.r() as u16 $op $ctx.b.r() as u16) as u64),
-            Width::W32 => $ctx.a.w(($ctx.a.r() as u32 $op $ctx.b.r() as u32) as u64),
-            Width::W64 => $ctx.a.w(($ctx.a.r() $op $ctx.b.r()) as u64),
+            Width::W8 => match $sign {
+                Sign::U => $ctx.a.w((($ctx.a.r() as u8) $op ($ctx.b.r() as u8)) as u64),
+                Sign::I => unsafe { $ctx.a.w(std::mem::transmute((($ctx.a.r() as i8) $op ($ctx.b.r() as i8)) as i64)) },
+            },
+            Width::W16 => match $sign {
+                Sign::U => $ctx.a.w((($ctx.a.r() as u16) $op ($ctx.b.r() as u16)) as u64),
+                Sign::I => unsafe { $ctx.a.w(std::mem::transmute((($ctx.a.r() as i16) $op ($ctx.b.r() as i16)) as i64)) },
+            },
+            Width::W32 => match $sign {
+                Sign::U => $ctx.a.w((($ctx.a.r() as u32) $op ($ctx.b.r() as u32)) as u64),
+                Sign::I => unsafe { $ctx.a.w(std::mem::transmute((($ctx.a.r() as i32) $op ($ctx.b.r() as i32)) as i64)) },
+            },
+            Width::W64 => match $sign {
+                Sign::U => $ctx.a.w((($ctx.a.r() as u64) $op ($ctx.b.r() as u64)) as u64),
+                Sign::I => unsafe { $ctx.a.w(std::mem::transmute((($ctx.a.r() as i64) $op ($ctx.b.r() as i64)) as i64)) },
+            },
         }
+    };
+}
+
+macro_rules! bit_op {
+    ($ctx:expr, $op:tt) => {
+        $ctx.a.w(($ctx.a.r() $op $ctx.b.r()) as u64)
     };
 }
 
@@ -255,17 +269,24 @@ fn execute<'a>(
 
                     let mut params = Vec::with_capacity(sig.params.len());
                     for param in sig.params.iter() {
-                        params.push(ctx.tys.ty(param.ty).libffi_type(ctx))
+                        match param {
+                            Param::Named { ty, .. } => {
+                                params.push(ctx.tys.ty(*ty).libffi_type(ctx))
+                            }
+                            Param::Slf(_) | Param::SlfRef(_) => {
+                                unreachable!()
+                            }
+                        }
                     }
 
-                    let ty = if sig.ty == ctx.tys.unit() {
+                    let ty = if sig.ty == TyId::UNIT {
                         Type::void()
                     } else {
                         ctx.tys.ty(sig.ty).libffi_type(ctx)
                     };
                     let cif = Cif::new(params.into_iter(), ty);
 
-                    let size = if sig.ty == ctx.tys.unit() {
+                    let size = if sig.ty == TyId::UNIT {
                         0
                     } else {
                         ctx.tys.ty(sig.ty).size(ctx)
@@ -418,6 +439,10 @@ fn execute<'a>(
             ctx.stack
                 .write_bits(Bits::from_width(data_bits, *width), addr as usize);
         }
+        Air::Deref { dst, addr } => {
+            let addr = ctx.r(*addr);
+            ctx.stack.point(dst.var, dst.offset + addr as usize);
+        }
 
         Air::SwapReg => {
             let tmp = ctx.a.r();
@@ -437,14 +462,16 @@ fn execute<'a>(
             ctx.w(*reg, bits);
         }
 
-        Air::AddAB(width) => int_op!(ctx, width, +),
-        Air::SubAB(width) => int_op!(ctx, width, -),
-        Air::MulAB(width) => int_op!(ctx, width, *),
-        Air::DivAB(width) => int_op!(ctx, width, /),
-        Air::XorAB(width) => int_op!(ctx, width, ^),
+        Air::AddAB(width, sign) => int_op!(ctx, width, sign, +),
+        Air::SubAB(width, sign) => int_op!(ctx, width, sign, -),
+        Air::MulAB(width, sign) => int_op!(ctx, width, sign, *),
+        Air::DivAB(width, sign) => int_op!(ctx, width, sign, /),
+        Air::XorAB => bit_op!(ctx, ^),
 
-        Air::EqAB(width) => int_op!(ctx, width, ==),
-        Air::NEqAB(width) => int_op!(ctx, width, !=),
+        Air::EqAB(width, sign) => int_op!(ctx, width, sign, ==),
+        Air::NEqAB(width, sign) => int_op!(ctx, width, sign, !=),
+        Air::LtAB(width, sign) => int_op!(ctx, width, sign, <),
+        Air::GtAB(width, sign) => int_op!(ctx, width, sign, >),
 
         Air::FAddAB(width) => float_op!(ctx, width, +),
         Air::FSubAB(width) => float_op!(ctx, width, -),
@@ -453,6 +480,8 @@ fn execute<'a>(
 
         Air::FEqAB(width) => float_op!(Cmp, ctx, width, ==),
         Air::NFEqAB(width) => float_op!(Cmp, ctx, width, !=),
+        Air::FLtAB(width) => float_op!(Cmp, ctx, width, <),
+        Air::FGtAB(width) => float_op!(Cmp, ctx, width, >),
 
         Air::FSqrt(ty) => match ty {
             FloatTy::F32 => {
@@ -464,12 +493,149 @@ fn execute<'a>(
             }
         },
 
-        Air::XOR(mask) => {
-            ctx.a.w(mask.bitxor(ctx.a.r()));
-        }
+        Air::CastA { from, to, width } => {
+            let bytes = ctx.a.r().to_le_bytes();
 
-        Air::Fu32 => {
-            ctx.a.w(f32::from_bits(ctx.a.r() as u32) as u32 as u64);
+            match from {
+                Prim::Bool => match to {
+                    Prim::UInt | Prim::Bool => {}
+                    Prim::Int => {
+                        let b = ctx.a.r();
+                        ctx.a.w(if b == 1 { 1u64 as u64 } else { 0u64 as u64 });
+                    }
+                    Prim::Float => unreachable!(),
+                },
+                Prim::Float => match to {
+                    Prim::Float => {}
+                    Prim::UInt => match width {
+                        Width::W32 => {
+                            ctx.a.w(f32::from_le_bytes(
+                                bytes[..std::mem::size_of::<f32>()].try_into().unwrap(),
+                            ) as u32 as u64);
+                        }
+                        Width::W64 => {
+                            ctx.a.w(f64::from_le_bytes(
+                                bytes[..std::mem::size_of::<f64>()].try_into().unwrap(),
+                            ) as u64);
+                        }
+                        _ => unreachable!(),
+                    },
+                    Prim::Int => match width {
+                        Width::W32 => {
+                            unsafe {
+                                ctx.a.w(std::mem::transmute(f32::from_le_bytes(
+                                    bytes[..std::mem::size_of::<f32>()].try_into().unwrap(),
+                                ) as i32
+                                    as i64))
+                            };
+                        }
+                        Width::W64 => {
+                            unsafe {
+                                ctx.a.w(std::mem::transmute(f64::from_le_bytes(
+                                    bytes[..std::mem::size_of::<f64>()].try_into().unwrap(),
+                                )
+                                    as i64))
+                            };
+                        }
+                        _ => unreachable!(),
+                    },
+                    Prim::Bool => unreachable!(),
+                },
+                Prim::UInt => match to {
+                    Prim::UInt => {}
+                    Prim::Bool => unreachable!(),
+                    Prim::Int => match width {
+                        Width::W8 => {
+                            unsafe {
+                                ctx.a.w(std::mem::transmute(u8::from_le_bytes(
+                                    bytes[..std::mem::size_of::<u8>()].try_into().unwrap(),
+                                ) as i8
+                                    as i64))
+                            };
+                        }
+                        Width::W16 => {
+                            unsafe {
+                                ctx.a.w(std::mem::transmute(u16::from_le_bytes(
+                                    bytes[..std::mem::size_of::<u16>()].try_into().unwrap(),
+                                ) as i16
+                                    as i64))
+                            };
+                        }
+                        Width::W32 => {
+                            unsafe {
+                                ctx.a.w(std::mem::transmute(u32::from_le_bytes(
+                                    bytes[..std::mem::size_of::<u32>()].try_into().unwrap(),
+                                ) as i32
+                                    as i64))
+                            };
+                        }
+                        Width::W64 => {
+                            unsafe {
+                                ctx.a.w(std::mem::transmute(u64::from_le_bytes(
+                                    bytes[..std::mem::size_of::<u64>()].try_into().unwrap(),
+                                )
+                                    as i64))
+                            };
+                        }
+                    },
+                    Prim::Float => match width {
+                        Width::W32 => {
+                            ctx.a.w((u32::from_le_bytes(
+                                bytes[..std::mem::size_of::<f32>()].try_into().unwrap(),
+                            ) as f32)
+                                .to_bits() as u64);
+                        }
+                        Width::W64 => {
+                            ctx.a.w((u64::from_le_bytes(
+                                bytes[..std::mem::size_of::<f64>()].try_into().unwrap(),
+                            ) as f64)
+                                .to_bits());
+                        }
+                        _ => unreachable!(),
+                    },
+                },
+                Prim::Int => match to {
+                    Prim::Int => {}
+                    Prim::Bool => unreachable!(),
+                    Prim::UInt => match width {
+                        Width::W8 => {
+                            ctx.a.w(i8::from_le_bytes(
+                                bytes[..std::mem::size_of::<u8>()].try_into().unwrap(),
+                            ) as u8 as u64);
+                        }
+                        Width::W16 => {
+                            ctx.a.w(i16::from_le_bytes(
+                                bytes[..std::mem::size_of::<u16>()].try_into().unwrap(),
+                            ) as u16 as u64);
+                        }
+                        Width::W32 => {
+                            ctx.a.w(i32::from_le_bytes(
+                                bytes[..std::mem::size_of::<u32>()].try_into().unwrap(),
+                            ) as u32 as u64);
+                        }
+                        Width::W64 => {
+                            ctx.a.w(i64::from_le_bytes(
+                                bytes[..std::mem::size_of::<u64>()].try_into().unwrap(),
+                            ) as u64);
+                        }
+                    },
+                    Prim::Float => match width {
+                        Width::W32 => {
+                            ctx.a.w((i32::from_le_bytes(
+                                bytes[..std::mem::size_of::<f32>()].try_into().unwrap(),
+                            ) as f32)
+                                .to_bits() as u64);
+                        }
+                        Width::W64 => {
+                            ctx.a.w((i64::from_le_bytes(
+                                bytes[..std::mem::size_of::<f64>()].try_into().unwrap(),
+                            ) as f64)
+                                .to_bits());
+                        }
+                        _ => unreachable!(),
+                    },
+                },
+            }
         }
 
         Air::Exit => {

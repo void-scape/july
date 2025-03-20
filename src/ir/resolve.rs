@@ -1,7 +1,6 @@
 use super::ty::infer::Integral;
 use super::Stmt;
 use super::*;
-use crate::air::IntKind;
 use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::{Ctx, CtxFmt};
 use crate::ir::sig::Param;
@@ -56,23 +55,31 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag<'a>> {
 }
 
 fn init_params(infer: &mut InferCtx, func: &Func) {
-    for Param {
-        ident,
-        ty,
-        ty_binding,
-        ..
-    } in func.sig.params.iter()
-    {
-        let var = infer.new_var(*ident);
-        infer.eq(var, *ty, *ty_binding);
+    for param in func.sig.params.iter() {
+        match param {
+            Param::Named {
+                span,
+                ty_binding,
+                ident,
+                ty,
+            } => {
+                let var = infer.new_var(*ident);
+                infer.eq(var, *ty, *ty_binding);
+            }
+            _ => todo!(),
+        }
     }
 }
 
-impl<'a> Expr<'a> {
+impl Expr<'_> {
     /// Fails when:
     ///     aquiring field access type Fails
     ///     ident is undefined
-    pub fn resolve_infer(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<InferTy, Diag<'a>> {
+    pub fn resolve_infer<'a>(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &InferCtx,
+    ) -> Result<InferTy, Diag<'a>> {
         Ok(match self {
             Self::Lit(lit) => match lit.kind {
                 LitKind::Int(_) => InferTy::Int,
@@ -118,7 +125,9 @@ impl<'a> Expr<'a> {
                         assert_eq!(lhs, rhs);
                         lhs
                     }
-                    BinOpKind::Eq | BinOpKind::Ne => InferTy::Ty(TyId::BOOL),
+                    BinOpKind::Eq | BinOpKind::Ne | BinOpKind::Lt | BinOpKind::Gt => {
+                        InferTy::Ty(TyId::BOOL)
+                    }
                 }
             }
             Self::Bool(_) => InferTy::Ty(TyId::BOOL),
@@ -145,37 +154,71 @@ impl<'a> Expr<'a> {
                 }
                 block_infer
             }
-            Self::Array(arr_def) => {
-                if let Some(first) = arr_def.exprs.first() {
-                    let infer_ty = first.resolve_infer(ctx, infer)?;
-                    for expr in arr_def.exprs.iter().skip(1) {
-                        let next_infer_ty = expr.resolve_infer(ctx, infer)?;
-                        if next_infer_ty != infer_ty {
-                            return Err(ctx.mismatch(
-                                expr.span(),
-                                infer_ty.to_string(ctx),
-                                next_infer_ty.to_string(ctx),
-                            ));
+            Self::Array(arr_def) => match arr_def {
+                ArrDef::Elems { span, exprs } => {
+                    if let Some(first) = exprs.first() {
+                        let infer_ty = first.resolve_infer(ctx, infer)?;
+                        for expr in exprs.iter().skip(1) {
+                            let next_infer_ty = expr.resolve_infer(ctx, infer)?;
+                            if next_infer_ty != infer_ty {
+                                return Err(ctx.mismatch(
+                                    expr.span(),
+                                    infer_ty.to_string(ctx),
+                                    next_infer_ty.to_string(ctx),
+                                ));
+                            }
                         }
-                    }
 
-                    InferTy::Ty(match infer_ty {
-                        InferTy::Ty(ty) => ctx
-                            .tys
-                            .ty_id(&Ty::Array(arr_def.exprs.len(), ctx.intern(ctx.tys.ty(ty)))),
-                        InferTy::Int => ctx
-                            .tys
-                            .ty_id(&Ty::Array(arr_def.exprs.len(), &Ty::Int(IntTy::ISIZE))),
-                        InferTy::Float => ctx
-                            .tys
-                            .ty_id(&Ty::Array(arr_def.exprs.len(), &Ty::Float(FloatTy::F64))),
-                    })
-                } else {
-                    return Err(ctx.report_error(arr_def.span, "could not infer type of {array}"));
+                        // TODO: this isn't right, but there is no way to mark something as infer
+                        // inside an array (add array to InferTy)
+                        InferTy::Ty(match infer_ty {
+                            InferTy::Ty(ty) => ctx
+                                .tys
+                                .ty_id(&Ty::Array(exprs.len(), ctx.intern(ctx.tys.ty(ty)))),
+                            InferTy::Int => ctx
+                                .tys
+                                .ty_id(&Ty::Array(exprs.len(), &Ty::Int(IntTy::ISIZE))),
+                            InferTy::Float => ctx
+                                .tys
+                                .ty_id(&Ty::Array(exprs.len(), &Ty::Float(FloatTy::F64))),
+                        })
+                    } else {
+                        return Err(ctx.report_error(span, "could not infer type of {array}"));
+                    }
                 }
-            }
+                ArrDef::Repeated { expr, num, .. } => {
+                    // TODO: this is bad because it leads to no constraints on a var and cascades
+                    // type errors
+                    let num = match num {
+                        Expr::Lit(lit) => match lit.kind {
+                            LitKind::Int(int) => *int as usize,
+                            _ => {
+                                return Err(ctx.report_error(
+                                    num.span(),
+                                    "number of elements must be an {integer}",
+                                ))
+                            }
+                        },
+                        _ => {
+                            return Err(ctx.report_error(
+                                num.span(),
+                                "number of elements must be an {integer}",
+                            ))
+                        }
+                    };
+
+                    let inner = expr.resolve_infer(ctx, infer)?;
+                    InferTy::Ty(match inner {
+                        InferTy::Ty(ty) => {
+                            ctx.tys.ty_id(&Ty::Array(num, ctx.intern(ctx.tys.ty(ty))))
+                        }
+                        InferTy::Int => ctx.tys.ty_id(&Ty::Array(num, &Ty::Int(IntTy::ISIZE))),
+                        InferTy::Float => ctx.tys.ty_id(&Ty::Array(num, &Ty::Float(FloatTy::F64))),
+                    })
+                }
+            },
             Self::Unary(unary) => match unary.kind {
-                UOpKind::Not => unary.inner.resolve_infer(ctx, infer)?,
+                UOpKind::Not | UOpKind::Neg => unary.inner.resolve_infer(ctx, infer)?,
                 UOpKind::Ref => InferTy::Ty(match unary.inner.resolve_infer(ctx, infer)? {
                     InferTy::Ty(inner_ty) =>
                     // TODO: make ctx.tys.ty return a reference instead of interning
@@ -188,7 +231,15 @@ impl<'a> Expr<'a> {
                 UOpKind::Deref => InferTy::Ty(match unary.inner.resolve_infer(ctx, infer)? {
                     InferTy::Ty(inner_ty) => match ctx.tys.ty(inner_ty) {
                         Ty::Ref(inner) => ctx.tys.ty_id(inner),
-                        _ => panic!("invalid deref type"),
+                        inner => {
+                            return Err(ctx.report_error(
+                                unary.inner.span(),
+                                format!(
+                                    "cannot dereference value of type `{}`",
+                                    inner.to_string(ctx)
+                                ),
+                            ))
+                        }
                     },
                     InferTy::Float | InferTy::Int => panic!("invalid deref type"),
                 }),
@@ -198,7 +249,7 @@ impl<'a> Expr<'a> {
         })
     }
 
-    pub fn infer_equality(
+    pub fn infer_equality<'a>(
         &self,
         ctx: &mut Ctx<'a>,
         infer: &mut InferCtx,
@@ -232,7 +283,7 @@ impl<'a> Expr<'a> {
         Ok(())
     }
 
-    pub fn constrain_var(
+    pub fn constrain_var<'a>(
         &self,
         ctx: &mut Ctx<'a>,
         infer: &mut InferCtx,
@@ -242,12 +293,22 @@ impl<'a> Expr<'a> {
         match self.resolve_infer(ctx, infer)? {
             InferTy::Int => infer.integral(Integral::Int, var, span),
             InferTy::Float => infer.integral(Integral::Float, var, span),
-            InferTy::Ty(infer_ty) => infer.eq(var, infer_ty, span),
+            InferTy::Ty(infer_ty) => {
+                if infer.is_var_absolute(var)
+                    && infer
+                        .guess_var_ty(ctx, var)
+                        .is_some_and(|ty| ctx.tys.ty(ty).is_arr())
+                {
+                    // do nothing if already binded
+                } else {
+                    infer.eq(var, infer_ty, span)
+                }
+            }
         }
         Ok(())
     }
 
-    pub fn constrain_var_with(
+    pub fn constrain_var_with<'a>(
         &self,
         ctx: &mut Ctx<'a>,
         infer: &mut InferCtx,
@@ -271,17 +332,25 @@ impl<'a> Expr<'a> {
             }
             InferTy::Ty(infer_ty) => {
                 if ty != infer_ty {
-                    return Err(ctx.mismatch(span, ty, infer_ty.to_string(ctx)));
+                    match ctx.tys.ty(ty) {
+                        Ty::Array(_, _inner) => match ctx.tys.ty(infer_ty) {
+                            Ty::Array(_, _infer) => {
+                                // TODO: fix type inference
+                            }
+                            _ => return Err(ctx.mismatch(span, ty, infer_ty.to_string(ctx))),
+                        },
+                        _ => return Err(ctx.mismatch(span, ty, infer_ty.to_string(ctx))),
+                    }
                 }
+
                 infer.eq(var, ty, source)
             }
         }
         Ok(())
     }
 
-    #[track_caller]
-    pub fn constrain_with(
-        &self,
+    pub fn constrain_with<'a>(
+        &'a self,
         ctx: &mut Ctx<'a>,
         infer: &mut InferCtx,
         sig: &Sig<'a>,
@@ -352,29 +421,88 @@ impl<'a> Expr<'a> {
                 }
             },
             Expr::Bin(bin) => {
-                match bin.kind {
-                    BinOpKind::Eq | BinOpKind::Ne => {
-                        assert!(!bin.kind.output_is_input());
-                        if ty != TyId::BOOL {
-                            Err(ctx.mismatch(bin.span, ty, TyId::BOOL))
-                        } else {
-                            let infer_lhs = bin.lhs.resolve_infer(ctx, infer)?;
-                            let infer_rhs = bin.rhs.resolve_infer(ctx, infer)?;
-                            if !infer_lhs.equiv(infer_rhs, ctx) {
-                                Err(ctx.report_error(bin.span, "left hand side if of a different type than the right hand side"))
-                            } else {
-                                Ok(())
+                if !bin.kind.output_is_input() {
+                    assert!(!bin.kind.output_is_input());
+                    if ty != TyId::BOOL {
+                        Err(ctx.mismatch(bin.span, ty, TyId::BOOL))
+                    } else {
+                        bin.constrain(ctx, infer, sig)
+                    }
+                } else {
+                    assert!(bin.kind.output_is_input());
+                    bin.lhs.constrain_with(ctx, infer, sig, ty, source)?;
+                    bin.rhs.constrain_with(ctx, infer, sig, ty, source)
+                }
+            }
+            Expr::Array(arr) => {
+                let (len, inner_ty) = match ctx.tys.ty(ty) {
+                    Ty::Array(len, inner) => (len, ctx.tys.ty_id(inner)),
+                    _ => {
+                        let infer_ty = self.resolve_infer(ctx, infer)?;
+                        return Err(ctx.mismatch(arr.span(), ty, infer_ty.to_string(ctx)));
+                    }
+                };
+
+                match arr {
+                    ArrDef::Elems { exprs, span } => {
+                        if len != exprs.len() {
+                            return Err(ctx.report_error(
+                                span,
+                                format!("expected `{}` elements, got `{}`", len, exprs.len()),
+                            ));
+                        }
+
+                        for expr in exprs.iter() {
+                            expr.constrain_with(ctx, infer, sig, inner_ty, source)?;
+                        }
+                        Ok(())
+                    }
+                    ArrDef::Repeated { expr, num, .. } => {
+                        match num.resolve_infer(ctx, infer)? {
+                            InferTy::Int => {}
+                            InferTy::Float => {
+                                return Err(ctx.mismatch(num.span(), "{integer}", "{float}"));
+                            }
+                            InferTy::Ty(ty) => {
+                                let ty = ctx.tys.ty(ty);
+                                if !ty.is_int() {
+                                    return Err(ctx.mismatch(num.span(), "{integer}", ty));
+                                }
                             }
                         }
-                    }
-                    _ => {
-                        assert!(bin.kind.output_is_input());
-                        bin.lhs.constrain_with(ctx, infer, sig, ty, source)?;
-                        bin.rhs.constrain_with(ctx, infer, sig, ty, source)
+
+                        // TODO: const eval of num?
+                        // if len != *num {
+                        //     return Err(ctx.report_error(
+                        //         span,
+                        //         format!("expected `{}` elements, got `{}`", len, num),
+                        //     ));
+                        // }
+
+                        expr.constrain_with(ctx, infer, sig, inner_ty, source)
                     }
                 }
             }
             _ => self.infer_equality(ctx, infer, ty, source),
+        }
+    }
+
+    pub fn find_ty_var(&self, ctx: &Ctx, infer: &mut InferCtx) -> Option<TyVar> {
+        match self {
+            Self::Ident(ident) => infer.var(ident.id),
+            Self::Bin(bin) => {
+                let lhs = bin.lhs.find_ty_var(ctx, infer);
+                let rhs = bin.rhs.find_ty_var(ctx, infer);
+                match (lhs, rhs) {
+                    (Some(lhs), Some(rhs)) => {
+                        infer.var_eq(ctx, lhs, rhs);
+                        Some(lhs)
+                    }
+                    (Some(var), _) | (_, Some(var)) => Some(var),
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 }
@@ -412,13 +540,28 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
         match self {
             SemiStmt::Let(let_) => match let_.lhs {
                 LetTarget::Ident(ident) => {
-                    let var = infer.new_var(ident);
+                    let mut errors = Vec::new();
 
-                    let_.rhs.constrain(ctx, infer, sig)?;
-                    if let Some((span, ty)) = let_.ty {
-                        let_.rhs.constrain_var_with(ctx, infer, ty, span, var)?;
+                    if let Err(diag) = let_.rhs.constrain(ctx, infer, sig) {
+                        errors.push(diag);
                     }
-                    let_.rhs.constrain_var(ctx, infer, var)?;
+
+                    infer.new_var_deferred(ident, |infer, var| {
+                        if let Some((span, ty)) = let_.ty {
+                            if let Err(diag) =
+                                let_.rhs.constrain_var_with(ctx, infer, ty, span, var)
+                            {
+                                errors.push(diag);
+                            }
+                        }
+                        if let Err(diag) = let_.rhs.constrain_var(ctx, infer, var) {
+                            errors.push(diag);
+                        }
+                    });
+
+                    if !errors.is_empty() {
+                        return Err(Diag::bundle(errors));
+                    }
                 }
             },
             SemiStmt::Ret(r) => {
@@ -457,10 +600,21 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
                         // assignable
                     }
                 }
+
                 if assign.rhs.is_unit(ctx) {
                     return Err(ctx.report_error(
                         assign.rhs.span(),
                         "cannot assign value to an expression of type `()`",
+                    ));
+                }
+
+                let lhs = assign.lhs.resolve_infer(ctx, infer)?;
+                let rhs = assign.rhs.resolve_infer(ctx, infer)?;
+                if !lhs.equiv(rhs, ctx) {
+                    return Err(ctx.mismatch(
+                        assign.rhs.span(),
+                        lhs.to_string(ctx),
+                        rhs.to_string(ctx),
                     ));
                 }
             }
@@ -507,33 +661,58 @@ impl<'a> Constrain<'a> for BinOp<'a> {
         infer: &mut InferCtx,
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
-        match self.kind {
-            BinOpKind::Eq | BinOpKind::Ne => {
-                assert!(!self.kind.output_is_input());
-                self.lhs.constrain(ctx, infer, sig)?;
-                self.rhs.constrain(ctx, infer, sig)?;
+        if !self.kind.output_is_input() {
+            self.lhs.constrain(ctx, infer, sig)?;
+            self.rhs.constrain(ctx, infer, sig)?;
 
-                let infer_lhs = self.lhs.resolve_infer(ctx, infer)?;
-                let infer_rhs = self.rhs.resolve_infer(ctx, infer)?;
-                if !infer_lhs.equiv(infer_rhs, ctx) {
-                    Err(ctx.report_error(
-                        self.span,
-                        format!(
-                            "operation terms are of different types: `{}` {} `{}`",
-                            infer_lhs.to_string(ctx),
-                            self.kind.as_str(),
-                            infer_rhs.to_string(ctx)
-                        ),
-                    ))
-                } else {
-                    Ok(())
+            // `var_eq` lhs and lhs if there are any ty vars
+            _ = Expr::Bin(*self).find_ty_var(ctx, infer);
+
+            let infer_lhs = self.lhs.resolve_infer(ctx, infer)?;
+            let infer_rhs = self.rhs.resolve_infer(ctx, infer)?;
+            if !infer_lhs.equiv(infer_rhs, ctx) {
+                Err(ctx.report_error(
+                    self.span,
+                    format!(
+                        "operation terms are of different types: `{}` {} `{}`",
+                        infer_lhs.to_string(ctx),
+                        self.kind.as_str(),
+                        infer_rhs.to_string(ctx)
+                    ),
+                ))
+            } else {
+                //println!();
+                if let InferTy::Ty(ty) = infer_lhs {
+                    //println!(
+                    //    "constraining rhs: {} => {:#?}",
+                    //    match self.rhs {
+                    //        Expr::Ident(ident) => ctx.expect_ident(ident.id).to_string(),
+                    //        expr => format!("{:#?}", expr),
+                    //    },
+                    //    ty.to_string(ctx)
+                    //);
+                    self.rhs
+                        .constrain_with(ctx, infer, sig, ty, self.lhs.span())?;
                 }
+
+                if let InferTy::Ty(ty) = infer_rhs {
+                    //println!(
+                    //    "constraining lhs: {} => {:#?}",
+                    //    match self.lhs {
+                    //        Expr::Ident(ident) => ctx.expect_ident(ident.id).to_string(),
+                    //        expr => format!("{:#?}", expr),
+                    //    },
+                    //    ty.to_string(ctx)
+                    //);
+                    self.lhs
+                        .constrain_with(ctx, infer, sig, ty, self.rhs.span())?;
+                }
+
+                Ok(())
             }
-            kind => {
-                assert!(self.kind.output_is_input(), "{kind:?}");
-                self.lhs.constrain(ctx, infer, sig)?;
-                self.rhs.constrain(ctx, infer, sig)
-            }
+        } else {
+            self.lhs.constrain(ctx, infer, sig)?;
+            self.rhs.constrain(ctx, infer, sig)
         }
     }
 }
@@ -545,7 +724,6 @@ impl<'a> Constrain<'a> for Access<'a> {
         infer: &mut InferCtx,
         _: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
-        assert!(matches!(self.lhs, Expr::Ident(_)));
         let _ = aquire_access_ty(ctx, infer, self)?;
         Ok(())
     }
@@ -558,15 +736,42 @@ impl<'a> Constrain<'a> for StructDef<'a> {
         infer: &mut InferCtx,
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
+        let mut errors = Vec::new();
+
         for field_def in self.fields.iter() {
             let field_map = ctx.tys.fields(self.id);
             let field_ty = field_map.field_ty(field_def.name.id).unwrap();
-            field_def
-                .expr
-                .constrain_with(ctx, infer, sig, field_ty, field_def.name.span)?;
+            if let Err(diag) =
+                field_def
+                    .expr
+                    .constrain_with(ctx, infer, sig, field_ty, field_def.name.span)
+            {
+                errors.push(diag);
+            }
         }
 
-        Ok(())
+        let strukt = ctx.tys.strukt(self.id);
+        if self.fields.len() != strukt.fields.len() {
+            let missing_fields = strukt
+                .fields
+                .iter()
+                .filter(|f| self.fields.iter().all(|inner| inner.name.id != f.name.id))
+                .collect::<Vec<_>>();
+            let mut msg = String::from("struct definition missing fields: ");
+            for (i, field) in missing_fields.iter().enumerate() {
+                if i > 0 {
+                    msg.push_str(", ");
+                }
+                msg.push_str(&format!("`{}`", ctx.expect_ident(field.name.id)));
+            }
+            errors.push(ctx.report_error(self.span, msg));
+        }
+
+        if !errors.is_empty() {
+            Err(Diag::bundle(errors))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -588,8 +793,20 @@ impl<'a> Constrain<'a> for ArrDef<'a> {
         infer: &mut InferCtx,
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
-        for expr in self.exprs.iter() {
-            expr.constrain(ctx, infer, sig)?;
+        match self {
+            ArrDef::Elems { exprs, .. } => {
+                for expr in exprs.iter() {
+                    expr.constrain(ctx, infer, sig)?;
+                }
+            }
+            ArrDef::Repeated { expr, .. } => {
+                expr.constrain(ctx, infer, sig)?;
+                match expr.resolve_infer(ctx, infer)? {
+                    InferTy::Int | InferTy::Float => {}
+                    // TODO: ensure expr type can be copied
+                    InferTy::Ty(_) => {}
+                }
+            }
         }
 
         Ok(())
@@ -624,12 +841,20 @@ impl<'a> Constrain<'a> for Call<'a> {
             }
         } else {
             for (expr, param) in self.args.iter().zip(self.sig.params.iter()) {
+                let (span, ty) = match param {
+                    Param::Named { span, ty, .. } => (span, ty),
+                    param => {
+                        errors.push(ctx.report_error(param.span(), "invalid argument"));
+                        continue;
+                    }
+                };
+
                 expr.constrain(ctx, infer, sig)?;
                 match expr {
                     Expr::Ident(ident) => match infer.var(ident.id) {
                         Some(var) => {
                             if ctx.expect_ident(ident.id) != "NULL" {
-                                infer.eq(var, param.ty, param.span);
+                                infer.eq(var, *ty, *span);
                             }
                         }
                         None => {
@@ -637,7 +862,7 @@ impl<'a> Constrain<'a> for Call<'a> {
                         }
                     },
                     _ => {
-                        if let Err(diag) = expr.infer_equality(ctx, infer, param.ty, param.span) {
+                        if let Err(diag) = expr.infer_equality(ctx, infer, *ty, *span) {
                             errors.push(diag);
                         }
                     }
@@ -736,9 +961,9 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
         infer: &mut InferCtx,
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
-        validate_loop_block(ctx, sig, &self.block)?;
-        Expr::Block(self.block).infer_equality(ctx, infer, TyId::UNIT, self.span)?;
         infer.in_scope(ctx, |ctx, infer| {
+            self.iterable.constrain(ctx, infer, sig)?;
+
             match self.iterable {
                 Expr::Range(range) => {
                     match (range.start, range.end) {
@@ -770,17 +995,16 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
                     }
                     InferTy::Int | InferTy::Float => {
                         Err(ctx.report_error(self.iterable.span(), "expression is not iterable"))
-                    } //None => Err(ctx.report_error(
-                      //    self.iterable.span(),
-                      //    "expression is not iterable: failed to infer expression type",
-                      //)),
+                    }
                 },
                 _ => Err(ctx.report_error(self.iterable.span(), "expression is not iterable")),
             }?;
 
             self.iter.constrain(ctx, infer, sig)?;
-            self.iterable.constrain(ctx, infer, sig)?;
-            self.block.constrain(ctx, infer, sig)
+            self.block.constrain(ctx, infer, sig)?;
+
+            validate_loop_block(ctx, sig, &self.block)?;
+            Expr::Block(self.block).infer_equality(ctx, infer, TyId::UNIT, self.span)
         })
     }
 }
@@ -955,6 +1179,11 @@ impl<'a> Constrain<'a> for Unary<'a> {
                 inner: self.inner,
             }
             .constrain(ctx, infer, sig),
+            UOpKind::Neg => Neg {
+                span: self.span,
+                inner: self.inner,
+            }
+            .constrain(ctx, infer, sig),
         }
     }
 }
@@ -991,22 +1220,22 @@ impl<'a> Constrain<'a> for Deref<'a> {
     ) -> Result<(), Diag<'a>> {
         self.inner.constrain(ctx, infer, sig)?;
         match self.inner.resolve_infer(ctx, infer)? {
-            InferTy::Ty(ty) => {
-                match ctx.tys.ty(ty) {
-                    Ty::Ref(&Ty::Str) => Err(ctx
-                        .report_error(self.span, "expression of ty `&str` cannot be dereferenced")),
-                    Ty::Ref(_) => Ok(()),
-                    ty => Err(ctx.report_error(
-                        self.span,
-                        format!(
-                            "expression of ty `{}` cannot be dereferenced",
-                            ty.to_string(ctx)
-                        ),
-                    )),
-                }
-            }
+            InferTy::Ty(ty) => match ctx.tys.ty(ty) {
+                Ty::Ref(&Ty::Str) => Err(ctx.report_error(
+                    self.span,
+                    "expression of type `&str` cannot be dereferenced",
+                )),
+                Ty::Ref(_) => Ok(()),
+                ty => Err(ctx.report_error(
+                    self.inner.span(),
+                    format!(
+                        "expression of type `{}` cannot be dereferenced",
+                        ty.to_string(ctx)
+                    ),
+                )),
+            },
             InferTy::Int | InferTy::Float => {
-                Err(ctx.report_error(self.span, "expression cannot be dereferenced"))
+                Err(ctx.report_error(self.span, "literal cannot be dereferenced"))
             }
         }
     }
@@ -1025,6 +1254,43 @@ impl<'a> Constrain<'a> for Not<'a> {
         infer: &mut InferCtx,
         sig: &Sig<'a>,
     ) -> Result<(), Diag<'a>> {
+        self.inner.constrain(ctx, infer, sig)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct Neg<'a> {
+    pub span: Span,
+    pub inner: &'a Expr<'a>,
+}
+
+impl<'a> Constrain<'a> for Neg<'a> {
+    fn constrain(
+        &self,
+        ctx: &mut Ctx<'a>,
+        infer: &mut InferCtx,
+        sig: &Sig<'a>,
+    ) -> Result<(), Diag<'a>> {
+        match self.inner.resolve_infer(ctx, infer)? {
+            InferTy::Int | InferTy::Float => {}
+            InferTy::Ty(ty) => match ctx.tys.ty(ty) {
+                Ty::Int(int) => {
+                    if int.sign() == Sign::U {
+                        return Err(ctx.report_error(
+                            self.span,
+                            format!("cannot negate a value of type `{}`", ty.to_string(ctx)),
+                        ));
+                    }
+                }
+                Ty::Float(_) => {}
+                ty => {
+                    return Err(ctx.report_error(
+                        self.span,
+                        format!("cannot negate a value of type `{}`", ty.to_string(ctx)),
+                    ))
+                }
+            },
+        }
         self.inner.constrain(ctx, infer, sig)
     }
 }
@@ -1167,24 +1433,18 @@ impl<'a> Constrain<'a> for StrLit<'a> {
 }
 
 pub fn aquire_access_ty<'a>(
-    ctx: &Ctx<'a>,
+    ctx: &mut Ctx<'a>,
     infer: &InferCtx,
     access: &Access,
 ) -> Result<(Span, TyId), Diag<'a>> {
-    let ty_var = match access.lhs {
-        Expr::Ident(ident) => infer.var(ident.id).ok_or_else(|| ctx.undeclared(ident))?,
-        _ => unimplemented!(),
+    let ty = match access.lhs.resolve_infer(ctx, infer)? {
+        InferTy::Float | InferTy::Int => {
+            return Err(ctx.report_error(access.lhs.span(), "invalid access: literal has no fields"))
+        }
+        InferTy::Ty(ty) => ctx.tys.ty(ty),
     };
 
-    let Some(ty) = infer.guess_var_ty(ctx, ty_var) else {
-        return Err(ctx.report_error(
-            access.lhs.span(),
-            format!("failed to infer type of `{}`", infer.var_ident(ctx, ty_var)),
-        ));
-    };
-    let ty = ctx.tys.ty(ty);
-
-    let id = match ty.peel_refs().0 {
+    let id = match ty {
         Ty::Struct(id) => id,
         Ty::Array(_, _)
         | Ty::Int(_)
@@ -1196,17 +1456,13 @@ pub fn aquire_access_ty<'a>(
             return Err(ctx.report_error(
                 access.lhs.span(),
                 format!(
-                    "invalid access: `{}` is of type `{}`, which has no fields",
-                    match access.lhs {
-                        Expr::Ident(ident) => ident.to_string(ctx),
-                        _ => unreachable!(),
-                    },
+                    "invalid access: value is of type `{}`, which has no fields",
                     ty.to_string(ctx)
                 ),
             ));
         }
     };
-    let mut strukt = ctx.tys.strukt(*id);
+    let mut strukt = ctx.tys.strukt(id);
 
     for (i, acc) in access.accessors.iter().rev().enumerate() {
         let Some(ty) = strukt.get_field_ty(acc.id) else {

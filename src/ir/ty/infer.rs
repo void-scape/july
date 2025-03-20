@@ -1,4 +1,4 @@
-use super::store::{TyId, TyStore};
+use super::store::TyId;
 use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey};
 use crate::diagnostic::{Diag, Msg};
 use crate::ir::ctx::Ctx;
@@ -98,6 +98,27 @@ impl InferCtx {
         ty_var
     }
 
+    #[track_caller]
+    pub fn new_var_deferred<'a, R>(
+        &'a mut self,
+        ident: Ident,
+        f: impl FnOnce(&mut Self, TyVar) -> R,
+    ) -> R {
+        let ty_var = self.init_var(ident);
+        let result = f(self, ty_var);
+
+        if self.tables.is_empty() {
+            self.tables.push(SymbolTable::default());
+        }
+
+        match self.tables.last_mut() {
+            Some(scope) => scope.register(ident, ty_var),
+            None => unreachable!(),
+        }
+
+        result
+    }
+
     fn init_var(&mut self, ident: Ident) -> TyVar {
         let idx = self.var_index;
         self.var_index += 1;
@@ -184,20 +205,28 @@ impl InferCtx {
     #[track_caller]
     pub fn var_eq(&mut self, ctx: &Ctx, var: TyVar, other: TyVar) {
         if let Some(ty) = self.guess_var_ty(ctx, other) {
-            self.eq(var, ty, self.var_span(other));
-        } else if let Some(ty) = self.guess_var_ty(ctx, var) {
-            self.eq(other, ty, self.var_span(var));
-        } else {
-            let span = self.var_span(var);
-            let other_span = self.var_span(other);
-            let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
-            cnsts.push(Cnst {
-                loc: std::panic::Location::caller().to_string(),
-                kind: CnstKind::Equate(other),
-                var: span,
-                src: other_span,
-            })
+            if self.is_var_absolute(other) {
+                self.eq(var, ty, self.var_span(other));
+                return;
+            }
         }
+
+        if let Some(ty) = self.guess_var_ty(ctx, var) {
+            if self.is_var_absolute(var) {
+                self.eq(other, ty, self.var_span(var));
+                return;
+            }
+        }
+
+        let span = self.var_span(var);
+        let other_span = self.var_span(other);
+        let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
+        cnsts.push(Cnst {
+            loc: std::panic::Location::caller().to_string(),
+            kind: CnstKind::Equate(other),
+            var: span,
+            src: other_span,
+        })
     }
 
     pub fn unify_top_scope<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {

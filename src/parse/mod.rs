@@ -1,5 +1,5 @@
 use self::matc::{Any, Colon, Ident, MatchTokenKind};
-use self::rules::prelude::{Const, Enum, ExternFunc, Func, Struct};
+use self::rules::prelude::{Const, Enum, ExternFunc, Func, Impl, Param, Struct};
 use self::rules::{PErr, ParserRule};
 use crate::diagnostic::{self, Diag};
 use crate::lex::buffer::*;
@@ -15,6 +15,7 @@ pub enum Item {
     #[allow(unused)]
     Enum(Enum),
     Struct(Struct),
+    Impl(Impl),
     Func(Func),
     Const(Const),
     Extern(ExternFunc),
@@ -41,8 +42,9 @@ impl Parser {
             ) {
                 (Some(TokenKind::Extern), _, _) => {
                     match rules::prelude::ExternFnRule::parse(&mut stream) {
-                        Err(diag) => {
-                            diags.push(diag);
+                        Err(e) => {
+                            diagnostic::report(e.into_diag());
+                            return Err(());
                         }
                         Ok(mut f) => {
                             if let Some(attr) = active_attribute.take() {
@@ -50,6 +52,21 @@ impl Parser {
                                     if let Err(diag) = f.parse_attr(&stream, &attr) {
                                         diags.push(diag);
                                     }
+                                }
+                            }
+
+                            for func in f.iter() {
+                                if let Some(_self) = func.params.iter().find(|p| {
+                                    matches!(p, Param::Slf(_)) || matches!(p, Param::SlfRef(_))
+                                }) {
+                                    diags.push(PErr::Fail(stream.full_error(
+                                        "extern function cannot contain `self`",
+                                        match _self {
+                                            Param::Slf(t) => stream.span(*t),
+                                            Param::SlfRef(t) => stream.span(*t),
+                                            _ => unreachable!(),
+                                        },
+                                    )));
                                 }
                             }
 
@@ -64,6 +81,16 @@ impl Parser {
                         }
                         Ok(a) => {
                             active_attribute = Some(a);
+                        }
+                    }
+                }
+                (Some(TokenKind::Impl), _, _) => {
+                    match rules::prelude::ImplRule::parse(&mut stream) {
+                        Err(diag) => {
+                            diags.push(diag);
+                        }
+                        Ok(i) => {
+                            items.push(Item::Impl(i));
                         }
                     }
                 }

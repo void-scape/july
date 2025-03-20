@@ -15,6 +15,7 @@ mod block;
 mod enom;
 mod expr;
 mod func;
+mod impul;
 mod konst;
 mod stmt;
 mod strukt;
@@ -28,6 +29,7 @@ pub mod prelude {
     pub use super::enom::*;
     pub use super::expr::*;
     pub use super::func::*;
+    pub use super::impul::*;
     pub use super::konst::*;
     pub use super::stmt::*;
     pub use super::strukt::*;

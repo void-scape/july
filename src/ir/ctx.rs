@@ -19,6 +19,7 @@ pub struct Ctx<'a> {
     pub funcs: Vec<Func<'a>>,
     pub arena: BlobArena,
     pub sigs: HashMap<IdentId, &'a Sig<'a>>,
+    pub impl_sigs: HashMap<(StructId, IdentId), &'a Sig<'a>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -26,6 +27,7 @@ impl<'a> Ctx<'a> {
         Self {
             idents: IdentStore::default(),
             sigs: HashMap::default(),
+            impl_sigs: HashMap::default(),
             tys: TyStore::new(),
             enums: EnumStore::default(),
             arena: BlobArena::default(),
@@ -173,8 +175,31 @@ impl<'a> Ctx<'a> {
         Ok(())
     }
 
+    pub fn store_impl_sigs(
+        &mut self,
+        strukt: StructId,
+        sigs: Vec<Sig<'a>>,
+    ) -> Result<(), Diag<'a>> {
+        for sig in sigs.into_iter() {
+            if let Some(other) = self.impl_sigs.insert((strukt, sig.ident), self.intern(sig)) {
+                return Err(self
+                    .report_error(
+                        sig.span,
+                        format!("`{}` is already defined", sig.ident.to_string(self)),
+                    )
+                    .msg(Msg::help(other.span, "previously defined here")));
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn get_sig(&self, ident: IdentId) -> Option<&'a Sig<'a>> {
         self.sigs.get(&ident).copied()
+    }
+
+    pub fn get_method_sig(&self, strukt: StructId, ident: IdentId) -> Option<&'a Sig<'a>> {
+        self.impl_sigs.get(&(strukt, ident)).copied()
     }
 
     #[track_caller]
