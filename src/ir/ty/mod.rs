@@ -16,6 +16,7 @@ pub enum Ty<'a> {
     Struct(StructId),
     Ref(&'a Ty<'a>),
     Array(usize, &'a Ty<'a>),
+    Slice(&'a Ty<'a>),
     Bool,
     Str,
     Unit,
@@ -30,7 +31,7 @@ impl<'a> Ty<'a> {
             Self::Unit => 0,
             Self::Bool => 1,
             Self::Ref(inner) => match inner {
-                Ty::Str => Self::FAT_PTR_SIZE,
+                Ty::Str | Ty::Slice(_) => Self::FAT_PTR_SIZE,
                 _ => Self::PTR_SIZE,
             },
             Self::Int(int) => int.size(),
@@ -38,6 +39,7 @@ impl<'a> Ty<'a> {
             Self::Str => panic!("size of str is unknown"),
             Self::Struct(id) => ctx.tys.struct_layout(*id).size,
             Self::Array(len, inner) => inner.size(ctx) * len,
+            Self::Slice(_) => todo!("size of slice is unknown"),
         }
     }
 
@@ -57,17 +59,27 @@ impl<'a> Ty<'a> {
         matches!(self, Self::Array(_, _))
     }
 
+    pub fn is_slice(&self) -> bool {
+        matches!(self, Self::Slice(_))
+    }
+
+    pub fn is_ref_slice(&self) -> bool {
+        matches!(self, Self::Ref(&Self::Slice(_)))
+    }
+
     pub fn is_castable(&self) -> bool {
         match self {
             Self::Struct(_)
             | Self::Ref(&Self::Str)
             | Self::Str
             | Self::Array(_, _)
+            | Self::Slice(_)
             | Self::Unit => false,
             Self::Int(_) | Self::Float(_) | Self::Bool | Self::Ref(_) => true,
         }
     }
 
+    #[track_caller]
     pub fn layout(&self, ctx: &Ctx) -> Layout {
         match self {
             Self::Unit => Layout::new(0, 1),
@@ -75,8 +87,10 @@ impl<'a> Ty<'a> {
             Self::Int(int) => int.layout(),
             Self::Float(float) => float.layout(),
             Self::Ref(&Self::Str) => Layout::FAT_PTR,
+            Self::Ref(&Self::Slice(_)) => Layout::FAT_PTR,
             Self::Str | Self::Ref(_) => Layout::PTR,
             Self::Array(len, inner) => inner.layout(ctx).to_array(*len),
+            Self::Slice(_) => todo!("unsized"),
             Self::Struct(id) => ctx.tys.struct_layout(*id),
         }
     }
@@ -112,7 +126,8 @@ impl<'a> Ty<'a> {
             Self::Int(int) => int.as_str().to_string(),
             Self::Float(float) => float.as_str().to_string(),
             Self::Struct(s) => ctx.expect_ident(ctx.tys.strukt(*s).name.id).to_string(),
-            Self::Array(len, inner) => format!("[{}] {}", len, inner.to_string(ctx)),
+            Self::Array(len, inner) => format!("[{}; {}]", inner.to_string(ctx), len),
+            Self::Slice(inner) => format!("[{}]", inner.to_string(ctx)),
         }
     }
 
@@ -297,9 +312,5 @@ impl TypeKey {
             .get(&ident)
             .map(Vec::as_slice)
             .unwrap_or_else(|| &[])
-    }
-
-    pub fn ident_set_mut(&mut self, ident: IdentId) -> Option<&mut Vec<(Ident, TyId)>> {
-        self.key.get_mut(&ident)
     }
 }

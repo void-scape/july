@@ -1,3 +1,5 @@
+use clap::parser;
+
 use super::{Next, PErr, ParserRule, RResult};
 use crate::ir::AssignKind;
 use crate::lex::buffer::*;
@@ -55,18 +57,19 @@ impl<'a, 's> ParserRule<'a, 's> for LetRule {
             return Err(PErr::Recover(stream.error("expected `let`")));
         }
 
-        let (_let, name, ty, _equals, expr, _semi) = <(
-            Next<Let>,
-            Next<Ident>,
-            Opt<(Next<Colon>, TypeRule)>,
-            Next<Equals>,
-            ExprRule,
-            Next<Semi>,
-        ) as ParserRule>::parse(stream)
-        .map_err(PErr::fail)?;
+        let (_let, name) = <(Next<Let>, Next<Ident>)>::parse(stream).map_err(PErr::fail)?;
+        let ty = if Opt::<Next<Colon>>::parse(stream)?.is_some() {
+            Some(TypeRule::parse(stream).map_err(PErr::fail)?)
+        } else {
+            None
+        };
+
+        let (_equals, expr, _semi) =
+            <(Next<Equals>, ExprRule, Next<Semi>) as ParserRule>::parse(stream)
+                .map_err(PErr::fail)?;
 
         Ok(Stmt::Let {
-            ty: ty.map(|(_, t)| t),
+            ty,
             assign: expr,
             name,
         })

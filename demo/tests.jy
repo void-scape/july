@@ -292,18 +292,33 @@ scope: () {
 arr_ref_deref: () -> bool {
     let result = true;
 
-    let arr: [3] u8 = [0, 1, 2];
+    let arr: [u8; 3] = [0, 1, 2];
     let ref_arr = [&arr[0], &arr[1], &arr[2]];
     let deref_arr = [arr[0], arr[1], arr[2]];
 
     for i in 0..3 {
         if arr[i] != deref_arr[i] {
+            printf("invalid deref_arr\n");
             result = false;
         }
 
         if arr[i] != ref_arr[i]* {
+            printf("invalid ref_arr deref\n");
             result = false;
         }
+    }
+
+    let slice: &[u8] = &arr;
+    // let cannot_return: [u8; 3] = slice*;
+    for i in 0..3 {
+        assert(slice[i] == arr[i]);
+        slice[i] += 5;
+    }
+
+    let i = 0;
+    for val in slice {
+        assert(val* == arr[i]);
+        i += 1;
     }
 
     // shadow `arr`, but refer to previous `arr` in assignment
@@ -318,7 +333,8 @@ arr_ref_deref: () -> bool {
     let arr = [&arr[0], &arr[1], &arr[2]];
     let i = 0;
     for a in arr {
-        if deref_arr[i] != a** {
+        if deref_arr[i] + 5 != a** {
+            printf("invalid double deref\n");
             result = false;
         }
         i += 1;

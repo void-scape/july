@@ -28,6 +28,20 @@ impl TyId {
 
     /// Useful when the inner type does not matter and access to `TyStore` is immutable.
     pub const ANON_PTR: Self = Self::USIZE;
+
+    pub fn equiv(self, ctx: &Ctx, other: Self) -> bool {
+        if self == other {
+            return true;
+        }
+
+        let self_ty = ctx.tys.ty(self);
+        let other_ty = ctx.tys.ty(other);
+
+        match (self_ty, other_ty) {
+            (Ty::Ref(&Ty::Array(_, lhs)), Ty::Ref(&Ty::Slice(rhs))) => lhs == rhs,
+            _ => self_ty == other_ty,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -239,16 +253,7 @@ impl<'a> TyStore<'a> {
                 errors.push(ctx.report_error(field.span, "struct fields must be sized"));
             }
 
-            match field_ty {
-                Ty::Struct(id) => {
-                    let ty_id = struct_ty_map.get(&id).unwrap();
-                    let layout = layouts.get(ty_id).unwrap();
-                    struct_layouts.push(*layout);
-                }
-                _ => {
-                    struct_layouts.push(field_ty.layout(ctx));
-                }
-            }
+            struct_layouts.push(field_ty.layout_with(struct_ty_map, layouts));
         }
 
         let mut alignment = 1;
@@ -286,6 +291,31 @@ impl<'a> TyStore<'a> {
             Err(Diag::bundle(errors))
         } else {
             Ok(())
+        }
+    }
+}
+
+impl Ty<'_> {
+    #[track_caller]
+    pub fn layout_with(
+        &self,
+        struct_ty_map: &HashMap<StructId, TyId>,
+        layouts: &HashMap<TyId, Layout>,
+    ) -> Layout {
+        match self {
+            Self::Unit => Layout::new(0, 1),
+            Self::Bool => Layout::splat(1),
+            Self::Int(int) => int.layout(),
+            Self::Float(float) => float.layout(),
+            Self::Ref(&Self::Str) => Layout::FAT_PTR,
+            Self::Ref(&Self::Slice(_)) => Layout::FAT_PTR,
+            Self::Str | Self::Ref(_) => Layout::PTR,
+            Self::Array(len, inner) => inner.layout_with(struct_ty_map, layouts).to_array(*len),
+            Self::Slice(_) => todo!("unsized"),
+            Self::Struct(id) => {
+                let ty_id = struct_ty_map.get(&id).unwrap();
+                *layouts.get(ty_id).unwrap()
+            }
         }
     }
 }

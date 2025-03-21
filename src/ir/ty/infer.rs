@@ -275,7 +275,7 @@ impl InferCtx {
         for c in constraints.iter() {
             match &c.kind {
                 CnstKind::Ty(ty) => {
-                    if abs.is_some_and(|(abs, _)| abs != *ty) {
+                    if abs.is_some_and(|(abs, _): (TyId, _)| !ty.equiv(ctx, abs)) {
                         let ty_str = ctx.ty_str(abs.unwrap().0);
                         let other = ctx.ty_str(*ty);
 
@@ -297,7 +297,9 @@ impl InferCtx {
                             .msg(Msg::info(c.src, &c.loc)));
                     }
 
-                    abs = Some((*ty, c.src));
+                    if abs.is_none() {
+                        abs = Some((*ty, c.src));
+                    }
                 }
                 CnstKind::Integral(int) => {
                     integral = Some((c.src, *int));

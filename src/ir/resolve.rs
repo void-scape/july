@@ -134,6 +134,7 @@ impl Expr<'_> {
             Self::IndexOf(index) => match index.array.resolve_infer(ctx, infer)? {
                 InferTy::Ty(arr_ty) => match ctx.tys.ty(arr_ty) {
                     Ty::Array(_, inner) => InferTy::Ty(ctx.tys.get_ty_id(inner).unwrap()),
+                    Ty::Ref(&Ty::Slice(inner)) => InferTy::Ty(ctx.tys.get_ty_id(inner).unwrap()),
                     other => panic!("invalid array type for index of: {:?}", other),
                 },
                 other => panic!("invalid array type for index of: {:?}", other),
@@ -249,6 +250,7 @@ impl Expr<'_> {
         })
     }
 
+    #[track_caller]
     pub fn infer_equality<'a>(
         &self,
         ctx: &mut Ctx<'a>,
@@ -273,7 +275,7 @@ impl Expr<'_> {
                 }
             }
             InferTy::Ty(infer_ty) => {
-                if ty != infer_ty {
+                if !infer_ty.equiv(ctx, ty) {
                     return Err(ctx
                         .mismatch(span, ty, infer_ty.to_string(ctx))
                         .msg(Msg::help(source, "from this binding")));
@@ -331,7 +333,7 @@ impl Expr<'_> {
                 infer.integral(Integral::Float, var, source)
             }
             InferTy::Ty(infer_ty) => {
-                if ty != infer_ty {
+                if !infer_ty.equiv(ctx, ty) {
                     match ctx.tys.ty(ty) {
                         Ty::Array(_, _inner) => match ctx.tys.ty(infer_ty) {
                             Ty::Array(_, _infer) => {
@@ -610,7 +612,7 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
 
                 let lhs = assign.lhs.resolve_infer(ctx, infer)?;
                 let rhs = assign.rhs.resolve_infer(ctx, infer)?;
-                if !lhs.equiv(rhs, ctx) {
+                if !lhs.equiv(ctx, rhs) {
                     return Err(ctx.mismatch(
                         assign.rhs.span(),
                         lhs.to_string(ctx),
@@ -670,7 +672,7 @@ impl<'a> Constrain<'a> for BinOp<'a> {
 
             let infer_lhs = self.lhs.resolve_infer(ctx, infer)?;
             let infer_rhs = self.rhs.resolve_infer(ctx, infer)?;
-            if !infer_lhs.equiv(infer_rhs, ctx) {
+            if !infer_lhs.equiv(ctx, infer_rhs) {
                 Err(ctx.report_error(
                     self.span,
                     format!(
@@ -764,7 +766,12 @@ impl<'a> Constrain<'a> for StructDef<'a> {
                 }
                 msg.push_str(&format!("`{}`", ctx.expect_ident(field.name.id)));
             }
-            errors.push(ctx.report_error(self.span, msg));
+            let mut diag = ctx.report_error(self.span, msg);
+            for field in missing_fields.iter() {
+                diag = diag.msg(Msg::note_span(field.span));
+            }
+
+            errors.push(diag.msg(Msg::note(strukt.span, "defined here")));
         }
 
         if !errors.is_empty() {
@@ -826,13 +833,12 @@ impl<'a> Constrain<'a> for Call<'a> {
 
         let name = ctx.expect_ident(self.sig.ident);
         if params != args && (name != "printf" || (name == "printf" && args == 0)) {
-            errors.push(
-                ctx.report_error(
+            return Err(ctx
+                .report_error(
                     self.span,
                     format!("expected `{}` arguments, got `{}`", params, args),
                 )
-                .msg(Msg::help(self.sig.span, "function defined here")),
-            );
+                .msg(Msg::help(self.sig.span, "function defined here")));
         }
 
         if name == "printf" {
@@ -981,10 +987,10 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
                     }
                     Ok(())
                 }
-                Expr::Ident(_) => match self.iterable.resolve_infer(ctx, infer)? {
+                _ => match self.iterable.resolve_infer(ctx, infer)? {
                     InferTy::Ty(ty) => {
                         match ctx.tys.ty(ty) {
-                            Ty::Array(_, inner) => {
+                            Ty::Array(_, inner) | Ty::Ref(&Ty::Slice(inner)) => {
                                 let var = infer.new_var(self.iter);
                                 infer.eq(var, ctx.tys.ty_id(&Ty::Ref(inner)), self.iterable.span());
                                 Ok(())
@@ -997,7 +1003,6 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
                         Err(ctx.report_error(self.iterable.span(), "expression is not iterable"))
                     }
                 },
-                _ => Err(ctx.report_error(self.iterable.span(), "expression is not iterable")),
             }?;
 
             self.iter.constrain(ctx, infer, sig)?;
@@ -1322,6 +1327,7 @@ impl<'a> Constrain<'a> for IndexOf<'a> {
         match self.array.resolve_infer(ctx, infer)? {
             InferTy::Ty(infer_ty) => match ctx.tys.ty(infer_ty) {
                 Ty::Array(_, _) => Ok(()),
+                Ty::Ref(&Ty::Slice(_)) => Ok(()),
                 _ => Err(ctx.report_error(
                     self.array.span(),
                     format!(
@@ -1447,6 +1453,7 @@ pub fn aquire_access_ty<'a>(
     let id = match ty {
         Ty::Struct(id) => id,
         Ty::Array(_, _)
+        | Ty::Slice(_)
         | Ty::Int(_)
         | Ty::Unit
         | Ty::Bool
@@ -1485,6 +1492,7 @@ pub fn aquire_access_ty<'a>(
                 strukt = ctx.tys.strukt(id);
             }
             Ty::Array(_, _)
+            | Ty::Slice(_)
             | Ty::Int(_)
             | Ty::Unit
             | Ty::Bool

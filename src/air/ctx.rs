@@ -324,8 +324,8 @@ impl<'a> AirCtx<'a> {
             Ty::Bool => self.ret_ivar(var, Width::BOOL),
             Ty::Int(ty) => self.ret_ivar(var, ty.width()),
             Ty::Float(ty) => self.ret_ivar(var, ty.width()),
+            Ty::Array(_, _) | Ty::Slice(_) | Ty::Ref(&Ty::Str) | Ty::Struct(_) => self.ret_ptr(var),
             Ty::Ref(_) => self.ret_ivar(var, Width::PTR),
-            Ty::Array(_, _) | Ty::Struct(_) => self.ret_ptr(var),
             ty @ Ty::Unit | ty @ Ty::Str => panic!("cannot return {:?}", ty),
         }
     }

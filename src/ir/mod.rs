@@ -164,20 +164,37 @@ fn add_structs_recur<'a>(
     });
 
     for field in rules_strukt.fields.iter() {
-        match field.ty.peel_refs() {
-            rules::PType::Simple(id) => {
-                if !ctx.tys.is_builtin(ctx.ident(*id)) {
-                    if let Some(strukt) = field.ty.retrieve_struct(ctx, structs) {
-                        add_structs_recur(ctx, structs, defined, processing, strukt)?;
-                    } else {
-                        errors.push(
-                            ctx.report_error(field.ty.span(ctx.token_buffer()), "undefined type"),
-                        );
+        let mut ty = field.ty.peel_refs();
+
+        // TODO: introduce indirection detection so that structs can have references to themselves
+        loop {
+            match ty {
+                rules::PType::Simple(id) => {
+                    if !ctx.tys.is_builtin(ctx.ident(*id)) {
+                        if let Some(strukt) = field.ty.retrieve_struct(ctx, structs) {
+                            add_structs_recur(ctx, structs, defined, processing, strukt)?;
+                        } else {
+                            errors.push(
+                                ctx.report_error(
+                                    field.ty.span(ctx.token_buffer()),
+                                    "undefined type",
+                                ),
+                            );
+                        }
                     }
+
+                    break;
+                }
+                rules::PType::Array { inner, .. } => {
+                    ty = &*inner;
+                }
+                rules::PType::Slice { inner, .. } => {
+                    ty = &*inner;
+                }
+                rules::PType::Ref { inner, .. } => {
+                    ty = &*inner;
                 }
             }
-            rules::PType::Array { .. } => {}
-            rules::PType::Ref { .. } => unreachable!(),
         }
     }
 
@@ -236,7 +253,9 @@ fn report_struct_cycle<'a>(
         if let Some(field) = curr.strukt.fields.iter().find(|f| {
             ctx.store_ident(match f.ty {
                 rules::PType::Simple(id) => id,
-                rules::PType::Array { .. } | rules::PType::Ref { .. } => unreachable!(),
+                rules::PType::Array { .. }
+                | rules::PType::Slice { .. }
+                | rules::PType::Ref { .. } => unreachable!(),
             })
             .id == next.id
         }) {
@@ -599,6 +618,11 @@ fn ptype<'a>(ctx: &mut Ctx<'a>, ty: &rules::PType) -> Result<(Span, TyId), Diag<
             let inner_ty = ctx.intern(ctx.tys.ty(inner));
             (*span, ctx.tys.ty_id(&Ty::Array(*size, inner_ty)))
         }
+        rules::PType::Slice { span, inner } => {
+            let (_, inner) = ptype(ctx, inner)?;
+            let inner_ty = ctx.intern(ctx.tys.ty(inner));
+            (*span, ctx.tys.ty_id(&Ty::Slice(inner_ty)))
+        }
     })
 }
 
@@ -903,7 +927,7 @@ impl InferTy {
         matches!(self, InferTy::Ty(_))
     }
 
-    pub fn equiv(self, other: Self, ctx: &Ctx) -> bool {
+    pub fn equiv(self, ctx: &Ctx, other: Self) -> bool {
         match self {
             Self::Int => match other {
                 Self::Float => false,

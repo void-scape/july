@@ -137,6 +137,7 @@ pub fn aquire_accessor_field<'a>(ctx: &mut AirCtx<'a>, access: &'a Access) -> (O
                 strukt = ctx.tys.strukt(id);
             }
             Ty::Array(_, _)
+            | Ty::Slice(_)
             | Ty::Ref(_)
             | Ty::Str
             | Ty::Int(_)

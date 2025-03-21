@@ -36,7 +36,7 @@ Renderer: struct {
 
 Event: struct {
     event_type: u32,
-    padding: [124] u8,
+    padding: [u8; 124],
 }
 
 KeyboardEvent: struct {
@@ -52,7 +52,7 @@ KeyboardEvent: struct {
     down: bool,             /**< true if the key is pressed */
     repeat: bool,           /**< true if this is a key repeat */
 
-    padding: [88] u8,
+    padding: [u8; 88],
 }
 
 new_keyboard_event: () -> KeyboardEvent {
@@ -117,8 +117,6 @@ WIDTH          : const i32 = 900;
 HEIGHT         : const i32 = 600;
 DELAY_MS       : const u32 = 16;
 
-SPEED          : const f32 = 12.;
-
 Vec2: struct {
     x: f32,
     y: f32,
@@ -154,7 +152,20 @@ new_bullet: () -> Bullet {
 }
 
 NUM_BULLETS : const u32 = 5;
-BULLET_SPEED: const f32 = 15.;
+
+GameState: struct {
+    event: KeyboardEvent,
+
+    move_dir: [bool; 4],
+    player_pos: Vec2,
+
+    textures: [&Texture; 3],
+    index: u64,
+    selected_texture: &Texture,
+
+    bindex: u32,
+    bullets: [Bullet; 5],
+}
 
 main: () -> i32 {
     if !SDL_Init(SDL_INIT_VIDEO) {
@@ -174,143 +185,161 @@ main: () -> i32 {
         return 1;
     }
 
-    let bebop = load_bmp_texture(cs("./demo/bebop.bmp\0"), renderer);
-    if bebop as u64 == NULL {
-        return 1;
-    }
-    let guts = load_bmp_texture(cs("./demo/guts.bmp\0"), renderer);
-    if guts as u64 == NULL {
-        return 1;
-    }
-
-    let textures = [bebop, guts];
-    let index: u64 = 0;
-    let selected_texture = textures[index];
-
-    let bullet_bmp = load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer);
-    if bullet_bmp as u64 == NULL {
-        return 1;
-    }
-
-    let bindex = 0;
-    let bullets = [new_bullet(); 5];
-
-    let move_dir = [false, false, false, false];
-    let pos = Vec2 { x: 900. / 2., y: 400. };
-    let event = new_keyboard_event();
-
+    let state = startup(renderer);
     loop {
-        // input
-        if SDL_PollEvent(&event) {
-            if event.event_type == SDL_QUIT {
-                return 0;
-            }
-
-            if event.event_type == SDL_KEY_DOWN {
-                if event.key == SDLK_ESC { break; }
-
-                if event.key == SDLK_S { move_dir[DOWN]  = true; }
-                if event.key == SDLK_W { move_dir[UP]    = true; }
-                if event.key == SDLK_D { move_dir[RIGHT] = true; }
-                if event.key == SDLK_A { move_dir[LEFT]  = true; }
-
-                if event.key == SDLK_SPACE {
-                    let x = 0;
-                    for bullet in bullets {
-                        if x == bindex {
-                            bullet*.alive = true;
-                            bullet*.pos = pos;
-                        }
-                        x += 1;
-                    }
-
-                    bindex += 1;
-                    if bindex == NUM_BULLETS {
-                        bindex = 0;
-                    }
-                }
-
-                // flip texture
-                if event.key == SDLK_N {
-                    index = index ^ 1;
-                    selected_texture = textures[index];
-                }
-            }
-
-            if event.event_type == SDL_KEY_UP {
-                if event.key == SDLK_S { move_dir[DOWN]  = false; }
-                if event.key == SDLK_W { move_dir[UP]    = false; }
-                if event.key == SDLK_D { move_dir[RIGHT] = false; }
-                if event.key == SDLK_A { move_dir[LEFT]  = false; }
-            }
+        if handle_input(&state) == SDL_QUIT {
+            break;
         }
-
-        // update
-        let mov_vec = Vec2 { x: 0., y: 0. };
-        if move_dir[DOWN]  { mov_vec.y += 1.; }
-        if move_dir[UP]    { mov_vec.y -= 1.; }
-        if move_dir[RIGHT] { mov_vec.x += 1.; }
-        if move_dir[LEFT]  { mov_vec.x -= 1.; }
-
-        // let length = pos.length();
-        let length = sqrt_f32(mov_vec.x * mov_vec.x + mov_vec.y * mov_vec.y);
-        if length != 0. {
-            let norm = SPEED / length;
-            pos.x += mov_vec.x * norm;
-            pos.y += mov_vec.y * norm;
-        }
-
-        for bullet in bullets {
-            if bullet*.alive {
-                bullet*.pos.y -= BULLET_SPEED;
-
-                if bullet*.pos.y < 0.  {
-                    bullet*.alive = false;
-                }
-            }
-        }
-
-        // render
-        if !SDL_RenderClear(renderer) {
-            report_error("failed to render clear\n");
-            return 1;
-        }
-
-        let dst = FRect { x: 0., y: 0., w: 100., h: 100. };
-
-        for bullet in bullets {
-            if bullet*.alive {
-                dst.x = bullet*.pos.x;
-                dst.y = bullet*.pos.y;
-                draw_texture(renderer, bullet_bmp, &dst);
-            }
-        }
-
-        dst.x = pos.x;
-        dst.y = pos.y;
-        draw_texture(renderer, selected_texture, &dst);
-
-        if !SDL_RenderPresent(renderer) {
-            report_error("failed to render\n");
-            return 1;
-        }
-        SDL_Delay(DELAY_MS);
+        update(&state);
+        render(renderer, &state);
     }
 
     printf("exiting invaders\n");
     0
 }
 
-draw_texture: (renderer: &Renderer, texture: &Texture, dst: &FRect) -> bool {
+startup: (renderer: &Renderer) -> GameState {
+    let textures = [
+        load_bmp_texture(cs("./demo/bebop.bmp\0"), renderer),
+        load_bmp_texture(cs("./demo/guts.bmp\0"), renderer),
+        load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer),
+    ];
+
+    for texture in textures {
+        if texture* as u64 == NULL {
+            exit(1);
+        }
+    }
+
+    GameState {
+        event: new_keyboard_event(),
+
+        move_dir: [false, false, false, false],
+        player_pos: Vec2 { x: 900. / 2., y: 400. },
+
+        textures: textures,
+        index: 0,
+        selected_texture: textures[0],
+
+        bindex: 0,
+        bullets: [new_bullet(); 5],
+    }
+}
+
+handle_input: (state: &GameState) -> u32 {
+    loop {
+        if !SDL_PollEvent(&state*.event) {
+            break;
+        }
+
+        if state*.event.event_type == SDL_QUIT { return SDL_QUIT; }
+
+        if state*.event.event_type == SDL_KEY_DOWN {
+            if state*.event.key == SDLK_ESC { return SDL_QUIT; }
+
+            if state*.event.key == SDLK_S { state*.move_dir[DOWN]  = true; }
+            if state*.event.key == SDLK_W { state*.move_dir[UP]    = true; }
+            if state*.event.key == SDLK_D { state*.move_dir[RIGHT] = true; }
+            if state*.event.key == SDLK_A { state*.move_dir[LEFT]  = true; }
+
+            if state*.event.key == SDLK_SPACE {
+                let x = 0;
+                for bullet in state*.bullets {
+                    if x == state*.bindex {
+                        bullet*.alive = true;
+                        bullet*.pos = state*.player_pos;
+                    }
+                    x += 1;
+                }
+
+                state*.bindex += 1;
+                if state*.bindex == NUM_BULLETS {
+                    state*.bindex = 0;
+                }
+            }
+
+            // flip texture
+            if state*.event.key == SDLK_N {
+                state*.index = state*.index ^ 1;
+                state*.selected_texture = state*.textures[state*.index];
+            }
+        }
+
+        if state*.event.event_type == SDL_KEY_UP {
+            if state*.event.key == SDLK_S { state*.move_dir[DOWN]  = false; }
+            if state*.event.key == SDLK_W { state*.move_dir[UP]    = false; }
+            if state*.event.key == SDLK_D { state*.move_dir[RIGHT] = false; }
+            if state*.event.key == SDLK_A { state*.move_dir[LEFT]  = false; }
+        }
+    }
+
+    0
+}
+
+SPEED        : const f32 = 12.;
+BULLET_SPEED : const f32 = 17.;
+
+update: (state: &GameState) {
+    let mov_vec = Vec2 { x: 0., y: 0. };
+    if state*.move_dir[DOWN]  { mov_vec.y += 1.; }
+    if state*.move_dir[UP]    { mov_vec.y -= 1.; }
+    if state*.move_dir[RIGHT] { mov_vec.x += 1.; }
+    if state*.move_dir[LEFT]  { mov_vec.x -= 1.; }
+
+    // let length = pos.length();
+    let length = sqrt_f32(mov_vec.x * mov_vec.x + mov_vec.y * mov_vec.y);
+    if length != 0. {
+        let norm = SPEED / length;
+        state*.player_pos.x += mov_vec.x * norm;
+        state*.player_pos.y += mov_vec.y * norm;
+    }
+
+    for bullet in state*.bullets {
+        if bullet*.alive {
+            bullet*.pos.y -= BULLET_SPEED;
+
+            if bullet*.pos.y < 0.  {
+                bullet*.alive = false;
+            }
+        }
+    }
+}
+
+render: (renderer: &Renderer, state: &GameState) {
+    if !SDL_RenderClear(renderer) {
+        report_error("failed to render clear\n");
+        exit(1);
+    }
+
+    let dst = FRect { x: 0., y: 0., w: 100., h: 100. };
+
+    for bullet in state*.bullets {
+        if bullet*.alive {
+            dst.x = bullet*.pos.x;
+            dst.y = bullet*.pos.y;
+            draw_texture(renderer, state*.textures[2], &dst);
+        }
+    }
+
+    dst.x = state*.player_pos.x;
+    dst.y = state*.player_pos.y;
+    draw_texture(renderer, state*.selected_texture, &dst);
+
+    if !SDL_RenderPresent(renderer) {
+        report_error("failed to render\n");
+        exit(1);
+    }
+    SDL_Delay(DELAY_MS);
+}
+
+draw_texture: (renderer: &Renderer, texture: &Texture, dst: &FRect) {
     if !SDL_RenderTexture(renderer,
                           texture,
                           NULL,
                           dst) {
         report_error("failed to render texture\n");
-        return false;
+        exit(1);
     }
-
-    true
 }
 
 load_bmp_texture: (path: CStr, renderer: &Renderer) -> &Texture {
