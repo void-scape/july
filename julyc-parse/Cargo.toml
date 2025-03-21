@@ -1,0 +1,10 @@
+[package]
+name = "julyc-parse"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winnow = "0.6.24"
+variadics_please = "1.1.0"
+anstream = "0.6.18"
+annotate-snippets = "0.11.5"

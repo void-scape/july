@@ -243,17 +243,12 @@ handle_input: (state: &GameState) -> u32 {
             if state*.event.key == SDLK_A { state*.move_dir[LEFT]  = true; }
 
             if state*.event.key == SDLK_SPACE {
-                let x = 0;
-                for bullet in state*.bullets {
-                    if x == state*.bindex {
-                        bullet*.alive = true;
-                        bullet*.pos = state*.player_pos;
-                    }
-                    x += 1;
-                }
+                let bullet = &state*.bullets[state*.bindex as u64];
+                bullet*.alive = true;
+                bullet*.pos = state*.player_pos;
 
                 state*.bindex += 1;
-                if state*.bindex == NUM_BULLETS {
+                if state*.bindex >= NUM_BULLETS {
                     state*.bindex = 0;
                 }
             }
@@ -389,4 +384,3 @@ cs: (str: &str) -> CStr {}
 
 #[intrinsic]
 sqrt_f32: (f: f32) -> f32 {}
-

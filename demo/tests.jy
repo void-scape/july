@@ -13,11 +13,11 @@ main: () -> i32 {
     simple_for();
     scope();
     test(arr_ref_deref());
+    test(cast_clobber());
+    test(bitwise_ops());
 
     0
 }
-
-sp: () {}
 
 // ------------ Structs ------------
 
@@ -311,13 +311,19 @@ arr_ref_deref: () -> bool {
     let slice: &[u8] = &arr;
     // let cannot_return: [u8; 3] = slice*;
     for i in 0..3 {
-        assert(slice[i] == arr[i]);
+        if slice[i] != arr[i] {
+            printf("invalid slice indexing\n");
+            result = false;
+        }
         slice[i] += 5;
     }
 
     let i = 0;
     for val in slice {
-        assert(val* == arr[i]);
+        if val* != arr[i] {
+            printf("invalid slice iteration\n");
+            result = false;
+        }
         i += 1;
     }
 
@@ -341,6 +347,40 @@ arr_ref_deref: () -> bool {
     }
 
     result
+}
+
+cast_clobber: () -> bool {
+    let small    : u16 = 0x1111;
+    let _ = fill_reg();
+    let clobbered: u32 = small as u32;
+    clobbered != 0x44440000 | small as u32
+}
+
+fill_reg: () -> u32 {
+    0x44440000
+}
+
+bitwise_ops: () -> bool {
+    let ops = [
+        0b1100 & 0b0011 == 0,
+        0b1100 & 0b1111 == 0b1100,
+        0b1100 | 0b0011 == 0b1111,
+        0b1100 | 0b1111 == 0b1111,
+        0b0001 << 1 == 0b0010,
+        0b0100 << 1 == 0b1000,
+        0b0011 << 2 == 0b1100,
+        0b1000 >> 1 == 0b0100,
+        0b0010 >> 1 == 0b0001,
+        0b1100 >> 2 == 0b0011,
+    ];
+
+    for op in ops {
+        if !op* {
+            return false;
+        }
+    }
+
+    true
 }
 
 // ------------ Util ------------
