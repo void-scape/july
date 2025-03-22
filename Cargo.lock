@@ -114,9 +114,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.16"
+version = "1.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be714c154be609ec7f5dad223a33bf1482fff90472de28f7362806e6d4832b8c"
+checksum = "1fcb57c740ae1daf453ae85f16e37396f672b039e00d9d866e07ddb24e328e3a"
 dependencies = [
  "shlex",
 ]
@@ -367,43 +367,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "july-fmt"
-version = "0.1.0"
-dependencies = [
- "clap 4.5.32",
- "julyc",
- "julyc-arena",
- "julyc-parse",
-]
-
-[[package]]
-name = "julyc"
-version = "0.1.0"
-dependencies = [
- "clap 4.5.32",
- "criterion",
- "julyc-arena",
- "julyc-parse",
- "libc",
- "libffi",
- "libloading",
-]
-
-[[package]]
-name = "julyc-arena"
-version = "0.1.0"
-
-[[package]]
-name = "julyc-parse"
-version = "0.1.0"
-dependencies = [
- "annotate-snippets",
- "anstream",
- "variadics_please",
- "winnow",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -482,6 +445,43 @@ name = "os_str_bytes"
 version = "6.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2355d85b9a3786f481747ced0e0ff2ba35213a1f9bd406ed906554d7af805a1"
+
+[[package]]
+name = "pebble-fmt"
+version = "0.1.0"
+dependencies = [
+ "clap 4.5.32",
+ "pebblec",
+ "pebblec-arena",
+ "pebblec-parse",
+]
+
+[[package]]
+name = "pebblec"
+version = "0.1.0"
+dependencies = [
+ "clap 4.5.32",
+ "criterion",
+ "libc",
+ "libffi",
+ "libloading",
+ "pebblec-arena",
+ "pebblec-parse",
+]
+
+[[package]]
+name = "pebblec-arena"
+version = "0.1.0"
+
+[[package]]
+name = "pebblec-parse"
+version = "0.1.0"
+dependencies = [
+ "annotate-snippets",
+ "anstream",
+ "variadics_please",
+ "winnow",
+]
 
 [[package]]
 name = "plotters"
