@@ -17,6 +17,7 @@ libc = "0.2.170"
 libffi = "3.2.0"
 libloading = "0.8.6"
 julyc-parse = { path = "../julyc-parse" }
+julyc-arena = { path = "../julyc-arena" }
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }

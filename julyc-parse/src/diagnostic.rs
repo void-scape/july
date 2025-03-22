@@ -146,6 +146,14 @@ impl Msg {
         Self::new(Level::Error, span, label)
     }
 
+    pub fn warn(span: Span, label: impl Into<String>) -> Self {
+        Self::new(Level::Warning, span, label)
+    }
+
+    pub fn warn_span(span: Span) -> Self {
+        Self::new(Level::Warning, span, "")
+    }
+
     pub fn error_span(span: Span) -> Self {
         Self::new(Level::Error, span, "")
     }

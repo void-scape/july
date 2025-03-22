@@ -55,7 +55,6 @@ pub enum TokenKind {
     Pipe,
 }
 
-
 impl TokenKind {
     pub fn as_str(&self) -> &'static str {
         match self {

@@ -6,7 +6,7 @@ use julyc_parse::diagnostic::Diag;
 use julyc_parse::lex::buffer::Span;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enum {
     pub span: Span,
     pub name: Ident,
@@ -53,7 +53,7 @@ pub struct EnumDef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct EnumId(usize);
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EnumStore {
     pub(super) map: HashMap<IdentId, EnumId>,
     pub(super) layouts: HashMap<EnumId, Layout>,

@@ -23,7 +23,7 @@ mod data;
 /// byte-code and lowerable in a backend.
 ///
 /// TODO: break out IntKind in favor of byte slices with sign extension?
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Air<'a> {
     Ret,
 
@@ -155,7 +155,7 @@ pub enum Reg {
 }
 
 /// A reference optionally `offset` from `var`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OffsetVar {
     pub var: Var,
     pub offset: usize,
@@ -209,7 +209,7 @@ impl Sized for IntTy {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Bits {
     B8(u8),
     B16(u16),
@@ -289,7 +289,7 @@ impl Bits {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ConstData {
     Bits(Bits),
     Ptr(BssEntry),
@@ -327,6 +327,10 @@ impl<'a> AirFunc<'a> {
 
     pub fn start_block(&self) -> BlockId {
         BlockId(0)
+    }
+
+    pub fn instrs(&self) -> &[Air] {
+        &self.instrs
     }
 
     #[track_caller]
@@ -382,7 +386,7 @@ impl<'a> AirFuncBuilder<'a> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Args {
     pub vars: Vec<(TyId, Var)>,
 }

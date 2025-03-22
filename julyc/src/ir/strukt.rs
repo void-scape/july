@@ -5,7 +5,7 @@ use super::ty::store::TyId;
 use julyc_parse::lex::buffer::Span;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Struct {
     #[allow(unused)]
     pub span: Span,
@@ -33,7 +33,7 @@ impl Struct {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Field {
     pub span: Span,
     pub name: Ident,
@@ -54,7 +54,7 @@ pub struct FieldDef<'a> {
     pub expr: Expr<'a>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldMap {
     pub fields: HashMap<IdentId, (TyId, ByteOffset)>,
 }

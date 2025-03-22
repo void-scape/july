@@ -6,7 +6,7 @@ use crate::lex::kind::TokenKind;
 use crate::matc::{Ampersand, CloseBracket, Ident, Int, OpenBracket, Semi};
 use crate::stream::TokenStream;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PType {
     Simple(TokenId),
     Ref {

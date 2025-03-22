@@ -12,7 +12,7 @@ use crate::rules::strukt::StructDefRule;
 use crate::{AssignKind, BinOpKind, UOpKind};
 use crate::{matc::*, stream::TokenStream};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Break(TokenId),
     Continue(TokenId),
@@ -115,7 +115,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
     pub kind: AssignKind,
     pub lhs: Box<Expr>,
@@ -284,7 +284,7 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                     let (span, args) = ArgsRule::parse(stream).map_err(PErr::fail)?;
                     Ok(Expr::Call {
                         func: ident,
-                        span,
+                        span: Span::from_spans(stream.span(ident), span),
                         args,
                     })
                 }

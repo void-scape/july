@@ -4,9 +4,10 @@ use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*, stream::TokenStream};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Let {
+        let_: TokenId,
         name: TokenId,
         ty: Option<PType>,
         assign: Expr,
@@ -55,7 +56,7 @@ impl<'a, 's> ParserRule<'a, 's> for LetRule {
             return Err(PErr::Recover(stream.error("expected `let`")));
         }
 
-        let (_let, name) = <(Next<Let>, Next<Ident>)>::parse(stream).map_err(PErr::fail)?;
+        let (let_, name) = <(Next<Let>, Next<Ident>)>::parse(stream).map_err(PErr::fail)?;
         let ty = if Opt::<Next<Colon>>::parse(stream)?.is_some() {
             Some(TypeRule::parse(stream).map_err(PErr::fail)?)
         } else {
@@ -67,6 +68,7 @@ impl<'a, 's> ParserRule<'a, 's> for LetRule {
                 .map_err(PErr::fail)?;
 
         Ok(Stmt::Let {
+            let_,
             ty,
             assign: expr,
             name,

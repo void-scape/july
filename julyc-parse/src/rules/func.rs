@@ -1,18 +1,20 @@
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
+use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
 use crate::rules::PErr;
 use crate::stream::TokenStream;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Func {
     pub span: Span,
-    pub name: TokenId,
     pub attributes: Vec<Attr>,
-    pub ty: Option<PType>,
+    pub name: TokenId,
+    pub colon: TokenId,
     pub params: Vec<Param>,
+    pub ty: Option<PType>,
     pub block: Block,
 }
 
@@ -21,7 +23,7 @@ impl Func {
         &mut self,
         stream: &TokenStream<'a, 's>,
         attr: &Attribute,
-    ) -> Result<(), PErr<'s>> {
+    ) -> Result<(), Diag<'s>> {
         assert!(
             attr.tokens.len() == 1,
             "add more attribute parsing: {:#?}",
@@ -36,9 +38,7 @@ impl Func {
                 self.attributes.push(Attr::Intrinsic);
                 Ok(())
             }
-            str => Err(PErr::Fail(
-                stream.full_error(format!("invalid attribute `{}`", str), attr.span),
-            )),
+            str => Err(stream.full_error(format!("invalid attribute `{}`", str), attr.span)),
         }
     }
 }
@@ -48,7 +48,35 @@ pub enum Attr {
     Intrinsic,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternBlock {
+    pub span: Span,
+    pub exturn: TokenId,
+    pub convention: TokenId,
+    pub funcs: Vec<ExternFunc>,
+}
+
+impl ExternBlock {
+    pub fn parse_attr<'a, 's>(
+        &mut self,
+        stream: &TokenStream<'a, 's>,
+        attr: &Attribute,
+    ) -> Result<(), Diag<'s>> {
+        assert!(attr.tokens.len() == 4, "add more attribute parsing");
+
+        if attr.tokens.first().map(|t| stream.as_str(*t)) == Some("link") {
+            for func in self.funcs.iter_mut() {
+                func.link = Some(*attr.tokens.get(2).unwrap());
+            }
+
+            Ok(())
+        } else {
+            Err(stream.full_error("invalid attributes for external function", attr.span))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternFunc {
     pub span: Span,
     pub name: TokenId,
@@ -58,28 +86,7 @@ pub struct ExternFunc {
     pub link: Option<TokenId>,
 }
 
-impl ExternFunc {
-    pub fn parse_attr<'a, 's>(
-        &mut self,
-        stream: &TokenStream<'a, 's>,
-        attr: &Attribute,
-    ) -> Result<(), PErr<'s>> {
-        assert!(attr.tokens.len() == 4, "add more attribute parsing");
-
-        if attr.tokens.first().map(|t| stream.as_str(*t)) == Some("link") {
-            self.link = Some(*attr.tokens.get(2).unwrap());
-
-            Ok(())
-        } else {
-            Err(PErr::Fail(stream.full_error(
-                "invalid attributes for external function",
-                attr.span,
-            )))
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Param {
     Slf(TokenId),
     SlfRef(TokenId),
@@ -109,13 +116,14 @@ impl<'a, 's> ParserRule<'a, 's> for FnRule {
                 match BlockRules::parse(stream) {
                     Ok(block) => {
                         let span = res.span();
-                        let (name, _, params, ty) = res.into_inner();
+                        let (name, colon, params, ty) = res.into_inner();
                         Ok(Func {
-                            ty: ty.map(|(_, _, t)| t),
-                            attributes: Vec::new(),
-                            params,
                             span,
+                            attributes: Vec::new(),
                             name,
+                            colon,
+                            params,
+                            ty: ty.map(|(_, _, ty)| ty),
                             block,
                         })
                     }
@@ -157,15 +165,16 @@ impl<'a, 's> ParserRule<'a, 's> for FnRule {
 pub struct ExternFnRule;
 
 impl<'a, 's> ParserRule<'a, 's> for ExternFnRule {
-    type Output = Vec<ExternFunc>;
+    type Output = ExternBlock;
 
+    #[track_caller]
     fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         if !stream.match_peek::<Extern>() {
             return Err(PErr::Recover(stream.error("expected `extern`")));
         }
+        let exturn = stream.expect();
 
         let res = Spanned::<(
-            Next<Extern>,
             Next<OpenParen>,
             Next<Str>,
             Next<CloseParen>,
@@ -184,22 +193,27 @@ impl<'a, 's> ParserRule<'a, 's> for ExternFnRule {
         )>::parse(stream)
         .map_err(PErr::fail)?;
 
-        let (_, _, convention, _, _, funcs, _) = res.into_inner();
-        Ok(funcs
-            .into_iter()
-            .map(|spanned| {
-                let span = spanned.span();
-                let (name, _, params, ty, _) = spanned.into_inner();
-                ExternFunc {
-                    ty: ty.map(|(_, _, t)| t),
-                    params,
-                    span,
-                    name,
-                    convention,
-                    link: None,
-                }
-            })
-            .collect())
+        let (_, convention, _, _, funcs, end) = res.into_inner();
+        Ok(ExternBlock {
+            span: Span::from_spans(stream.span(exturn), stream.span(end)),
+            exturn,
+            convention,
+            funcs: funcs
+                .into_iter()
+                .map(|spanned| {
+                    let span = spanned.span();
+                    let (name, _, params, ty, _) = spanned.into_inner();
+                    ExternFunc {
+                        ty: ty.map(|(_, _, t)| t),
+                        params,
+                        span,
+                        name,
+                        convention,
+                        link: None,
+                    }
+                })
+                .collect(),
+        })
     }
 }
 
@@ -211,17 +225,19 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
 
     fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let str = *stream;
-        match Next::<OpenParen>::parse(stream) {
+        let _open = match Next::<OpenParen>::parse(stream) {
             Err(err) => {
                 *stream = str;
                 return Err(err.fail());
             }
             Ok(_) => {}
-        }
+        };
+
         if !stream.match_peek::<CloseParen>() {
             let index = stream.find_matched_delim_offset::<Paren>();
             let mut slice = stream.slice(index);
-            stream.eat_n(index + 1);
+            stream.eat_n(index);
+            let _close = stream.expect();
 
             let mut params = Vec::new();
             loop {
@@ -247,20 +263,16 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
                     }
                     _ => {
                         let (name, colon, ty, comma) =
-                            <(
-                                Next<Ident>,
-                                Next<Colon>,
-                                //Reported<Next<Colon>, MissingTyBinding>,
-                                TypeRule,
-                                Opt<Next<Comma>>,
-                            )>::parse(&mut slice)?;
+                            <(Next<Ident>, Next<Colon>, TypeRule, Opt<Next<Comma>>)>::parse(
+                                &mut slice,
+                            )?;
                         params.push((comma, Param::Named { name, colon, ty }));
                     }
                 }
             }
 
             if params.len() > 1 {
-                for (i, (comma, param)) in params.iter().enumerate() {
+                for (i, (comma, _param)) in params.iter().enumerate() {
                     if i < params.len() - 1 {
                         if comma.is_none() {
                             return Err(PErr::Fail(stream.error(format!(
@@ -273,7 +285,7 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
 
             Ok(params.into_iter().map(|(_, param)| param).collect())
         } else {
-            stream.expect();
+            let _close = stream.expect();
             Ok(Vec::new())
         }
     }

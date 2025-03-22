@@ -11,7 +11,7 @@ use winnow::{
 };
 
 pub mod buffer;
-mod io;
+pub mod io;
 pub mod kind;
 pub mod source;
 

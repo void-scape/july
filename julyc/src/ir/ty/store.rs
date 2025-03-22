@@ -44,7 +44,7 @@ impl TyId {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct TyStore<'a> {
     ty_map: HashMap<Ty<'a>, TyId>,
     tys: Vec<Ty<'a>>,

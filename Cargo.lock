@@ -367,16 +367,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "july-fmt"
+version = "0.1.0"
+dependencies = [
+ "clap 4.5.32",
+ "julyc",
+ "julyc-arena",
+ "julyc-parse",
+]
+
+[[package]]
 name = "julyc"
 version = "0.1.0"
 dependencies = [
  "clap 4.5.32",
  "criterion",
+ "julyc-arena",
  "julyc-parse",
  "libc",
  "libffi",
  "libloading",
 ]
+
+[[package]]
+name = "julyc-arena"
+version = "0.1.0"
 
 [[package]]
 name = "julyc-parse"

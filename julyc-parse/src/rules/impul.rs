@@ -5,7 +5,8 @@ use crate::rules::PErr;
 use crate::stream::TokenStream;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*};
 
-#[derive(Debug)]
+#[allow(unused)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Impl {
     span: Span,
     ident: TokenId,

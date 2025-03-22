@@ -1,20 +1,20 @@
 use super::expr::{Expr, ExprRule};
 use super::types::{PType, TypeRule};
 use super::{Next, PErr, ParserRule, RResult};
-use crate::lex::buffer::*;
 use crate::combinator::opt::Opt;
 use crate::combinator::spanned::Spanned;
+use crate::lex::buffer::*;
 use crate::matc::{self, *};
 use crate::stream::TokenStream;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Struct {
     pub span: Span,
     pub name: TokenId,
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
     pub span: Span,
     pub name: TokenId,
@@ -91,14 +91,14 @@ impl<'a, 's> ParserRule<'a, 's> for StructFieldDecl {
 }
 
 /// Instantiation of a struct type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructDef {
     pub span: Span,
     pub name: TokenId,
     pub fields: Vec<FieldDef>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldDef {
     pub span: Span,
     pub name: TokenId,

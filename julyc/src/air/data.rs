@@ -1,6 +1,6 @@
-use crate::arena::BlobArena;
 use crate::ir::mem::Layout;
 use crate::ir::ty::store::TyId;
+use julyc_arena::BlobArena;
 
 #[derive(Default)]
 pub struct Bss {

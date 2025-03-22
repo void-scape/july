@@ -41,9 +41,35 @@ pub type ConstEvalOrder = Vec<IdentId>;
 
 pub fn lower<'a>(
     tokens: &'a TokenBuffer<'a>,
-    items: &'a [Item],
+    items: &'a mut [Item],
 ) -> Result<(Ctx<'a>, TypeKey, ConstEvalOrder), ()> {
     let mut ctx = Ctx::new(tokens);
+
+    let mut attrs = Vec::new();
+    for item in items.iter_mut() {
+        match item {
+            Item::Attr(attr) => attrs.push(attr),
+            Item::Func(func) => {
+                for attr in attrs.drain(..) {
+                    if let Err(diag) = func.parse_attr(&ctx.token_buffer().stream(), attr) {
+                        diagnostic::report(diag);
+                    }
+                }
+            }
+            Item::Extern(exturn) => {
+                for attr in attrs.drain(..) {
+                    if let Err(diag) = exturn.parse_attr(&ctx.token_buffer().stream(), attr) {
+                        diagnostic::report(diag);
+                    }
+                }
+            }
+            _ => {
+                for attr in attrs.drain(..) {
+                    diagnostic::report(ctx.report_warn(attr.span, "attribute ignored"))
+                }
+            }
+        }
+    }
 
     let structs = items
         .iter()
@@ -80,7 +106,12 @@ pub fn lower<'a>(
                 Item::Extern(func) => Some(func),
                 _ => None,
             })
-            .map(|f| extern_sig(&mut ctx, f)),
+            .flat_map(|f| {
+                f.funcs
+                    .iter()
+                    .map(|f| extern_sig(&mut ctx, f))
+                    .collect::<Vec<_>>()
+            }),
     )?;
     if let Err(e) = ctx.store_sigs(extern_sigs) {
         diagnostic::report(e);
@@ -288,7 +319,7 @@ pub fn retrieve_struct<'a>(
     }
 }
 
-fn add_consts<'a>(
+pub fn add_consts<'a>(
     ctx: &mut Ctx<'a>,
     consts: &HashMap<IdentId, &'a rules::Const>,
 ) -> Result<Vec<IdentId>, Diag<'a>> {
@@ -296,13 +327,13 @@ fn add_consts<'a>(
     let mut defined = HashSet::with_capacity(consts.len());
     let mut processing = Vec::with_capacity(consts.len());
 
-    for strukt in consts.values() {
+    for konst in consts.values() {
         add_consts_recur(
             ctx,
             &consts,
             &mut defined,
             &mut processing,
-            strukt,
+            konst,
             &mut eval_order,
         )?;
     }
@@ -428,7 +459,7 @@ fn lower_set<'a, O>(items: impl Iterator<Item = Result<O, Diag<'a>>>) -> Result<
     (!error).then_some(set).ok_or(())
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Const<'a> {
     pub span: Span,
     pub name: Ident,
@@ -513,7 +544,7 @@ fn field<'a>(ctx: &mut Ctx<'a>, field: &rules::Field) -> Result<Field, Diag<'a>>
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Func<'a> {
     pub name_span: Span,
     pub sig: &'a Sig<'a>,
@@ -548,7 +579,7 @@ fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig<'a>, Diag<'
         ty: func
             .ty
             .as_ref()
-            .map(|t| ptype(ctx, t).map(|t| t.1))
+            .map(|t| ptype(ctx, &t).map(|t| t.1))
             .transpose()?
             .unwrap_or(TyId::UNIT),
         linkage: Linkage::Local,
@@ -748,7 +779,9 @@ impl SemiStmt<'_> {
 
 fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt<'a>, Diag<'a>> {
     Ok(match stmt {
-        rules::Stmt::Let { name, ty, assign } => Stmt::Semi(SemiStmt::Let(Let {
+        rules::Stmt::Let {
+            name, ty, assign, ..
+        } => Stmt::Semi(SemiStmt::Let(Let {
             span: ctx.span(*name),
             lhs: let_target(ctx, &rules::Expr::Ident(*name)),
             rhs: pexpr(ctx, assign)?,

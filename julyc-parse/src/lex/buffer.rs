@@ -8,10 +8,10 @@ pub trait Buffer<'a> {
 
 /// Query about a specific token with a [`TokenId`].
 pub trait TokenQuery<'a> {
-    fn kind(&'a self, token: TokenId) -> TokenKind;
-    fn span(&'a self, token: TokenId) -> Span;
-    fn ident(&'a self, token: TokenId) -> &'a str;
-    fn as_str(&'a self, token: TokenId) -> &'a str;
+    fn kind(&self, token: TokenId) -> TokenKind;
+    fn span(&self, token: TokenId) -> Span;
+    fn ident(&self, token: TokenId) -> &'a str;
+    fn as_str(&self, token: TokenId) -> &'a str;
 }
 
 impl<'a, T> TokenQuery<'a> for T
@@ -19,22 +19,22 @@ where
     T: Buffer<'a>,
 {
     #[track_caller]
-    fn kind(&'a self, token: TokenId) -> TokenKind {
+    fn kind(&self, token: TokenId) -> TokenKind {
         self.token_buffer().kind(token)
     }
 
     #[track_caller]
-    fn span(&'a self, token: TokenId) -> Span {
+    fn span(&self, token: TokenId) -> Span {
         self.token_buffer().span(token)
     }
 
     #[track_caller]
-    fn ident(&'a self, token: TokenId) -> &'a str {
+    fn ident(&self, token: TokenId) -> &'a str {
         self.token_buffer().ident(token)
     }
 
     #[track_caller]
-    fn as_str(&'a self, token: TokenId) -> &'a str {
+    fn as_str(&self, token: TokenId) -> &'a str {
         self.token_buffer().as_str(token)
     }
 }
@@ -52,7 +52,7 @@ impl TokenId {
 }
 
 /// Storage of the generated tokens for a given source file.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct TokenBuffer<'a> {
     tokens: Vec<Token>,
     source: &'a Source,
@@ -83,12 +83,29 @@ impl<'a> TokenBuffer<'a> {
         (self.len() > token.0 + 1).then_some(TokenId(token.0 + 1))
     }
 
+    pub fn prev(&self, token: TokenId) -> Option<TokenId> {
+        if token.0 == 0 {
+            None
+        } else {
+            (self.len() > token.0 - 1).then_some(TokenId(token.0 - 1))
+        }
+    }
+
     pub fn last(&self) -> Option<TokenId> {
         if !self.is_empty() {
             Some(TokenId(self.len() - 1))
         } else {
             None
         }
+    }
+
+    // TODO: binary search
+    pub fn token_with_start(&self, start: usize) -> Option<TokenId> {
+        self.tokens
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.span.start as usize == start)
+            .map(|(i, _)| TokenId(i))
     }
 }
 
@@ -108,7 +125,7 @@ impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
     }
 
     #[track_caller]
-    fn ident(&'a self, token: TokenId) -> &'a str {
+    fn ident(&self, token: TokenId) -> &'a str {
         if !matches!(self.kind(token), TokenKind::Ident) {
             panic!(
                 "called `TokenQuery::ident` on a {:?} token",
@@ -120,13 +137,13 @@ impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
     }
 
     #[track_caller]
-    fn as_str(&'a self, token: TokenId) -> &'a str {
+    fn as_str(&self, token: TokenId) -> &'a str {
         &self.source.raw()[self.span(token).range()]
     }
 }
 
 /// Metadata about a token held within a [`TokenBuffer`].
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,

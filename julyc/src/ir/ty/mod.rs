@@ -287,7 +287,7 @@ impl FloatTy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TyVar(usize);
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct TypeKey {
     key: HashMap<IdentId, Vec<(Ident, TyId)>>,
 }

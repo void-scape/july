@@ -4,13 +4,13 @@ use super::ident::*;
 use super::sig::Sig;
 use super::strukt::StructId;
 use super::ty::{store::TyId, store::TyStore, *};
-use crate::arena::BlobArena;
+use julyc_arena::BlobArena;
 use julyc_parse::annotate_snippets::Level;
 use julyc_parse::diagnostic::{Diag, Msg, Sourced};
 use julyc_parse::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Ctx<'a> {
     pub tokens: &'a TokenBuffer<'a>,
     pub idents: IdentStore<'a>,
@@ -42,6 +42,16 @@ impl<'a> Ctx<'a> {
             err.into().as_str(),
             self.tokens.source(),
             Msg::error(s.ctx_span(self), ""),
+        )
+        .loc(std::panic::Location::caller())
+    }
+
+    #[track_caller]
+    pub fn report_warn<S: SpannedCtx>(&self, s: S, err: impl Into<String>) -> Diag<'a> {
+        Diag::sourced(
+            err.into().as_str(),
+            self.tokens.source(),
+            Msg::warn(s.ctx_span(self), ""),
         )
         .loc(std::panic::Location::caller())
     }
@@ -120,7 +130,10 @@ impl<'a> Ctx<'a> {
 
     /// Panics if `T` requires drop
     #[track_caller]
-    pub fn intern<T>(&self, item: T) -> &'a T {
+    pub fn intern<T>(&self, item: T) -> &'a T
+    where
+        T: Copy,
+    {
         self.arena.alloc(item)
     }
 
@@ -130,7 +143,10 @@ impl<'a> Ctx<'a> {
 
     /// Panics if `T` requires drop
     #[track_caller]
-    pub fn intern_slice<T>(&self, slice: &[T]) -> &'a [T] {
+    pub fn intern_slice<T>(&self, slice: &[T]) -> &'a [T]
+    where
+        T: Copy,
+    {
         if !slice.is_empty() {
             self.arena.alloc_slice(slice)
         } else {

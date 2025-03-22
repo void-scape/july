@@ -80,6 +80,8 @@ variadics_please::all_tuples!(impl_match_token, 1, 10, T);
 pub trait DelimPair {
     fn matches_open(kind: Option<TokenKind>) -> bool;
     fn matches_close(kind: Option<TokenKind>) -> bool;
+    fn open() -> TokenKind;
+    fn close() -> TokenKind;
 }
 
 pub struct Paren;
@@ -91,6 +93,14 @@ impl DelimPair for Paren {
 
     fn matches_close(kind: Option<TokenKind>) -> bool {
         CloseParen::matches(kind)
+    }
+
+    fn open() -> TokenKind {
+        TokenKind::OpenParen
+    }
+
+    fn close() -> TokenKind {
+        TokenKind::CloseParen
     }
 }
 
@@ -104,6 +114,14 @@ impl DelimPair for Curly {
     fn matches_close(kind: Option<TokenKind>) -> bool {
         CloseCurly::matches(kind)
     }
+
+    fn open() -> TokenKind {
+        TokenKind::OpenCurly
+    }
+
+    fn close() -> TokenKind {
+        TokenKind::CloseCurly
+    }
 }
 
 pub struct Bracket;
@@ -115,6 +133,14 @@ impl DelimPair for Bracket {
 
     fn matches_close(kind: Option<TokenKind>) -> bool {
         CloseBracket::matches(kind)
+    }
+
+    fn open() -> TokenKind {
+        TokenKind::OpenBracket
+    }
+
+    fn close() -> TokenKind {
+        TokenKind::CloseBracket
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::air::ctx::AirCtx;
+use crate::air::{Air, AirFunc};
 use crate::{air, interp, ir};
 use julyc_parse::Parser;
 use julyc_parse::lex::Lexer;
@@ -12,17 +13,19 @@ pub struct CompUnit {
 
 impl CompUnit {
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        Ok(Self {
-            source: Source::new(path)?,
-        })
+        Ok(Self::with_source(Source::new(path)?))
+    }
+
+    pub fn with_source(source: Source) -> Self {
+        Self { source }
     }
 
     pub fn compile(&self, log: bool) -> Result<i32, ()> {
         let (lex_dur, buf) =
             self.record_time::<TokenBuffer>(|unit| Lexer::new(&unit.source).lex().unwrap());
         let (parse_dur, items) = self.record_time(|_| Parser::parse(&buf));
-        let items = items?;
-        let (lower_dur, ir) = self.record_time(|_| ir::lower(&buf, &items));
+        let mut items = items?;
+        let (lower_dur, ir) = self.record_time(|_| ir::lower(&buf, &mut items));
         let (ctx, key, const_eval_order) = ir?;
 
         let mut air_ctx = AirCtx::new(&ctx, &key);

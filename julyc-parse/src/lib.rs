@@ -1,6 +1,8 @@
 use self::diagnostic::Diag;
 use self::matc::{Any, Colon, Ident, MatchTokenKind};
-use self::rules::prelude::{Const, Enum, ExternFunc, Func, Impl, Param, Struct};
+use self::rules::prelude::{
+    Attribute, Const, Enum, ExternBlock, Func, Impl, Param, Struct,
+};
 use self::rules::{PErr, ParserRule};
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
@@ -10,9 +12,10 @@ pub extern crate annotate_snippets;
 mod combinator;
 pub mod diagnostic;
 pub mod lex;
-mod matc;
+pub mod matc;
 pub mod rules;
 mod stream;
+pub mod token_structs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignKind {
@@ -112,7 +115,25 @@ pub enum UOpKind {
     Neg,
 }
 
-#[derive(Debug)]
+impl UOpKind {
+    pub fn is_prefix(&self) -> bool {
+        match self {
+            Self::Deref => false,
+            _ => true,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Deref => "*",
+            Self::Ref => "&",
+            Self::Not => "!",
+            Self::Neg => "-",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Item {
     #[allow(unused)]
     Enum(Enum),
@@ -120,7 +141,8 @@ pub enum Item {
     Impl(Impl),
     Func(Func),
     Const(Const),
-    Extern(ExternFunc),
+    Extern(ExternBlock),
+    Attr(Attribute),
 }
 
 pub struct Parser;
@@ -134,7 +156,6 @@ impl Parser {
         let mut items = Vec::new();
         let mut diags = Vec::new();
         let mut stream = buffer.stream();
-        let mut active_attribute = None;
 
         while !stream.is_empty() {
             match (
@@ -148,16 +169,8 @@ impl Parser {
                             diagnostic::report(e.into_diag());
                             return Err(());
                         }
-                        Ok(mut f) => {
-                            if let Some(attr) = active_attribute.take() {
-                                for f in f.iter_mut() {
-                                    if let Err(diag) = f.parse_attr(&stream, &attr) {
-                                        diags.push(diag);
-                                    }
-                                }
-                            }
-
-                            for func in f.iter() {
+                        Ok(e) => {
+                            for func in e.funcs.iter() {
                                 if let Some(_self) = func.params.iter().find(|p| {
                                     matches!(p, Param::Slf(_)) || matches!(p, Param::SlfRef(_))
                                 }) {
@@ -172,7 +185,7 @@ impl Parser {
                                 }
                             }
 
-                            items.extend(f.into_iter().map(|f| Item::Extern(f)));
+                            items.push(Item::Extern(e));
                         }
                     }
                 }
@@ -182,7 +195,7 @@ impl Parser {
                             diags.push(diag);
                         }
                         Ok(a) => {
-                            active_attribute = Some(a);
+                            items.push(Item::Attr(a));
                         }
                     }
                 }
@@ -196,31 +209,7 @@ impl Parser {
                         }
                     }
                 }
-                //(Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Enum)) => {
-                //    if active_attribute.is_some() {
-                //        diags.push(PErr::Recover(stream.full_error(
-                //            "cannot add attributes to enums",
-                //            buffer.span(stream.peek().unwrap()),
-                //        )))
-                //    }
-                //
-                //    match rules::prelude::EnumRule::parse(&mut stream) {
-                //        Err(diag) => {
-                //            diags.push(diag);
-                //        }
-                //        Ok(e) => {
-                //            items.push(Item::Enum(e));
-                //        }
-                //    }
-                //}
                 (Some(TokenKind::Ident), Some(TokenKind::Colon), Some(TokenKind::Struct)) => {
-                    if active_attribute.is_some() {
-                        diags.push(PErr::Recover(stream.full_error(
-                            "cannot add attributes to structs",
-                            buffer.span(stream.peek().unwrap()),
-                        )))
-                    }
-
                     match rules::prelude::StructRule::parse(&mut stream) {
                         Err(diag) => {
                             diags.push(diag);
@@ -235,12 +224,7 @@ impl Parser {
                         Err(diag) => {
                             diags.push(diag);
                         }
-                        Ok(mut f) => {
-                            if let Some(attr) = active_attribute.take() {
-                                if let Err(diag) = f.parse_attr(&stream, &attr) {
-                                    diags.push(diag);
-                                }
-                            }
+                        Ok(f) => {
                             items.push(Item::Func(f));
                         }
                     }

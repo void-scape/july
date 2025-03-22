@@ -1,19 +1,23 @@
+#![feature(maybe_uninit_slice)]
+
 use std::alloc::Layout;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::mem::MaybeUninit;
-use std::ptr::{slice_from_raw_parts_mut, NonNull};
+use std::ptr::{NonNull, slice_from_raw_parts_mut};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct BlobArena {
     arena: Arena<u8>,
 }
 
 impl BlobArena {
     #[track_caller]
-    pub fn alloc<'a, T>(&self, elem: T) -> &'a mut T {
+    pub fn alloc<'a, T>(&self, elem: T) -> &'a mut T
+    where
+        T: Copy,
+    {
         assert!(std::mem::size_of::<T>() > 0);
-        assert!(!std::mem::needs_drop::<T>());
         self.align_grow::<T>(Layout::new::<T>());
 
         let mem = self.arena.ptr.get() as *mut T;
@@ -31,10 +35,15 @@ impl BlobArena {
     }
 
     #[track_caller]
-    pub fn alloc_slice<'a, T>(&self, slice: &[T]) -> &'a mut [T] {
-        assert!(!slice.is_empty());
+    pub fn alloc_slice<'a, T>(&self, slice: &[T]) -> &'a mut [T]
+    where
+        T: Copy,
+    {
+        assert!(
+            !slice.is_empty(),
+            "tried to `BlobArena::alloc_slice` an empty slice"
+        );
         assert!(std::mem::size_of::<T>() > 0);
-        assert!(!std::mem::needs_drop::<T>());
         let layout = Layout::for_value::<[T]>(slice);
         self.align_grow::<T>(layout);
 
@@ -51,7 +60,10 @@ impl BlobArena {
     }
 
     #[track_caller]
-    pub fn alloc_slice_ptr<'a, T>(&self, slice: &[T]) -> *mut T {
+    pub fn alloc_slice_ptr<'a, T>(&self, slice: &[T]) -> *mut T
+    where
+        T: Copy,
+    {
         assert!(!slice.is_empty());
         assert!(std::mem::size_of::<T>() > 0);
         assert!(!std::mem::needs_drop::<T>());
@@ -78,10 +90,12 @@ impl BlobArena {
     }
 }
 
+#[derive(PartialEq, Eq)]
 pub struct Arena<T> {
     ptr: Cell<*mut T>,
     last: Cell<*mut T>,
     chunks: RefCell<Vec<Chunk<T>>>,
+    grow_size: RefCell<usize>,
     // _owned: PhantomData<T>,
 }
 
@@ -102,6 +116,7 @@ impl<T> Default for Arena<T> {
             ptr: Cell::new(std::ptr::null_mut()),
             last: Cell::new(std::ptr::null_mut()),
             chunks: RefCell::new(Vec::new()),
+            grow_size: RefCell::new(4096),
             //_owned: PhantomData,
         }
     }
@@ -140,11 +155,13 @@ impl<T> Arena<T> {
                 / std::mem::size_of::<T>();
         }
 
-        let elems = 4096 / std::mem::size_of::<T>();
+        let elems = *self.grow_size.borrow() / std::mem::size_of::<T>();
         let mut chunk = Chunk::new(elems);
         self.ptr.set(chunk.as_ptr());
         self.last.set(chunk.end());
         chunks.push(chunk);
+
+        *self.grow_size.borrow_mut() *= 2;
     }
 
     fn destroy_last(&self, mut chunk: Chunk<T>) {
@@ -172,6 +189,7 @@ impl<T> Drop for Arena<T> {
     }
 }
 
+#[derive(PartialEq, Eq)]
 struct Chunk<T> {
     buf: NonNull<[MaybeUninit<T>]>,
     elems: usize,

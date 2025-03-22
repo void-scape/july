@@ -1,21 +1,21 @@
 #![allow(unused)]
 use super::{Next, ParserRule, RResult};
-use crate::diagnostic::Msg;
-use crate::lex::buffer::*;
 use crate::combinator::opt::Opt;
 use crate::combinator::spanned::Spanned;
+use crate::diagnostic::Msg;
+use crate::lex::buffer::*;
 use crate::matc::{self, *};
 use crate::stream::TokenStream;
 
 /// Tagged union.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enum {
     pub span: Span,
     pub name: TokenId,
     pub variants: Vec<Variant>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Variant {
     pub span: Span,
     pub name: TokenId,

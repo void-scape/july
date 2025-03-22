@@ -3,7 +3,7 @@ use crate::lex::buffer::*;
 use crate::stream::TokenStream;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub span: Span,
     pub stmts: Vec<Stmt>,
@@ -24,7 +24,7 @@ impl<'a, 's> ParserRule<'a, 's> for BlockRules {
         match Spanned::<(Next<OpenCurly>, StmtSeqRules, Next<CloseCurly>)>::parse(stream) {
             Ok(block) => {
                 let span = block.span();
-                let (_, stmts, _) = block.into_inner();
+                let (_open, stmts, _close) = block.into_inner();
                 Ok(Block { span, stmts })
             }
             Err(e) => {

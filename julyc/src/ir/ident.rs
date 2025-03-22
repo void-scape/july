@@ -10,7 +10,7 @@ pub struct Ident {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IdentId(usize);
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct IdentStore<'a> {
     map: HashMap<&'a str, IdentId>,
     buf: Vec<&'a str>,

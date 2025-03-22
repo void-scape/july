@@ -15,12 +15,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter_with_large_drop(|| Parser::parse(&buf).unwrap())
     });
 
-    let items = Parser::parse(&buf).unwrap();
+    let mut items = Parser::parse(&buf).unwrap();
     c.bench_function("lowering invaders", |b| {
-        b.iter_with_large_drop(|| ir::lower(&buf, &items).unwrap())
+        b.iter_batched_ref(
+            || items.clone(),
+            |items| ir::lower(&buf, items).unwrap(),
+            criterion::BatchSize::LargeInput,
+        )
     });
 
-    let (ctx, key, const_eval_order) = ir::lower(&buf, &items).unwrap();
+    let (ctx, key, const_eval_order) = ir::lower(&buf, &mut items).unwrap();
     let mut air_ctx = AirCtx::new(&ctx, &key);
     c.bench_function("bytecode gen invaders", |b| {
         b.iter_with_large_drop(|| {

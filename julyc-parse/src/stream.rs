@@ -19,6 +19,14 @@ pub struct TokenStream<'a, 's> {
     index: usize,
 }
 
+impl<'a, 's> Iterator for TokenStream<'a, 's> {
+    type Item = TokenId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next()
+    }
+}
+
 impl<'a, 's> Buffer<'s> for TokenStream<'a, 's> {
     fn token_buffer(&self) -> &TokenBuffer<'s> {
         self.buffer
@@ -79,14 +87,16 @@ impl<'a, 's> TokenStream<'a, 's> {
     }
 
     pub fn consume_matched_delimiters_inclusive<T: DelimPair>(&mut self) {
-        assert!(self
-            .next()
-            .is_some_and(|t| T::matches_open(Some(self.kind(t)))));
+        assert!(
+            self.next()
+                .is_some_and(|t| T::matches_open(Some(self.kind(t))))
+        );
         let offset = self.find_matched_delim_offset::<T>();
         self.eat_n(offset);
-        assert!(self
-            .next()
-            .is_some_and(|t| T::matches_close(Some(self.kind(t)))));
+        assert!(
+            self.next()
+                .is_some_and(|t| T::matches_close(Some(self.kind(t))))
+        );
     }
 
     pub fn find_offset<T: MatchTokenKind>(&self) -> usize {

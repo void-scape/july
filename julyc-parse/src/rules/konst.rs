@@ -6,7 +6,7 @@ use crate::matc;
 use crate::stream::TokenStream;
 use crate::{combinator::prelude::*, matc::*};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Const {
     pub span: Span,
     pub name: TokenId,

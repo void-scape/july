@@ -2,7 +2,7 @@ use clap::Parser;
 use julyc::comp::CompUnit;
 use std::process::ExitCode;
 
-/// Simple program to greet a person
+/// Compiler for the July programming language
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {

@@ -7,7 +7,7 @@ use crate::combinator::opt::Opt;
 use crate::matc::*;
 use crate::stream::TokenStream;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArrDef {
     Elems {
         span: Span,
