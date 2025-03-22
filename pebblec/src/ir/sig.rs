@@ -15,7 +15,7 @@ pub struct Sig<'a> {
 
 impl Sig<'_> {
     pub fn hash(&self) -> FuncHash {
-        let mut hash = DefaultHasher::new();
+        let mut hash = deterministic_hash::DeterministicHasher::new(DefaultHasher::new());
         <Sig as Hash>::hash(self, &mut hash);
         FuncHash(hash.finish())
     }

@@ -212,7 +212,7 @@ impl<'a, 's> TokenStream<'a, 's> {
 
     pub fn prev(&self) -> TokenId {
         if self.index == 0 {
-            panic!("no prev on first element");
+            return TokenId::new(0);
         }
 
         let idx = self.index - 1;

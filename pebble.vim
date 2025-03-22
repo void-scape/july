@@ -1,13 +1,13 @@
 " Vim syntax file
-" Language:     July
-" Maintainer:   Nic Ball <balln13572@gmail.com>
+" Language:   Pebble
+" Maintainer: Nic Ball <balln13572@gmail.com>
 
 if exists("b:current_syntax")
   finish
 endif
 
 syn keyword pebbleKeyword struct const extern return if for while loop break continue let
-syn keyword pebbleKeyword impl as in
+syn keyword pebbleKeyword use impl as in
 
 syn keyword pebbleBoolean true false
 syn keyword pebbleType i32 i64 u8 u16 u32 u64 f32 f64 bool str
@@ -34,6 +34,7 @@ syn region pebbleString start=/'/ skip=/\\'/ end=/'/
 syn match pebbleNumber "\v<\d+>"
 syn match pebbleNumber "\v<\d+\.\d+>"
 syn match pebbleNumber "\v<0x[0-9a-fA-F]+>"
+syn match pebbleNumber "\v<0b[0-9]+>"
 
 syn region pebbleAttribute start=/#\[/ end=/\]/
 syn match pebbleType "\v<[A-Z]\w*>"

@@ -284,7 +284,7 @@ impl FloatTy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TyVar(usize);
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -297,10 +297,12 @@ impl TypeKey {
         let entry = self.key.entry(ident.id).or_default();
         let elem = (ident, ty);
         if entry.contains(&elem) {
-            assert!(entry
-                .iter()
-                .filter(|(i, _)| *i == ident)
-                .all(|(_, t)| *t == ty))
+            assert!(
+                entry
+                    .iter()
+                    .filter(|(i, _)| *i == ident)
+                    .all(|(_, t)| *t == ty)
+            )
         } else {
             entry.push(elem);
             entry.sort_unstable_by_key(|(ident, _)| ident.span.start);

@@ -1,3 +1,5 @@
+use indexmap::IndexMap;
+
 use super::data::{Bss, BssEntry};
 use super::{Air, AirFunc, AirFuncBuilder, BlockId, OffsetVar, Reg, Var};
 use crate::ir::ctx::Ctx;
@@ -10,17 +12,32 @@ use crate::ir::{self, *};
 use std::collections::HashMap;
 use std::ops::Deref;
 
+#[derive(Debug)]
 pub struct AirCtx<'a> {
     pub tys: TyStore<'a>,
     pub key: &'a TypeKey,
     pub tables: Vec<SymbolTable<Var>>,
     ctx: &'a Ctx<'a>,
     var_index: usize,
-    func_args: HashMap<Ident, Var>,
-    ty_map: HashMap<Var, TyId>,
+    func_args: IndexMap<Ident, Var>,
+    ty_map: IndexMap<Var, TyId>,
     bss: Bss,
     func: Option<FuncHash>,
     instr_builder: InstrBuilder<'a>,
+}
+
+impl PartialEq for AirCtx<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.tys == other.tys
+            && self.key == other.key
+            && self.tables == other.tables
+            && self.ctx == other.ctx
+            && self.var_index == other.var_index
+            && self.func_args == other.func_args
+            && self.ty_map == other.ty_map
+            && self.func == other.func
+            && self.instr_builder == other.instr_builder
+    }
 }
 
 impl<'a> AirCtx<'a> {
@@ -31,8 +48,8 @@ impl<'a> AirCtx<'a> {
             tys: ctx.tys.clone(),
             var_index: 0,
             tables: Vec::new(),
-            func_args: HashMap::default(),
-            ty_map: HashMap::default(),
+            func_args: IndexMap::default(),
+            ty_map: IndexMap::default(),
             bss: Bss::default(),
             func: None,
             instr_builder: InstrBuilder::Const(Vec::new()),
@@ -235,14 +252,14 @@ impl<'a> AirCtx<'a> {
                 builder.func.sig.params.iter().find_map(|p| match p {
                     Param::Named { ident: name, .. } => {
                         if name.id == ident {
-                            self.func_args.get(&name).copied()
+                            self.func_args.get(name).copied()
                         } else {
                             None
                         }
                     }
                     Param::Slf(ident) | Param::SlfRef(ident) => {
                         if ident_str == "self" {
-                            self.func_args.get(&ident).copied()
+                            self.func_args.get(ident).copied()
                         } else {
                             None
                         }
@@ -296,7 +313,7 @@ impl<'a> AirCtx<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoopCtx {
     pub start: BlockId,
     pub breac: BlockId,
@@ -349,6 +366,7 @@ impl<'a> Deref for AirCtx<'a> {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum InstrBuilder<'a> {
     Func(AirFuncBuilder<'a>),
     Const(Vec<Air<'a>>),

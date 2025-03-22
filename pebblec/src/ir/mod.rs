@@ -8,6 +8,7 @@ use crate::ir::ident::Ident;
 use crate::ir::lit::Lit;
 use enom::{Enum, EnumDef, Variant};
 use ident::IdentId;
+use indexmap::IndexMap;
 use pebblec_parse::diagnostic::{self, Diag, Msg};
 use pebblec_parse::lex::buffer::{Buffer, Span, TokenQuery};
 use pebblec_parse::lex::buffer::{TokenBuffer, TokenId};
@@ -157,7 +158,7 @@ pub fn lower<'a>(
 
 fn add_structs<'a>(
     ctx: &mut Ctx<'a>,
-    structs: &HashMap<IdentId, &'a rules::Struct>,
+    structs: &IndexMap<IdentId, &'a rules::Struct>,
 ) -> Result<(), Diag<'a>> {
     let mut defined = HashSet::with_capacity(structs.len());
     let mut processing = Vec::with_capacity(structs.len());
@@ -175,7 +176,7 @@ struct StructInfo<'a> {
 
 fn add_structs_recur<'a>(
     ctx: &mut Ctx<'a>,
-    structs: &HashMap<IdentId, &'a rules::Struct>,
+    structs: &IndexMap<IdentId, &'a rules::Struct>,
     defined: &mut HashSet<IdentId>,
     processing: &mut Vec<StructInfo<'a>>,
     rules_strukt: &'a rules::Struct,
@@ -306,7 +307,7 @@ fn report_struct_cycle<'a>(
 pub fn retrieve_struct<'a>(
     ty: &PType,
     ctx: &mut Ctx<'a>,
-    structs: &HashMap<IdentId, &'a rules::Struct>,
+    structs: &IndexMap<IdentId, &'a rules::Struct>,
 ) -> Option<&'a rules::Struct> {
     match ty {
         PType::Simple(id) => {
@@ -321,7 +322,7 @@ pub fn retrieve_struct<'a>(
 
 pub fn add_consts<'a>(
     ctx: &mut Ctx<'a>,
-    consts: &HashMap<IdentId, &'a rules::Const>,
+    consts: &IndexMap<IdentId, &'a rules::Const>,
 ) -> Result<Vec<IdentId>, Diag<'a>> {
     let mut eval_order = Vec::new();
     let mut defined = HashSet::with_capacity(consts.len());
@@ -348,7 +349,7 @@ struct ConstInfo<'a> {
 
 fn add_consts_recur<'a>(
     ctx: &mut Ctx<'a>,
-    consts: &HashMap<IdentId, &'a rules::Const>,
+    consts: &IndexMap<IdentId, &'a rules::Const>,
     defined: &mut HashSet<IdentId>,
     processing: &mut Vec<ConstInfo<'a>>,
     rules_const: &'a rules::Const,

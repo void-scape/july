@@ -8,6 +8,7 @@ use crate::ir::*;
 use bin::*;
 use ctx::*;
 use data::BssEntry;
+use indexmap::IndexMap;
 use pebblec_parse::rules::prelude::Attr;
 use pebblec_parse::{AssignKind, UOpKind};
 use std::collections::HashMap;
@@ -23,7 +24,7 @@ mod data;
 /// byte-code and lowerable in a backend.
 ///
 /// TODO: break out IntKind in favor of byte slices with sign extension?
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum Air<'a> {
     Ret,
 
@@ -289,24 +290,24 @@ impl Bits {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum ConstData {
     Bits(Bits),
     Ptr(BssEntry),
 }
 
 /// Collection of [`Air`] instructions for a [`crate::ir::Func`].
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct AirFunc<'a> {
     pub func: &'a Func<'a>,
     instrs: Vec<Air<'a>>,
-    blocks: HashMap<BlockId, Range<usize>>,
+    blocks: IndexMap<BlockId, Range<usize>>,
 }
 
 impl<'a> AirFunc<'a> {
     pub fn new(func: &'a Func<'a>, blocks: Vec<Vec<Air<'a>>>) -> Self {
         let mut instrs = Vec::new();
-        let mut ranges = HashMap::with_capacity(blocks.len());
+        let mut ranges = IndexMap::with_capacity(blocks.len());
         for (hash, block_instrs) in blocks.into_iter().enumerate() {
             let start = instrs.len();
             instrs.extend(block_instrs);
@@ -333,6 +334,10 @@ impl<'a> AirFunc<'a> {
         &self.instrs
     }
 
+    pub fn blocks(&self) -> &IndexMap<BlockId, Range<usize>> {
+        &self.blocks
+    }
+
     #[track_caller]
     pub fn block(&self, block: BlockId) -> &[Air<'a>] {
         self.blocks
@@ -345,7 +350,7 @@ impl<'a> AirFunc<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(usize);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct AirFuncBuilder<'a> {
     pub func: &'a Func<'a>,
     instrs: Vec<Vec<Air<'a>>>,

@@ -15,7 +15,7 @@ main: () -> i32 {
     test(arr_ref_deref());
     test(cast_clobber());
     test(bitwise_ops());
-
+    
     0
 }
 
@@ -23,35 +23,21 @@ main: () -> i32 {
 
 // size: 24, alignment: 8
 Sandwich: struct {
-    /*
-    * Structs have C style representation, with
-    * garaunteed ordering.
-    */
-    bread: Bread,     // size:    16, alignment: 8
-    butter: u8,       // size:    1, alignment: 1
-    // lettuce: Lettuce,
-                      // padding: 6
+    
+    bread: Bread,
+    // size:    16, alignment: 8
+    butter: u8,
 }
-
 
 // size: 16, alignment: 8
 Bread: struct {
-    grain: i32, // size:     4, alignment: 4
-                // padding:  4
-    seed: i64,  // size:     8, alignment: 8
+    grain: i32,
+    // size:     4, alignment: 4
+    // padding:  4
+    seed: i64,
 }
 
 // Recursive structs have infinite size!
-/*
-* Cheese: struct {
-*     tomato: Tomato,
-* }
-*
-* Tomato: struct {
-*     girth: i32,
-*     cheese: Cheese,
-* }
-*/
 
 // TODO:
 // // size: 1, alignment: 1
@@ -81,21 +67,18 @@ bin_op: () -> i32 {
 }
 
 struct_definition: () -> Bread {
-    Bread {
-        grain: 12,
-        seed: 4,
-    }
+    Bread { grain: 12, seed: 4 }
 }
 
 strukt_field: () -> i64 {
     let bread = struct_definition();
-
+    
     bread.seed
 }
 
 variable: () -> Bread {
     let bread = struct_definition();
-
+    
     bread
 }
 
@@ -112,43 +95,37 @@ procedure: () -> Bread {
 
 assign: () -> i32 {
     let x = 10;
-
+    
     x = 4;
-
+    
     x
 }
 
 var_2_var: () -> i32 {
     let x = assign();
     let y: i32 = x;
-
-    let bread = Bread {
-        // grain: assign(),
-        grain: 12,
-        seed: 4,
-    };
+    
+    let bread = Bread { // grain: assign(),
+        grain: 12, seed: 4 };
     let other = bread;
-
-    other.grain + y // 16
+    
+    other.grain + y
 }
 
 struct_field: () -> i64 {
-    let bread = Bread {
-        grain: 12,
-        seed: 4,
-    };
-
+    let bread = Bread { grain: 12, seed: 4 };
+    
     bread.seed = 29;
-
+    
     bread.seed
 }
 
 conjugate: () -> i32 {
     let x = 68;
-
+    
     // x = x + 1
     x += 1;
-
+    
     x
 }
 
@@ -171,10 +148,7 @@ extract_grain: (bread: Bread) -> i32 {
 }
 
 grain: () -> i32 {
-    extract_grain(Bread {
-        grain: double(5),
-        seed: 42,
-    })
+    extract_grain(Bread { grain: double(5), seed: 42 })
 }
 
 extract_seed: (bread: Bread) -> i64 {
@@ -182,18 +156,13 @@ extract_seed: (bread: Bread) -> i64 {
 }
 
 seed: () -> i64 {
-    extract_seed(Bread {
-        grain: double(5),
-        seed: 42,
-    })
+    extract_seed(Bread { grain: double(5), seed: 42 })
 }
 
 // ------------ Control Flow ------------
 
 simple_if_then: (condition: bool, x: i32) -> i32 {
-    if condition == false {
-        x
-    } else {
+    if condition == false { x } else {
         let some = x - 2;
         some
     }
@@ -214,53 +183,43 @@ simple_float: () -> f32 {
 
 // ------------ Loops ------------
 
-simple_for: ()  {
+simple_for: () {
     // printf("hard coded:\n");
-
+    
     let start = 0;
     let end = 10;
     let _it = start;
     let i = _it;
     loop {
         // exit condition
-        if _it == end {
-            break;
-        }
+        if _it == end { break; }
         i = _it;
-
+        
         // for block
         // {
-            // printf("%\n", i);
+        // printf("%\n", i);
         // }
-
+        
         // post op
         _it += 1;
     }
-
+    
     // printf("builtin:\n");
-
+    
     let x = [true, false, false, true, false, true, true];
     let y = &x;
     let val = x[0];
-
-    for b in x {
-        // printf("% => %\n", b, b*);
-    }
-
+    
+    for b in x{}
+    
     let ints = [12, 24, 48];
-
+    
     // printf("\n");
-    for int in ints {
-        // printf("%\n", int);
-    }
-
-    for val in 0..7 {
-        // printf("%\n", x[val]);
-    }
-
-    for it in 2..10 {
-        // printf("%\n", it);
-    }
+    for int in ints{}
+    
+    for val in 0..7{}
+    
+    for it in 2..10{}
 }
 
 // ------------ Scope ------------
@@ -268,65 +227,62 @@ simple_for: ()  {
 scope: () {
     let other = 4;
     assert(other == 4);
-
+    
     // shadow
     let other = 5;
     assert(other == 5);
-
+    
     if true {
         // shadow
         let other = 10;
         assert(other == 10);
-
-        if false {
-            let double = 1;
-        }
+        
+        if false { let double = 1; }
     }
-
+    
     assert(other == 5);
-    // assert(double == 1);
 }
 
 // ------------ Misc ------------
 
 arr_ref_deref: () -> bool {
     let result = true;
-
+    
     let arr: [u8; 3] = [0, 1, 2];
     let ref_arr = [&arr[0], &arr[1], &arr[2]];
     let deref_arr = [arr[0], arr[1], arr[2]];
-
-    for i in 0..3 {
+    
+    for i in 0..3{
         if arr[i] != deref_arr[i] {
             printf("invalid deref_arr\n");
             result = false;
         }
-
+        
         if arr[i] != ref_arr[i]* {
             printf("invalid ref_arr deref\n");
             result = false;
         }
     }
-
+    
     let slice: &[u8] = &arr;
     // let cannot_return: [u8; 3] = slice*;
-    for i in 0..3 {
+    for i in 0..3{
         if slice[i] != arr[i] {
             printf("invalid slice indexing\n");
             result = false;
         }
         slice[i] += 5;
     }
-
+    
     let i = 0;
-    for val in slice {
+    for val in slice{
         if val* != arr[i] {
             printf("invalid slice iteration\n");
             result = false;
         }
         i += 1;
     }
-
+    
     // shadow `arr`, but refer to previous `arr` in assignment
     //
     // let var = 10;
@@ -335,22 +291,22 @@ arr_ref_deref: () -> bool {
     //      |                           make sure this type isn't grabbed from here
     //      |                                                                   |
     //      |-------------------------------------------------------------------|
-
+    
     let arr = [&arr[0], &arr[1], &arr[2]];
     let i = 0;
-    for a in arr {
+    for a in arr{
         if deref_arr[i] + 5 != a** {
             printf("invalid double deref\n");
             result = false;
         }
         i += 1;
     }
-
+    
     result
 }
 
 cast_clobber: () -> bool {
-    let small    : u16 = 0x1111;
+    let small: u16 = 0x1111;
     let _ = fill_reg();
     let clobbered: u32 = small as u32;
     clobbered != 0x44440000 | small as u32
@@ -373,13 +329,11 @@ bitwise_ops: () -> bool {
         0b0010 >> 1 == 0b0001,
         0b1100 >> 2 == 0b0011,
     ];
-
-    for op in ops {
-        if !op* {
-            return false;
-        }
+    
+    for op in ops{
+        if !op* { return false; }
     }
-
+    
     true
 }
 
@@ -389,12 +343,8 @@ I: const u32 = 0;
 
 test: (condition: bool) {
     printf("Test % .................... ", I);
-    if condition {
-        printf("Ok\n");
-    } else {
-        printf("Fail\n");
-    }
-
+    if condition { printf("Ok\n"); } else { printf("Fail\n"); }
+    
     I += 1;
 }
 

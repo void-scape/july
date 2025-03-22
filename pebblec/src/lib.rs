@@ -4,3 +4,5 @@ pub mod air;
 pub mod comp;
 pub mod interp;
 pub mod ir;
+#[cfg(test)]
+mod pebblec_tests;

@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::mem::MaybeUninit;
 use std::ptr::{NonNull, slice_from_raw_parts_mut};
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct BlobArena {
     arena: Arena<u8>,
 }
@@ -90,7 +90,6 @@ impl BlobArena {
     }
 }
 
-#[derive(PartialEq, Eq)]
 pub struct Arena<T> {
     ptr: Cell<*mut T>,
     last: Cell<*mut T>,

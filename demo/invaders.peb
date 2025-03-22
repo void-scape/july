@@ -1,7 +1,9 @@
+use intrinsics;
+
 // ------------ FFI ------------
 
 #[link("demo/SDL3")]
-extern("C"){
+extern("C") {
     SDL_Init: (init_code: u32) -> bool;
     SDL_CreateWindow: (title: CStr, width: i32, height: i32, flags: u64) -> &Window;
     

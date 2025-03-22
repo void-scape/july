@@ -1,0 +1,14 @@
+#[intrinsic]
+exit: (code: i32) {}
+
+#[intrinsic]
+printf: (fmt: &str) {}
+
+#[intrinsic]
+print_cs: (str: CStr) {}
+
+#[intrinsic]
+cs: (str: &str) -> CStr {}
+
+#[intrinsic]
+sqrt_f32: (f: f32) -> f32 {}

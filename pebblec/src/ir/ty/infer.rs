@@ -2,11 +2,12 @@ use super::store::TyId;
 use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
+use indexmap::IndexMap;
 use pebblec_parse::diagnostic::{Diag, Msg};
 use pebblec_parse::lex::buffer::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SymbolTable<T> {
     table: HashMap<IdentId, Vec<(Ident, T)>>,
 }
@@ -40,7 +41,7 @@ impl<T> SymbolTable<T> {
 pub struct InferCtx {
     key: TypeKey,
     tables: Vec<SymbolTable<TyVar>>,
-    constraints: HashMap<TyVar, (Ident, Vec<Cnst>)>,
+    constraints: IndexMap<TyVar, (Ident, Vec<Cnst>)>,
     var_index: usize,
 }
 

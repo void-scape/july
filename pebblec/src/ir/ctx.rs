@@ -4,13 +4,14 @@ use super::ident::*;
 use super::sig::Sig;
 use super::strukt::StructId;
 use super::ty::{store::TyId, store::TyStore, *};
+use indexmap::IndexMap;
 use pebblec_arena::BlobArena;
 use pebblec_parse::annotate_snippets::Level;
 use pebblec_parse::diagnostic::{Diag, Msg, Sourced};
 use pebblec_parse::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Ctx<'a> {
     pub tokens: &'a TokenBuffer<'a>,
     pub idents: IdentStore<'a>,
@@ -18,16 +19,29 @@ pub struct Ctx<'a> {
     pub enums: EnumStore,
     pub funcs: Vec<Func<'a>>,
     pub arena: BlobArena,
-    pub sigs: HashMap<IdentId, &'a Sig<'a>>,
-    pub impl_sigs: HashMap<(StructId, IdentId), &'a Sig<'a>>,
+    pub sigs: IndexMap<IdentId, &'a Sig<'a>>,
+    pub impl_sigs: IndexMap<(StructId, IdentId), &'a Sig<'a>>,
+}
+
+impl<'a> PartialEq for Ctx<'a> {
+    #[inline]
+    fn eq(&self, other: &Ctx<'a>) -> bool {
+        self.tokens == other.tokens
+            && self.idents == other.idents
+            && self.tys == other.tys
+            && self.enums == other.enums
+            && self.funcs == other.funcs
+            && self.sigs == other.sigs
+            && self.impl_sigs == other.impl_sigs
+    }
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
         Self {
             idents: IdentStore::default(),
-            sigs: HashMap::default(),
-            impl_sigs: HashMap::default(),
+            sigs: IndexMap::default(),
+            impl_sigs: IndexMap::default(),
             tys: TyStore::new(),
             enums: EnumStore::default(),
             arena: BlobArena::default(),

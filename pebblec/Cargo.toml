@@ -18,6 +18,8 @@ libffi = "3.2.0"
 libloading = "0.8.6"
 pebblec-parse = { path = "../pebblec-parse" }
 pebblec-arena = { path = "../pebblec-arena" }
+indexmap = "2.8.0"
+deterministic-hash = "1.0.1"
 
 [dev-dependencies]
 criterion = { version = "0.4", features = ["html_reports"] }

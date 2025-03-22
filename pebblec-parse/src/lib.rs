@@ -1,8 +1,6 @@
 use self::diagnostic::Diag;
 use self::matc::{Any, Colon, Ident, MatchTokenKind};
-use self::rules::prelude::{
-    Attribute, Const, Enum, ExternBlock, Func, Impl, Param, Struct,
-};
+use self::rules::prelude::{Attribute, Const, Enum, ExternBlock, Func, Impl, Param, Struct};
 use self::rules::{PErr, ParserRule};
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
@@ -240,17 +238,8 @@ impl Parser {
                     }
                 }
                 (_t1, _t2, _t3) => {
-                    // panic!("{_t1:?}, {_t2:?}, {_t3:?}");
-                    diags.push(PErr::Recover(stream.error("expected an item")));
-                    while !stream.is_empty()
-                        && (!Ident::matches(stream.peek().map(|t| buffer.kind(t)))
-                            || !Colon::matches(stream.peekn(1).map(|t| buffer.kind(t)))
-                            || !Any::<(matc::Enum, matc::Struct, matc::OpenParen)>::matches(
-                                stream.peekn(2).map(|t| buffer.kind(t)),
-                            ))
-                    {
-                        stream.eat();
-                    }
+                    diagnostic::report(stream.error("expected an item"));
+                    return Err(());
                 }
             }
         }

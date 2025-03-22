@@ -5,7 +5,7 @@ use pebblec_parse::lex::source::Source;
 use pebblec_parse::{Parser, lex::*};
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let source = Source::new("../demo/invaders.jy").unwrap();
+    let source = Source::new("../demo/invaders.peb").unwrap();
     c.bench_function("lexing invaders", |b| {
         b.iter_with_large_drop(|| Lexer::new(&source).lex().unwrap())
     });

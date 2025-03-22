@@ -305,7 +305,7 @@ pub fn report(diag: Diag) {
         );
 
         let renderer = Renderer::styled();
-        anstream::println!("{}", renderer.render(message));
+        println!("{}", renderer.render(message));
         println!("generated: {}", diag.compiler_loc);
         diag.reported = true;
     }
