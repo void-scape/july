@@ -1,0 +1,8 @@
+NULL: const u64 = 0;
+
+assert: (condition: bool) {
+    if !condition {
+        printf("failed assert\n");
+        exit(1);
+    }
+}

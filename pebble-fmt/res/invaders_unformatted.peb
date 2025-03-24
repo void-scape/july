@@ -101,7 +101,6 @@ FRect: struct {
     h: f32,
 }
 
-NULL           : const u64 = 0;
 SDL_INIT_VIDEO : const u32 = 0x020;
 SDL_QUIT       : const u32 = 0x100;
 SDL_KEY_DOWN   : const u32 = 0x300;

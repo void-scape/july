@@ -1,7 +1,11 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::matc::TokenKindType;
+use pebblec_macros::MatchTokens;
+
+#[derive(MatchTokens, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     // keywords
     Slf,
+    Use,
     Impl,
     Const,
     Loop,
@@ -60,6 +64,7 @@ impl TokenKind {
         match self {
             // keywords
             Self::Slf => "self",
+            Self::Use => "use",
             Self::Impl => "impl",
             Self::Const => "const",
             Self::Loop => "loop",

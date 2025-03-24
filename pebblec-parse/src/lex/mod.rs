@@ -15,18 +15,18 @@ pub mod io;
 pub mod kind;
 pub mod source;
 
-pub struct Lexer<'a> {
-    source: &'a Source,
+pub struct Lexer {
+    source: Source,
 }
 
-impl<'a> Lexer<'a> {
-    pub fn new(source: &'a Source) -> Self {
+impl Lexer {
+    pub fn new(source: Source) -> Self {
         Self { source }
     }
 
-    pub fn lex(self) -> ModalResult<TokenBuffer<'a>> {
+    pub fn lex<'a>(self) -> ModalResult<TokenBuffer<'a>> {
         let mut tokens = Vec::new();
-        let mut input = LocatingSlice::new(self.source.raw());
+        let mut input = LocatingSlice::new(self.source.source.as_str());
 
         while !input.is_empty() {
             take_while(.., |c| c == ' ' || c == '\n').parse_next(&mut input)?;
@@ -237,19 +237,8 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
     let (result, span) = take_while(1.., |c: char| {
         !c.is_whitespace()
             && c != '.'
-            && c != '^'
-            && c != '*'
-            && c != ','
-            && c != ':'
-            && c != ';'
-            && c != '('
-            && c != ')'
-            && c != '{'
-            && c != '}'
-            && c != '['
-            && c != ']'
-            && c != '|'
-            && c != '&'
+            && SYMBOL_TABLE[c as usize] == DUMMY_SYM
+            && DELIM_TABLE[c as usize] == DUMMY_DELIM
     })
     .with_span()
     .parse_next(input)?;
@@ -273,6 +262,7 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
         "enum" => TokenKind::Enum,
         "loop" => TokenKind::Loop,
         "const" => TokenKind::Const,
+        "use" => TokenKind::Use,
         "extern" => TokenKind::Extern,
         _ => TokenKind::Ident,
     };

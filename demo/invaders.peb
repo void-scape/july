@@ -1,6 +1,7 @@
-use intrinsics;
+use core::basic;
+use core::intrinsics;
 
-// ------------ FFI ------------
+use import;
 
 #[link("demo/SDL3")]
 extern("C") {
@@ -12,22 +13,16 @@ extern("C") {
     SDL_RenderPresent: (renderer: &Renderer) -> bool;
     
     SDL_LoadBMP: (file: CStr) -> &Surface;
-    SDL_DestroySurface: (surface: &Surface) ;
+    SDL_DestroySurface: (surface: &Surface);
     SDL_CreateTextureFromSurface: (renderer: &Renderer, surface: &Surface) -> &Texture;
     SDL_RenderTexture: (
         renderer: &Renderer, texture: &Texture, srcrect: &FRect, dstrect: &FRect
     ) -> bool;
     
     SDL_PollEvent: (event: &KeyboardEvent) -> bool;
-    SDL_Delay: (ms: u32) ;
+    SDL_Delay: (ms: u32);
     SDL_GetError: () -> CStr;
 }
-
-CStr: struct {
-    str: &u8,
-}
-
-// ------------ Demo ------------
 
 Window: struct {
     id: u32,
@@ -164,6 +159,8 @@ GameState: struct {
 }
 
 main: () -> i32 {
+    printf("imported: %\n", imported_func());
+    
     if !SDL_Init(SDL_INIT_VIDEO) {
         report_error("failed to init SDL\n");
         return 1;
@@ -339,29 +336,3 @@ report_error: (msg: &str) {
     printf(msg);
     print_cs(SDL_GetError());
 }
-
-empty_cs: () -> CStr {
-    CStr { str: NULL as &u8 }
-}
-
-assert: (condition: bool) {
-    if !condition {
-        printf("failed assert\n");
-        exit(1);
-    }
-}
-
-#[intrinsic]
-exit: (code: i32) {}
-
-#[intrinsic]
-printf: (fmt: &str) {}
-
-#[intrinsic]
-print_cs: (str: CStr) {}
-
-#[intrinsic]
-cs: (str: &str) -> CStr {}
-
-#[intrinsic]
-sqrt_f32: (f: f32) -> f32 {}

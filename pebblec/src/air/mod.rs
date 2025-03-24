@@ -1,9 +1,9 @@
-use crate::ir::ctx::CtxFmt;
+use crate::ir::ctx::{Ctx, CtxFmt};
 use crate::ir::lit::{Lit, LitKind};
 use crate::ir::sig::{Param, Sig};
 use crate::ir::strukt::StructDef;
 use crate::ir::ty::store::TyId;
-use crate::ir::ty::{FloatTy, IntTy, Sign, Ty, Width};
+use crate::ir::ty::{FloatTy, IntTy, Sign, Ty, TypeKey, Width};
 use crate::ir::*;
 use bin::*;
 use ctx::*;
@@ -608,6 +608,24 @@ pub fn lower_const<'a>(ctx: &mut AirCtx<'a>, konst: &Const) -> Vec<Air<'a>> {
         _ => unimplemented!(),
     }
     ctx.finish_const()
+}
+
+pub fn lower<'a>(
+    ctx: &'a Ctx<'a>,
+    key: &'a TypeKey,
+    const_eval_order: ConstEvalOrder,
+) -> (Vec<AirFunc<'a>>, Vec<Air<'a>>) {
+    let mut air_ctx = AirCtx::new(&ctx, &key);
+    let consts = const_eval_order
+        .into_iter()
+        .flat_map(|id| lower_const(&mut air_ctx, ctx.tys.get_const(id).unwrap()))
+        .collect::<Vec<_>>();
+    let air_funcs = ctx
+        .funcs
+        .iter()
+        .map(|func| lower_func(&mut air_ctx, func))
+        .collect::<Vec<_>>();
+    (air_funcs, consts)
 }
 
 pub fn lower_func<'a, 'b>(ctx: &'b mut AirCtx<'a>, func: &'a Func) -> AirFunc<'a> {

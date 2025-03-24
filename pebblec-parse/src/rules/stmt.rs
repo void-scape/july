@@ -1,7 +1,7 @@
 use super::{Next, PErr, ParserRule, RResult};
 use crate::AssignKind;
 use crate::lex::buffer::*;
-use crate::lex::kind::TokenKind;
+use crate::lex::kind::*;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*, stream::TokenStream};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,10 +147,26 @@ impl<'a, 's> ParserRule<'a, 's> for CntrlFlowRule {
         ) as ParserRule>::parse(stream)
         .map_err(PErr::fail)?;
 
-        Ok(if let Some((_else, otherwise)) = otherwise {
-            Expr::If(iff, Box::new(expr), block, Some(otherwise))
+        let span = if let Some(otherwise) = &otherwise {
+            Span::from_spans(stream.span(iff), otherwise.1.span)
         } else {
-            Expr::If(iff, Box::new(expr), block, None)
+            Span::from_spans(stream.span(iff), block.span)
+        };
+
+        Ok(if let Some((_else, otherwise)) = otherwise {
+            Expr::If {
+                span,
+                condition: Box::new(expr),
+                block,
+                otherwise: Some(otherwise),
+            }
+        } else {
+            Expr::If {
+                span,
+                condition: Box::new(expr),
+                block,
+                otherwise: None,
+            }
         })
     }
 }

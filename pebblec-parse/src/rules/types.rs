@@ -3,7 +3,7 @@ use crate::combinator::alt::Alt;
 use crate::combinator::spanned::Spanned;
 use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
-use crate::matc::{Ampersand, CloseBracket, Ident, Int, OpenBracket, Semi};
+use crate::lex::kind::*;
 use crate::stream::TokenStream;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,7 @@ impl<'a, 's> ParserRule<'a, 's> for SimpleType {
 
     fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
         if let Some(str) = stream.peek().map(|t| stream.as_str(t)) {
-            if BUILTIN_TYPES.contains(&str) {
+            if BUILTIN_TYPES.contains(&str.as_ref()) {
                 return Ok(PType::Simple(stream.expect()));
             }
         }

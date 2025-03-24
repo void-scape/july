@@ -9,11 +9,14 @@ use pebblec_arena::BlobArena;
 use pebblec_parse::annotate_snippets::Level;
 use pebblec_parse::diagnostic::{Diag, Msg, Sourced};
 use pebblec_parse::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
+use pebblec_parse::lex::source::SourceMap;
 use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Ctx<'a> {
-    pub tokens: &'a TokenBuffer<'a>,
+    pub source_map: SourceMap<'a>,
+    pub active_source: usize,
+
     pub idents: IdentStore<'a>,
     pub tys: TyStore<'a>,
     pub enums: EnumStore,
@@ -26,7 +29,7 @@ pub struct Ctx<'a> {
 impl<'a> PartialEq for Ctx<'a> {
     #[inline]
     fn eq(&self, other: &Ctx<'a>) -> bool {
-        self.tokens == other.tokens
+        self.source_map == other.source_map
             && self.idents == other.idents
             && self.tys == other.tys
             && self.enums == other.enums
@@ -37,8 +40,10 @@ impl<'a> PartialEq for Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(tokens: &'a TokenBuffer<'a>) -> Self {
+    pub fn new(source_map: SourceMap<'a>) -> Self {
         Self {
+            source_map,
+            active_source: 0,
             idents: IdentStore::default(),
             sigs: IndexMap::default(),
             impl_sigs: IndexMap::default(),
@@ -46,50 +51,35 @@ impl<'a> Ctx<'a> {
             enums: EnumStore::default(),
             arena: BlobArena::default(),
             funcs: Vec::new(),
-            tokens,
         }
     }
 
     #[track_caller]
     pub fn report_error<S: SpannedCtx>(&self, s: S, err: impl Into<String>) -> Diag<'a> {
-        Diag::sourced(
-            err.into().as_str(),
-            self.tokens.source(),
-            Msg::error(s.ctx_span(self), ""),
-        )
-        .loc(std::panic::Location::caller())
+        let span = s.ctx_span(self);
+        Diag::sourced(err.into().as_str(), Msg::error_span(span))
+            .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
     pub fn report_warn<S: SpannedCtx>(&self, s: S, err: impl Into<String>) -> Diag<'a> {
-        Diag::sourced(
-            err.into().as_str(),
-            self.tokens.source(),
-            Msg::warn(s.ctx_span(self), ""),
-        )
-        .loc(std::panic::Location::caller())
+        Diag::sourced(err.into().as_str(), Msg::warn_span(s.ctx_span(self)))
+            .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
     pub fn report_note(&self, span: Span, err: impl Into<String>) -> Diag<'a> {
-        Diag::sourced(
-            err.into().as_str(),
-            self.tokens.source(),
-            Msg::note(span, ""),
-        )
-        .level(Level::Note)
-        .loc(std::panic::Location::caller())
+        Diag::sourced(err.into().as_str(), Msg::note_span(span))
+            .level(Level::Note)
+            .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
     pub fn report_help<S: SpannedCtx>(&self, s: S, err: impl Into<String>) -> Diag<'a> {
-        Diag::sourced(
-            err.into().as_str(),
-            self.tokens.source(),
-            Msg::help(s.ctx_span(self), ""),
-        )
-        .level(Level::Help)
-        .loc(std::panic::Location::caller())
+        let span = s.ctx_span(self);
+        Diag::sourced(err.into().as_str(), Msg::help_span(span))
+            .level(Level::Help)
+            .loc(std::panic::Location::caller())
     }
 
     #[track_caller]
@@ -118,11 +108,15 @@ impl<'a> Ctx<'a> {
         title: impl Into<String>,
         msgs: impl IntoIterator<Item = Msg>,
     ) -> Diag<'a> {
-        let mut diag = Diag::new(title, Sourced::new(self.tokens.source(), Level::Error));
-        for msg in msgs {
-            diag = diag.msg(msg);
-        }
-        diag.loc(std::panic::Location::caller())
+        todo!()
+        //let mut diag = Diag::new(
+        //    title,
+        //    Sourced::new(self.token_buffer().source(), Level::Error),
+        //);
+        //for msg in msgs {
+        //    diag = diag.msg(msg);
+        //}
+        //diag.loc(std::panic::Location::caller())
     }
 
     pub fn ty_str(&self, ty: TyId) -> String {
@@ -218,25 +212,29 @@ impl<'a> Ctx<'a> {
 
     #[track_caller]
     pub fn store_ident(&mut self, ident: TokenId) -> Ident {
+        // TODO: this is a stop gap measure, there needs to be more clarity over a tokens source
+        self.active_source = ident.source as usize;
+        let str = self.token_buffer().as_str(ident).to_string();
         Ident {
             span: self.span(ident),
-            id: self.idents.store(self.tokens.ident(ident)),
+            id: self.idents.store(&str),
         }
     }
 
-    pub fn get_ident(&self, id: IdentId) -> Option<&'a str> {
+    pub fn get_ident(&'a self, id: IdentId) -> Option<&'a str> {
         self.idents.get_ident(id)
     }
 
     #[track_caller]
-    pub fn expect_ident(&self, id: IdentId) -> &'a str {
+    pub fn expect_ident(&'a self, id: IdentId) -> &'a str {
         self.get_ident(id).expect("invalid ident id")
     }
 }
 
 impl<'a> Buffer<'a> for Ctx<'a> {
+    #[track_caller]
     fn token_buffer(&self) -> &TokenBuffer<'a> {
-        self.tokens
+        self.source_map.buffer(self.active_source)
     }
 }
 

@@ -57,14 +57,9 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag<'a>> {
 fn init_params(infer: &mut InferCtx, func: &Func) {
     for param in func.sig.params.iter() {
         match param {
-            Param::Named {
-                span,
-                ty_binding,
-                ident,
-                ty,
-            } => {
+            Param::Named { span, ident, ty } => {
                 let var = infer.new_var(*ident);
-                infer.eq(var, *ty, *ty_binding);
+                infer.eq(var, *ty, *span);
             }
             _ => todo!(),
         }
@@ -675,29 +670,12 @@ impl<'a> Constrain<'a> for BinOp<'a> {
                     ),
                 ))
             } else {
-                //println!();
                 if let InferTy::Ty(ty) = infer_lhs {
-                    //println!(
-                    //    "constraining rhs: {} => {:#?}",
-                    //    match self.rhs {
-                    //        Expr::Ident(ident) => ctx.expect_ident(ident.id).to_string(),
-                    //        expr => format!("{:#?}", expr),
-                    //    },
-                    //    ty.to_string(ctx)
-                    //);
                     self.rhs
                         .constrain_with(ctx, infer, sig, ty, self.lhs.span())?;
                 }
 
                 if let InferTy::Ty(ty) = infer_rhs {
-                    //println!(
-                    //    "constraining lhs: {} => {:#?}",
-                    //    match self.lhs {
-                    //        Expr::Ident(ident) => ctx.expect_ident(ident.id).to_string(),
-                    //        expr => format!("{:#?}", expr),
-                    //    },
-                    //    ty.to_string(ctx)
-                    //);
                     self.lhs
                         .constrain_with(ctx, infer, sig, ty, self.rhs.span())?;
                 }
@@ -735,6 +713,7 @@ impl<'a> Constrain<'a> for StructDef<'a> {
         for field_def in self.fields.iter() {
             let field_map = ctx.tys.fields(self.id);
             let field_ty = field_map.field_ty(field_def.name.id).unwrap();
+            field_def.expr.constrain(ctx, infer, sig)?;
             if let Err(diag) =
                 field_def
                     .expr
@@ -1436,7 +1415,9 @@ pub fn aquire_access_ty<'a>(
 ) -> Result<(Span, TyId), Diag<'a>> {
     let ty = match access.lhs.resolve_infer(ctx, infer)? {
         InferTy::Float | InferTy::Int => {
-            return Err(ctx.report_error(access.lhs.span(), "invalid access: literal has no fields"));
+            return Err(
+                ctx.report_error(access.lhs.span(), "invalid access: literal has no fields")
+            );
         }
         InferTy::Ty(ty) => ctx.tys.ty(ty),
     };

@@ -24,7 +24,7 @@ struct Args {
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    std::io::set_output_capture(Some(Default::default()));
+    //std::io::set_output_capture(Some(Default::default()));
     let result = panic::catch_unwind(|| fmt::fmt(&args.file));
     let capture = std::io::set_output_capture(None);
 

@@ -20,6 +20,7 @@ mod konst;
 mod stmt;
 mod strukt;
 mod types;
+mod uze;
 
 #[allow(unused)]
 pub mod prelude {
@@ -34,6 +35,7 @@ pub mod prelude {
     pub use super::stmt::*;
     pub use super::strukt::*;
     pub use super::types::*;
+    pub use super::uze::*;
 }
 
 pub trait ParserRule<'a, 's> {
@@ -160,9 +162,7 @@ where
             (C::expect(), buffer.span(prev))
         };
 
-        PErr::Recover(
-            Diag::sourced(msg, buffer.source(), Msg::error_span(span)).loc(Location::caller()),
-        )
+        PErr::Recover(Diag::sourced(msg, Msg::error_span(span)).loc(Location::caller()))
     }
 }
 

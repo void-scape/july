@@ -3,8 +3,9 @@ use super::types::{PType, TypeRule};
 use super::{Next, PErr, ParserRule, RResult};
 use crate::combinator::opt::Opt;
 use crate::combinator::spanned::Spanned;
-use crate::lex::buffer::*;
-use crate::matc::{self, *};
+use crate::lex::kind::*;
+use crate::lex::{buffer::*, kind};
+use crate::matc::Curly;
 use crate::stream::TokenStream;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +30,7 @@ impl<'a, 's> ParserRule<'a, 's> for StructRule {
 
     fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
         let (name, _, _) =
-            <(Next<Ident>, Next<Colon>, Next<matc::Struct>) as ParserRule>::parse(stream)?;
+            <(Next<Ident>, Next<Colon>, Next<kind::Struct>) as ParserRule>::parse(stream)?;
         let (block_span, fields) = StructBlockRule::parse(stream).map_err(PErr::fail)?;
         Ok(Struct {
             name,

@@ -15,6 +15,10 @@ struct Args {
     #[arg(short, long)]
     file: String,
 
+    /// Do not capture output to stdout
+    #[arg(short, long, default_value_t = false)]
+    no_capture: bool,
+
     /// Log the interpreter
     #[arg(short, long, default_value_t = false)]
     log: bool,
@@ -23,17 +27,32 @@ struct Args {
 #[allow(non_snake_case)]
 fn main() -> ExitCode {
     let args = Args::parse();
-    std::io::set_output_capture(Some(Default::default()));
-    let result =
-        std::panic::catch_unwind(|| CompUnit::new(&args.file).map(|unit| unit.compile(args.log)));
-    let capture = std::io::set_output_capture(None);
-    let captured = capture.unwrap();
-    let captured = Arc::try_unwrap(captured).unwrap();
-    let captured = captured.into_inner().unwrap();
-    let captured = String::from_utf8(captured).unwrap();
 
-    let unit_result = match result {
-        Ok(result) => result,
+    let (result, captured) = if args.no_capture {
+        (
+            std::panic::catch_unwind(|| {
+                let mut unit = CompUnit::default().path(&args.file);
+                unit.compile(args.log)
+            }),
+            String::new(),
+        )
+    } else {
+        // TODO: don't capture interpreter output
+        std::io::set_output_capture(Some(Default::default()));
+        let result = std::panic::catch_unwind(|| {
+            let mut unit = CompUnit::default().path(&args.file);
+            unit.compile(args.log)
+        });
+        let capture = std::io::set_output_capture(None);
+        let captured = capture.unwrap();
+        let captured = Arc::try_unwrap(captured).unwrap();
+        let captured = captured.into_inner().unwrap();
+        (result, String::from_utf8(captured).unwrap())
+    };
+
+    print!("{captured}");
+    match result {
+        Ok(exit_code) => ExitCode::from(exit_code as u8),
         Err(_) => {
             match io::write(
                 format!(
@@ -45,29 +64,12 @@ fn main() -> ExitCode {
                 ),
                 captured.as_bytes(),
             ) {
-                Ok(_) => return ExitCode::FAILURE,
+                Ok(_) => ExitCode::FAILURE,
                 Err(io_err) => {
                     println!("failed to report ICE: {io_err}");
-                    println!("ICE: {captured}");
-                    return ExitCode::FAILURE;
+                    ExitCode::FAILURE
                 }
             }
-        }
-    };
-
-    let compiler_result = match unit_result {
-        Ok(result) => result,
-        Err(io_err) => {
-            println!("failed to open `{}`: {io_err}", args.file);
-            return ExitCode::FAILURE;
-        }
-    };
-
-    match compiler_result {
-        Ok(exit_code) => ExitCode::from(exit_code as u8),
-        Err(_) => {
-            print!("{captured}");
-            ExitCode::FAILURE
         }
     }
 }

@@ -1,5 +1,7 @@
 use super::source::Source;
 use crate::lex::kind::*;
+use std::borrow::Borrow;
+use std::marker::PhantomData;
 use std::ops::Range;
 
 pub trait Buffer<'a> {
@@ -8,10 +10,9 @@ pub trait Buffer<'a> {
 
 /// Query about a specific token with a [`TokenId`].
 pub trait TokenQuery<'a> {
-    fn kind(&self, token: TokenId) -> TokenKind;
-    fn span(&self, token: TokenId) -> Span;
-    fn ident(&self, token: TokenId) -> &'a str;
-    fn as_str(&self, token: TokenId) -> &'a str;
+    fn kind(&self, token: impl Borrow<TokenId>) -> TokenKind;
+    fn span(&self, token: impl Borrow<TokenId>) -> Span;
+    fn as_str(&'a self, token: impl Borrow<TokenId>) -> &'a str;
 }
 
 impl<'a, T> TokenQuery<'a> for T
@@ -19,22 +20,16 @@ where
     T: Buffer<'a>,
 {
     #[track_caller]
-    fn kind(&self, token: TokenId) -> TokenKind {
+    fn kind(&self, token: impl Borrow<TokenId>) -> TokenKind {
         self.token_buffer().kind(token)
     }
 
     #[track_caller]
-    fn span(&self, token: TokenId) -> Span {
+    fn span(&self, token: impl Borrow<TokenId>) -> Span {
         self.token_buffer().span(token)
     }
 
-    #[track_caller]
-    fn ident(&self, token: TokenId) -> &'a str {
-        self.token_buffer().ident(token)
-    }
-
-    #[track_caller]
-    fn as_str(&self, token: TokenId) -> &'a str {
+    fn as_str(&'a self, token: impl Borrow<TokenId>) -> &'a str {
         self.token_buffer().as_str(token)
     }
 }
@@ -43,24 +38,61 @@ where
 ///
 /// Used in [`TokenQuery`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TokenId(usize);
+pub struct TokenId {
+    pub index: u32,
+    pub source: u32,
+}
 
 impl TokenId {
-    pub fn new(id: usize) -> Self {
-        Self(id)
+    pub fn new(index: u32, source: u32) -> Self {
+        Self { index, source }
+    }
+
+    pub fn next(&self) -> Self {
+        Self {
+            index: self.index + 1,
+            source: self.source,
+        }
+    }
+
+    pub fn prev(&self) -> Option<Self> {
+        self.index.checked_sub(1).and_then(|index| {
+            Some(Self {
+                index,
+                source: self.source,
+            })
+        })
     }
 }
 
-/// Storage of the generated tokens for a given source file.
-#[derive(Debug, PartialEq, Eq)]
+/// Storage for the tokens of a source file.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenBuffer<'a> {
     tokens: Vec<Token>,
-    source: &'a Source,
+    source: Source,
+    /// Reference to the source file
+    _phantom: PhantomData<&'a str>,
 }
 
 impl<'a> TokenBuffer<'a> {
-    pub fn new(tokens: Vec<Token>, source: &'a Source) -> Self {
-        Self { tokens, source }
+    pub fn new(mut tokens: Vec<Token>, source: Source) -> Self {
+        for token in tokens.iter_mut() {
+            token.span.source = source.id as u32;
+        }
+
+        Self {
+            tokens,
+            source,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn source_id(&self) -> usize {
+        self.source.id
+    }
+
+    pub fn source(&self) -> &Source {
+        &self.source
     }
 
     pub fn len(&self) -> usize {
@@ -71,29 +103,21 @@ impl<'a> TokenBuffer<'a> {
         self.len() == 0
     }
 
-    pub fn source(&self) -> &'a Source {
-        self.source
-    }
-
+    #[track_caller]
     pub fn token(&self, token: TokenId) -> Option<&Token> {
-        self.tokens.get(token.0)
+        assert_eq!(token.source as usize, self.source_id());
+        self.tokens.get(token.index as usize)
     }
 
-    pub fn next(&self, token: TokenId) -> Option<TokenId> {
-        (self.len() > token.0 + 1).then_some(TokenId(token.0 + 1))
-    }
-
+    #[track_caller]
     pub fn prev(&self, token: TokenId) -> Option<TokenId> {
-        if token.0 == 0 {
-            None
-        } else {
-            (self.len() > token.0 - 1).then_some(TokenId(token.0 - 1))
-        }
+        assert_eq!(token.source as usize, self.source_id());
+        token.prev()
     }
 
     pub fn last(&self) -> Option<TokenId> {
         if !self.is_empty() {
-            Some(TokenId(self.len() - 1))
+            Some(TokenId::new(self.len() as u32 - 1, self.source_id() as u32))
         } else {
             None
         }
@@ -105,49 +129,36 @@ impl<'a> TokenBuffer<'a> {
             .iter()
             .enumerate()
             .find(|(_, t)| t.span.start as usize == start)
-            .map(|(i, _)| TokenId(i))
+            .map(|(i, _)| TokenId::new(i as u32, self.source_id() as u32))
     }
 }
 
 impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
     #[track_caller]
-    fn kind(&self, token: TokenId) -> TokenKind {
-        self.token(token)
+    fn kind(&self, token: impl Borrow<TokenId>) -> TokenKind {
+        self.token(*token.borrow())
             .expect("called `TokenQuery::kind` with an invalid token id")
             .kind
     }
 
     #[track_caller]
-    fn span(&self, token: TokenId) -> Span {
-        self.token(token)
+    fn span(&self, token: impl Borrow<TokenId>) -> Span {
+        self.token(*token.borrow())
             .expect("called `TokenQuery::span` with an invalid token id")
             .span
     }
 
     #[track_caller]
-    fn ident(&self, token: TokenId) -> &'a str {
-        if !matches!(self.kind(token), TokenKind::Ident) {
-            panic!(
-                "called `TokenQuery::ident` on a {:?} token",
-                self.kind(token)
-            );
-        }
-
-        self.as_str(token)
-    }
-
-    #[track_caller]
-    fn as_str(&self, token: TokenId) -> &'a str {
-        &self.source.raw()[self.span(token).range()]
+    fn as_str(&'a self, token: impl Borrow<TokenId>) -> &'a str {
+        &self.source.source[self.span(token).range()]
     }
 }
 
 /// Metadata about a token held within a [`TokenBuffer`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
-    //pub data: u64,
 }
 
 impl Token {
@@ -161,36 +172,56 @@ impl Token {
 pub struct Span {
     pub start: u32,
     pub end: u32,
+    /// Points to the span's [`Source`].
+    pub source: u32,
 }
 
 impl Span {
-    pub fn empty() -> Self {
-        Self { start: 0, end: 0 }
-    }
-
-    pub fn from_range(range: Range<usize>) -> Self {
-        Self {
-            start: range.start as u32,
-            end: range.end as u32,
-        }
-    }
-
-    pub fn from_range_u32(range: Range<u32>) -> Self {
-        Self {
-            start: range.start,
-            end: range.end,
-        }
-    }
-
+    /// Panics if `first` and `second` come from different [`Source`]s.
+    #[track_caller]
     pub fn from_spans(first: Self, second: Self) -> Self {
+        assert_eq!(first.source, second.source);
+
         if first.start > second.start {
-            Self::from_spans(second, first)
+            Self::from_spans(second, first).with_source(first.source)
         } else {
-            Self::from_range_u32(first.start..second.end)
+            Self::from_range_u32(first.start..second.end).with_source(first.source)
         }
     }
 
     pub fn range(&self) -> Range<usize> {
         self.start as usize..self.end as usize
+    }
+
+    pub(crate) fn empty() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            source: u32::MAX,
+        }
+    }
+
+    pub(crate) fn from_range(range: Range<usize>) -> Self {
+        Self {
+            start: range.start as u32,
+            end: range.end as u32,
+            source: u32::MAX,
+        }
+    }
+
+    pub(crate) fn from_range_u32(range: Range<u32>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+            source: u32::MAX,
+        }
+    }
+
+    pub(crate) fn with_source(self, source: u32) -> Self {
+        Self {
+            start: self.start,
+            end: self.end,
+            source,
+        }
     }
 }

@@ -1,4 +1,4 @@
-use crate::lex::buffer::{Span, TokenQuery};
+use crate::lex::buffer::{Buffer, Span, TokenQuery};
 use crate::{rules::*, stream::TokenStream};
 use std::ops::{Deref, DerefMut};
 
@@ -22,7 +22,8 @@ where
             let end = stream.span(stream.prev());
             SpannedR {
                 inner,
-                span: Span::from_range_u32(first.start..end.end),
+                span: Span::from_range_u32(first.start..end.end)
+                    .with_source(stream.token_buffer().source_id() as u32),
             }
         })
     }

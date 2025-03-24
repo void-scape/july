@@ -1,0 +1,9 @@
+use core::basic;
+
+CStr: struct {
+    str: &u8,
+}
+
+empty_cs: () -> CStr {
+    CStr { str: NULL as &u8 }
+}

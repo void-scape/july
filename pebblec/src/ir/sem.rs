@@ -2,7 +2,7 @@ use super::*;
 use pebblec_parse::lex::buffer::Buffer;
 use std::ops::Deref;
 
-pub fn sem_analysis_pre_typing<'a>(ctx: &'a Ctx<'a>) -> Result<(), ()> {
+pub fn sem_analysis_pre_typing<'a>(ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
     let mut ctx = SemCtx::new(ctx);
 
     ctx.sem_try(entry);
@@ -11,23 +11,23 @@ pub fn sem_analysis_pre_typing<'a>(ctx: &'a Ctx<'a>) -> Result<(), ()> {
     if ctx.diags.is_empty() {
         Ok(())
     } else {
-        Err(diagnostic::report_set(ctx.diags.into_iter()))
+        Err(Diag::bundle(std::mem::take(&mut ctx.diags)))
     }
 }
 
-pub fn sem_analysis<'a>(_ctx: &'a Ctx<'a>, _key: &'a TypeKey) -> Result<(), ()> {
+pub fn sem_analysis<'a>(_ctx: &Ctx<'a>, _key: &TypeKey) -> Result<(), Diag<'a>> {
     Ok(())
 }
 
-struct SemCtx<'a> {
-    ctx: &'a Ctx<'a>,
+struct SemCtx<'a, 'b> {
+    ctx: &'a Ctx<'b>,
     //key: &'a TypeKey,
-    diags: Vec<Diag<'a>>,
+    diags: Vec<Diag<'b>>,
 }
 
-impl<'a> SemCtx<'a> {
+impl<'a, 'b> SemCtx<'a, 'b> {
     pub fn new(
-        ctx: &'a Ctx<'a>,
+        ctx: &'a Ctx<'b>,
         //key: &'a TypeKey
     ) -> Self {
         Self {
@@ -37,13 +37,13 @@ impl<'a> SemCtx<'a> {
         }
     }
 
-    pub fn sem_try(&mut self, f: impl Fn(&mut SemCtx<'a>) -> Result<(), Diag<'a>>) {
+    pub fn sem_try(&mut self, f: impl Fn(&mut SemCtx<'a, 'b>) -> Result<(), Diag<'b>>) {
         if let Err(diag) = f(self) {
             self.diags.push(diag);
         }
     }
 
-    pub fn sem_func(&mut self, f: impl Fn(&SemCtx<'a>, &Func) -> Result<(), Diag<'a>>) {
+    pub fn sem_func(&mut self, f: impl Fn(&SemCtx<'a, 'b>, &Func) -> Result<(), Diag<'b>>) {
         let mut errs = Vec::new();
         for func in self.funcs.iter() {
             if !func.is_intrinsic() {
@@ -56,15 +56,15 @@ impl<'a> SemCtx<'a> {
     }
 }
 
-impl<'a> Deref for SemCtx<'a> {
-    type Target = Ctx<'a>;
+impl<'a, 'b> Deref for SemCtx<'a, 'b> {
+    type Target = Ctx<'b>;
 
     fn deref(&self) -> &Self::Target {
         self.ctx
     }
 }
 
-fn entry<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
+fn entry<'a, 'b>(ctx: &mut SemCtx<'a, 'b>) -> Result<(), Diag<'b>> {
     if let Some(func) = ctx
         .funcs
         .iter()
@@ -81,19 +81,20 @@ fn entry<'a>(ctx: &mut SemCtx<'a>) -> Result<(), Diag<'a>> {
         let help = "consider adding a `main: () [-> i32]` function";
         let error = "could not find entry point `main`";
 
-        if ctx.token_buffer().len() == 0 {
-            Err(ctx
-                .report_error(Span::empty(), error)
-                .wrap(ctx.report_help(Span::empty(), help)))
-        } else {
-            Err(ctx
-                .report_error(Span::empty(), error)
-                .wrap(ctx.report_help(ctx.token_buffer().last().unwrap(), help)))
-        }
+        todo!();
+        //if ctx.token_buffer().len() == 0 {
+        //    Err(ctx
+        //        .report_error(ctx.token_buffer(), error)
+        //        .wrap(ctx.report_help(Span::empty(), help)))
+        //} else {
+        //    Err(ctx
+        //        .report_error(Span::empty(), error)
+        //        .wrap(ctx.report_help(ctx.token_buffer().last().unwrap(), help)))
+        //}
     }
 }
 
-fn end_is_return<'a>(ctx: &SemCtx<'a>, func: &Func) -> Result<(), Diag<'a>> {
+fn end_is_return<'a, 'b>(ctx: &SemCtx<'a, 'b>, func: &Func) -> Result<(), Diag<'b>> {
     if func.sig.ty == TyId::UNIT && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
         Err(ctx
             .report_error(

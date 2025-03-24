@@ -1,10 +1,10 @@
 use super::expr::{Expr, ExprRule};
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
-use crate::lex::buffer::*;
-use crate::matc;
+use crate::combinator::prelude::*;
+use crate::lex::kind::*;
+use crate::lex::{buffer::*, kind};
 use crate::stream::TokenStream;
-use crate::{combinator::prelude::*, matc::*};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Const {
@@ -24,7 +24,7 @@ impl<'a, 's> ParserRule<'a, 's> for ConstRule {
         let spanned = Spanned::<(
             Next<Ident>,
             Next<Colon>,
-            Next<matc::Const>,
+            Next<kind::Const>,
             TypeRule,
             Next<Equals>,
             ExprRule,

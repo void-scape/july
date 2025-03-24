@@ -1,46 +1,58 @@
+use std::ffi::OsString;
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use pebblec::air::ctx::AirCtx;
+use pebblec::comp::CompUnit;
+use pebblec::ir::ctx::Ctx;
 use pebblec::{air, ir};
-use pebblec_parse::lex::source::Source;
-use pebblec_parse::{Parser, lex::*};
+use pebblec_parse::lex::source::{Source, SourceMap};
+use pebblec_parse::lex::*;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let source = Source::new("../demo/invaders.peb").unwrap();
-    c.bench_function("lexing invaders", |b| {
-        b.iter_with_large_drop(|| Lexer::new(&source).lex().unwrap())
-    });
-
-    let buf = Lexer::new(&source).lex().unwrap();
-    c.bench_function("parsing invaders", |b| {
-        b.iter_with_large_drop(|| Parser::parse(&buf).unwrap())
-    });
-
-    let mut items = Parser::parse(&buf).unwrap();
-    c.bench_function("lowering invaders", |b| {
-        b.iter_batched_ref(
-            || items.clone(),
-            |items| ir::lower(&buf, items).unwrap(),
+    c.bench_function("lex invaders", |b| {
+        b.iter_batched(
+            || source.clone(),
+            |source| Lexer::new(source).lex().unwrap(),
             criterion::BatchSize::LargeInput,
         )
     });
 
-    let (ctx, key, const_eval_order) = ir::lower(&buf, &mut items).unwrap();
+    let buf = Lexer::new(source).lex().unwrap();
+    let mut map = SourceMap::default();
+    map.insert(buf);
+    let origin = OsString::from("../demo/invaders.peb");
+    c.bench_function("parse invaders", |b| {
+        b.iter_batched(
+            || map.clone(),
+            |mut map| CompUnit::parse(&origin, &mut map).unwrap(),
+            criterion::BatchSize::LargeInput,
+        )
+    });
+
+    let mut items = CompUnit::parse(&origin, &mut map).unwrap();
+    c.bench_function("ir invaders", |b| {
+        b.iter_batched(
+            || (map.clone(), items.clone()),
+            |(map, mut items)| {
+                let mut ctx = Ctx::new(map);
+                _ = ir::lower(&mut ctx, &mut items).unwrap();
+            },
+            criterion::BatchSize::LargeInput,
+        )
+    });
+
+    let mut ctx = Ctx::new(map);
+    let (key, const_eval_order) = ir::lower(&mut ctx, &mut items).unwrap();
     let mut air_ctx = AirCtx::new(&ctx, &key);
-    c.bench_function("bytecode gen invaders", |b| {
-        b.iter_with_large_drop(|| {
-            let consts = const_eval_order
-                .iter()
-                .cloned()
-                .flat_map(|id| air::lower_const(&mut air_ctx, ctx.tys.get_const(id).unwrap()))
-                .collect::<Vec<_>>();
-            let air_funcs = ctx
-                .funcs
-                .iter()
-                .map(|func| air::lower_func(&mut air_ctx, func))
-                .collect::<Vec<_>>();
-            air_ctx = AirCtx::new(&ctx, &key);
-            (air_funcs, consts)
-        });
+    c.bench_function("air invaders", |b| {
+        b.iter_batched(
+            || const_eval_order.clone(),
+            |const_eval_order| {
+                _ = air::lower(&ctx, &key, const_eval_order);
+            },
+            criterion::BatchSize::LargeInput,
+        );
     });
 }
 

@@ -4,8 +4,8 @@ use crate::diagnostic::{Diag, Msg};
 use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
 
-impl TokenBuffer<'_> {
-    pub fn stream(&self) -> TokenStream {
+impl<'s> TokenBuffer<'s> {
+    pub fn stream<'a>(&'a self) -> TokenStream<'a, 's> {
         TokenStream::new(self)
     }
 }
@@ -108,18 +108,14 @@ impl<'a, 's> TokenStream<'a, 's> {
 
     #[track_caller]
     pub fn full_error(&self, title: impl Into<String>, span: Span) -> Diag<'s> {
-        Diag::sourced(title, self.buffer.source(), Msg::error_span(span))
-            .loc(std::panic::Location::caller())
+        Diag::sourced(title, Msg::error_span(span)).loc(std::panic::Location::caller())
     }
 
     #[track_caller]
     pub fn error(&self, msg: impl Into<String>) -> Diag<'s> {
         let prev = self.prev();
-        match self.buffer.next(prev) {
-            Some(next) => {
-                let span = self.buffer.span(next);
-                self.full_error(msg, span)
-            }
+        match self.token_buffer().token(prev.next()) {
+            Some(next) => self.full_error(msg, next.span),
             None => {
                 let span = self.buffer.span(prev);
                 self.full_error(msg, span)
@@ -147,12 +143,12 @@ impl<'a, 's> TokenStream<'a, 's> {
 
     pub fn peek(&self) -> Option<TokenId> {
         let idx = self.start + self.index;
-        (idx < self.end).then_some(TokenId::new(idx))
+        (idx < self.end).then_some(TokenId::new(idx as u32, self.buffer.source_id() as u32))
     }
 
     pub fn peekn(&self, n: usize) -> Option<TokenId> {
         let idx = self.start + self.index + n;
-        (idx < self.end).then_some(TokenId::new(idx))
+        (idx < self.end).then_some(TokenId::new(idx as u32, self.buffer.source_id() as u32))
     }
 
     pub fn peek_kind(&self) -> Option<TokenKind> {
@@ -212,13 +208,13 @@ impl<'a, 's> TokenStream<'a, 's> {
 
     pub fn prev(&self) -> TokenId {
         if self.index == 0 {
-            return TokenId::new(0);
+            return TokenId::new(0, self.buffer.source_id() as u32);
         }
 
         let idx = self.index - 1;
         (idx < self.end)
-            .then_some(TokenId::new(idx))
-            .unwrap_or_else(|| TokenId::new(self.end - 1))
+            .then_some(TokenId::new(idx as u32, self.buffer.source_id() as u32))
+            .unwrap_or_else(|| TokenId::new(self.end as u32 - 1, self.buffer.source_id() as u32))
     }
 
     pub fn match_peek<T: MatchTokenKind>(&self) -> bool {

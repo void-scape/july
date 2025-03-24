@@ -3,6 +3,7 @@ use super::{Next, ParserRule, RResult};
 use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
+use crate::lex::kind::*;
 use crate::rules::PErr;
 use crate::stream::TokenStream;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*};
@@ -29,7 +30,7 @@ impl Func {
             "add more attribute parsing: {:#?}",
             attr.tokens
                 .iter()
-                .map(|t| stream.as_str(*t))
+                .map(|t| stream.as_str(t))
                 .collect::<Vec<_>>()
         );
 
@@ -64,7 +65,12 @@ impl ExternBlock {
     ) -> Result<(), Diag<'s>> {
         assert!(attr.tokens.len() == 4, "add more attribute parsing");
 
-        if attr.tokens.first().map(|t| stream.as_str(*t)) == Some("link") {
+        if attr
+            .tokens
+            .first()
+            .map(|t| stream.as_str(*t) == "link")
+            .is_some_and(|b| b)
+        {
             for func in self.funcs.iter_mut() {
                 func.link = Some(*attr.tokens.get(2).unwrap());
             }
@@ -91,6 +97,7 @@ pub enum Param {
     Slf(TokenId),
     SlfRef(TokenId),
     Named {
+        span: Span,
         name: TokenId,
         colon: TokenId,
         ty: PType,
@@ -266,7 +273,18 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
                             <(Next<Ident>, Next<Colon>, TypeRule, Opt<Next<Comma>>)>::parse(
                                 &mut slice,
                             )?;
-                        params.push((comma, Param::Named { name, colon, ty }));
+                        params.push((
+                            comma,
+                            Param::Named {
+                                span: Span::from_spans(
+                                    stream.span(name),
+                                    ty.span(stream.token_buffer()),
+                                ),
+                                name,
+                                colon,
+                                ty,
+                            },
+                        ));
                     }
                 }
             }

@@ -136,7 +136,7 @@ impl InferCtx {
     }
 
     #[track_caller]
-    pub fn var_ident<'a>(&self, ctx: &Ctx<'a>, var: TyVar) -> &'a str {
+    pub fn var_ident<'a>(&self, ctx: &'a Ctx<'a>, var: TyVar) -> &'a str {
         self.constraints
             .get(&var)
             .map(|(ident, _)| ctx.expect_ident(ident.id))

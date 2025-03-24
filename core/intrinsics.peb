@@ -1,3 +1,5 @@
+use core::ffi;
+
 #[intrinsic]
 exit: (code: i32) {}
 

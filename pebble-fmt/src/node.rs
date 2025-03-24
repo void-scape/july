@@ -4,7 +4,7 @@ use pebblec_parse::lex::kind::TokenKind;
 use pebblec_parse::matc::{Bracket, Curly, DelimPair, Paren};
 use pebblec_parse::rules::prelude::{
     ArrDef, Assign, Attribute, Block, Const, Expr, ExternBlock, ExternFunc, Field, FieldDef, Func,
-    PType, Param, Stmt, Struct, StructDef,
+    PType, Param, Stmt, Struct, StructDef, Use,
 };
 use std::borrow::Borrow;
 use std::ops::Deref;
@@ -19,15 +19,15 @@ pub enum BreakCond {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Node<'s> {
-    Group(&'s [Node<'s>]),
-    Indent(&'s Node<'s>, usize),
-    Text(&'s str),
-    FlatText(&'s str),
-    BreakText(&'s str),
+pub enum Node<'a> {
+    Group(&'a [Node<'a>]),
+    Indent(&'a Node<'a>, usize),
+    Text(&'a str),
+    FlatText(&'a str),
+    BreakText(&'a str),
 }
 
-impl<'s> Node<'s> {
+impl<'a> Node<'a> {
     pub fn space() -> Self {
         Self::Text(" ")
     }
@@ -36,7 +36,7 @@ impl<'s> Node<'s> {
         Self::Text("\n")
     }
 
-    pub fn token<T: Borrow<TokenId>>(buf: &TokenBuffer<'s>, token: T) -> Self {
+    pub fn token<T: Borrow<TokenId>>(buf: &'a TokenBuffer<'a>, token: T) -> Self {
         let t = *token.borrow();
         if buf.kind(t) == TokenKind::Str {
             Self::Text(String::leak(format!("\"{}\"", buf.as_str(t))))
@@ -45,14 +45,14 @@ impl<'s> Node<'s> {
         }
     }
 
-    pub fn group(arena: &BlobArena, nodes: &[Node<'s>]) -> Self {
+    pub fn group(arena: &BlobArena, nodes: &[Node<'a>]) -> Self {
         Self::Group(arena.alloc_slice(nodes))
     }
 
     pub fn set(
         arena: &BlobArena,
         condition: BreakCond,
-        elems: impl ExactSizeIterator<Item = Vec<Node<'s>>>,
+        elems: impl ExactSizeIterator<Item = Vec<Node<'a>>>,
     ) -> Self {
         let len = elems.len();
         let mut set = Vec::with_capacity(len);
@@ -82,12 +82,12 @@ impl<'s> Node<'s> {
     }
 
     pub fn delimited_with<T: Deref<Target = R>, R: ?Sized, D: DelimPair>(
-        buf: &TokenBuffer<'s>,
+        buf: &'a TokenBuffer<'a>,
         arena: &BlobArena,
         _delims: D,
         inner: &T,
         condition: BreakCond,
-        nodify: impl FnOnce(&TokenBuffer<'s>, &BlobArena, &R) -> Option<Node<'s>>,
+        nodify: impl FnOnce(&'a TokenBuffer<'a>, &BlobArena, &R) -> Option<Node<'a>>,
     ) -> Self {
         match condition {
             BreakCond::Width => {
@@ -154,12 +154,12 @@ impl<'s> Node<'s> {
     }
 
     pub fn indent_delimited_with<T: Deref<Target = R>, R: ?Sized>(
-        buf: &TokenBuffer<'s>,
+        buf: &'a TokenBuffer<'a>,
         arena: &BlobArena,
         delims: impl DelimPair,
         inner: &T,
         condition: BreakCond,
-        nodify: impl FnOnce(&TokenBuffer<'s>, &BlobArena, &R) -> Option<Node<'s>>,
+        nodify: impl FnOnce(&'a TokenBuffer<'a>, &BlobArena, &R) -> Option<Node<'a>>,
     ) -> Self {
         Node::delimited_with(buf, arena, delims, inner, condition, |buf, arena, inner| {
             nodify(buf, arena, inner).map(|n| Node::Indent(arena.alloc(n), INDENT))
@@ -178,7 +178,7 @@ impl<'s> Node<'s> {
     }
 }
 
-fn check_whitespace_span<'a>(buf: &TokenBuffer<'a>, span: Span, collection: &mut Vec<Node<'a>>) {
+fn check_whitespace_span<'a>(buf: &'a TokenBuffer<'a>, span: Span, collection: &mut Vec<Node<'a>>) {
     let token = buf.token_with_start(span.start as usize).unwrap();
     check_whitespace(buf, token, collection);
 }
@@ -189,15 +189,19 @@ fn check_whitespace_slice<'a>(slice: &str, collection: &mut Vec<Node<'a>>) {
     }
 }
 
-pub fn check_whitespace<'a>(buf: &TokenBuffer<'a>, token: TokenId, collection: &mut Vec<Node<'a>>) {
+pub fn check_whitespace<'a>(
+    buf: &'a TokenBuffer<'a>,
+    token: TokenId,
+    collection: &mut Vec<Node<'a>>,
+) {
     let next_span = buf.span(token);
     let end = next_span.start as usize;
 
     let mut slice = if let Some(prev_span) = buf.prev(token).map(|t| buf.span(t)) {
         let start = prev_span.end as usize;
-        &buf.source().raw()[start..end]
+        &buf.source().source[start..end]
     } else {
-        &buf.source().raw()[..end]
+        &buf.source().source[..end]
     };
 
     loop {
@@ -219,7 +223,7 @@ pub fn check_whitespace<'a>(buf: &TokenBuffer<'a>, token: TokenId, collection: &
     }
 }
 
-pub fn nodify_func<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, func: &Func) -> Node<'s> {
+pub fn nodify_func<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, func: &Func) -> Node<'a> {
     let mut nodes = vec![
         Node::Text(buf.as_str(func.name)),
         Node::Text(buf.as_str(func.colon)),
@@ -242,11 +246,11 @@ pub fn nodify_func<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, func: &Func) ->
     Node::Group(arena.alloc_slice(&nodes))
 }
 
-fn nodify_params<'s>(
-    buf: &TokenBuffer<'s>,
+fn nodify_params<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     params: &[Param],
-) -> Option<Node<'s>> {
+) -> Option<Node<'a>> {
     if params.is_empty() {
         return None;
     }
@@ -259,7 +263,9 @@ fn nodify_params<'s>(
             Param::SlfRef(t) => {
                 vec![Node::Text("&"), Node::token(buf, t)]
             }
-            Param::Named { name, colon, ty } => {
+            Param::Named {
+                name, colon, ty, ..
+            } => {
                 vec![
                     Node::token(buf, name),
                     Node::token(buf, colon),
@@ -271,7 +277,7 @@ fn nodify_params<'s>(
     }))
 }
 
-fn nodify_ty<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, ty: &PType) -> Node<'s> {
+fn nodify_ty<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, ty: &PType) -> Node<'a> {
     match ty {
         PType::Simple(t) => Node::Text(buf.as_str(*t)),
         PType::Ref { inner, .. } => {
@@ -299,12 +305,12 @@ fn nodify_ty<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, ty: &PType) -> Node<'
     }
 }
 
-fn nodify_block<'s>(
-    buf: &TokenBuffer<'s>,
+fn nodify_block<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     block: &Block,
     mut condition: BreakCond,
-) -> Node<'s> {
+) -> Node<'a> {
     if condition == BreakCond::MoreThanOne {
         if block.stmts.len() > 1 {
             condition = BreakCond::Always;
@@ -316,7 +322,11 @@ fn nodify_block<'s>(
     Node::indent_delimited_with(buf, arena, Curly, &block.stmts, condition, nodify_stmts)
 }
 
-fn nodify_stmts<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, stmts: &[Stmt]) -> Option<Node<'s>> {
+fn nodify_stmts<'a>(
+    buf: &'a TokenBuffer<'a>,
+    arena: &BlobArena,
+    stmts: &[Stmt],
+) -> Option<Node<'a>> {
     if stmts.is_empty() {
         return None;
     }
@@ -361,7 +371,7 @@ fn nodify_stmts<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, stmts: &[Stmt]) ->
     Some(Node::Group(arena.alloc_slice(&nodes)))
 }
 
-fn nodify_expr<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, expr: &Expr) -> Node<'s> {
+fn nodify_expr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, expr: &Expr) -> Node<'a> {
     match expr {
         Expr::Break(t)
         | Expr::Continue(t)
@@ -369,7 +379,7 @@ fn nodify_expr<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, expr: &Expr) -> Nod
         | Expr::Lit(t)
         | Expr::Str(t)
         | Expr::Bool(t) => Node::token(buf, t),
-        Expr::Bin(kind, lhs, rhs) => Node::group(
+        Expr::Bin(_, kind, lhs, rhs) => Node::group(
             arena,
             &[
                 nodify_expr(buf, arena, lhs),
@@ -466,7 +476,12 @@ fn nodify_expr<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, expr: &Expr) -> Nod
                 Node::indent_delimited_with(buf, arena, Paren, args, BreakCond::Width, nodify_args),
             ],
         ),
-        Expr::If(_, condition, block, otherwise) => {
+        Expr::If {
+            span,
+            condition,
+            block,
+            otherwise,
+        } => {
             if let Some(otherwise) = otherwise {
                 Node::group(
                     arena,
@@ -543,7 +558,7 @@ fn nodify_expr<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, expr: &Expr) -> Nod
                 nodify_block(buf, arena, block, BreakCond::Always),
             ],
         ),
-        Expr::Unary(_, kind, expr) => {
+        Expr::Unary(_, _, kind, expr) => {
             if kind.is_prefix() {
                 Node::group(
                     arena,
@@ -567,11 +582,11 @@ fn nodify_expr<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, expr: &Expr) -> Nod
     }
 }
 
-fn nodify_struct_fields<'s>(
-    buf: &TokenBuffer<'s>,
+fn nodify_struct_fields<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     fields: &[Field],
-) -> Option<Node<'s>> {
+) -> Option<Node<'a>> {
     if fields.is_empty() {
         None
     } else {
@@ -592,11 +607,11 @@ fn nodify_struct_fields<'s>(
     }
 }
 
-fn nodify_struct_field_defs<'s>(
-    buf: &TokenBuffer<'s>,
+fn nodify_struct_field_defs<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     fields: &[FieldDef],
-) -> Option<Node<'s>> {
+) -> Option<Node<'a>> {
     if fields.is_empty() {
         None
     } else {
@@ -617,11 +632,11 @@ fn nodify_struct_field_defs<'s>(
     }
 }
 
-fn nodify_expr_set<'s>(
-    buf: &TokenBuffer<'s>,
+fn nodify_expr_set<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     exprs: &[Expr],
-) -> Option<Node<'s>> {
+) -> Option<Node<'a>> {
     if exprs.is_empty() {
         None
     } else {
@@ -633,7 +648,7 @@ fn nodify_expr_set<'s>(
     }
 }
 
-fn nodify_args<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, args: &[Expr]) -> Option<Node<'s>> {
+fn nodify_args<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, args: &[Expr]) -> Option<Node<'a>> {
     if args.is_empty() {
         None
     } else {
@@ -645,7 +660,7 @@ fn nodify_args<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, args: &[Expr]) -> O
     }
 }
 
-pub fn nodify_struct<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, strukt: &Struct) -> Node<'s> {
+pub fn nodify_struct<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, strukt: &Struct) -> Node<'a> {
     Node::group(
         arena,
         &[
@@ -663,7 +678,7 @@ pub fn nodify_struct<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, strukt: &Stru
     )
 }
 
-pub fn nodify_const<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, konst: &Const) -> Node<'s> {
+pub fn nodify_const<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, konst: &Const) -> Node<'a> {
     Node::group(
         arena,
         &[
@@ -678,18 +693,18 @@ pub fn nodify_const<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, konst: &Const)
     )
 }
 
-pub fn nodify_attr<'s>(buf: &TokenBuffer<'s>, arena: &BlobArena, attr: &Attribute) -> Node<'s> {
+pub fn nodify_attr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, attr: &Attribute) -> Node<'a> {
     let mut nodes = vec![Node::Text("#[")];
     nodes.extend(attr.tokens.iter().map(|t| Node::token(buf, *t)));
     nodes.push(Node::Text("]"));
     Node::group(arena, &nodes)
 }
 
-pub fn nodify_extern<'s>(
-    buf: &TokenBuffer<'s>,
+pub fn nodify_extern<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     exturn: &ExternBlock,
-) -> Node<'s> {
+) -> Node<'a> {
     Node::group(
         arena,
         &[
@@ -708,11 +723,11 @@ pub fn nodify_extern<'s>(
     )
 }
 
-fn nodify_extern_funcs<'s>(
-    buf: &TokenBuffer<'s>,
+fn nodify_extern_funcs<'a>(
+    buf: &'a TokenBuffer<'a>,
     arena: &BlobArena,
     funcs: &[ExternFunc],
-) -> Option<Node<'s>> {
+) -> Option<Node<'a>> {
     if funcs.is_empty() {
         return None;
     }
@@ -731,10 +746,9 @@ fn nodify_extern_funcs<'s>(
                 BreakCond::Width,
                 nodify_params,
             ),
-            Node::space(),
         ]);
         if let Some(ty) = &func.ty {
-            nodes.extend([Node::Text("-> "), nodify_ty(buf, arena, ty)]);
+            nodes.extend([Node::Text(" -> "), nodify_ty(buf, arena, ty)]);
         }
 
         if i != funcs.len() - 1 {
@@ -745,4 +759,17 @@ fn nodify_extern_funcs<'s>(
     }
 
     Some(Node::group(arena, &nodes))
+}
+
+pub fn nodify_use<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, uze: &Use) -> Node<'a> {
+    let mut path = vec![Node::Text("use ")];
+    path.extend(
+        uze.path
+            .iter()
+            .flat_map(|t| [Node::Text(buf.as_str(t)), Node::Text("::")]),
+    );
+    path.pop();
+    path.push(Node::Text(";"));
+
+    Node::group(arena, &path)
 }

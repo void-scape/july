@@ -43,7 +43,6 @@ pub enum Param {
     SlfRef(Ident),
     Named {
         span: Span,
-        ty_binding: Span,
         ident: Ident,
         ty: TyId,
     },

@@ -1,4 +1,4 @@
-use crate::lex::kind::TokenKind;
+use crate::lex::kind::*;
 use std::marker::PhantomData;
 
 pub trait MatchTokenKind {
@@ -148,63 +148,3 @@ impl DelimPair for Bracket {
 pub trait TokenKindType {
     fn kind() -> TokenKind;
 }
-
-macro_rules! impl_tkt {
-    ($ty:ident, $kind:expr) => {
-        #[derive(Debug, Default)]
-        pub struct $ty;
-
-        impl TokenKindType for $ty {
-            fn kind() -> TokenKind {
-                $kind
-            }
-        }
-    };
-}
-
-macro_rules! impl_tkt_for {
-    ($variant:ident) => {
-        impl_tkt!($variant, TokenKind::$variant);
-    };
-}
-
-impl_tkt_for!(Impl);
-impl_tkt_for!(If);
-impl_tkt_for!(Else);
-impl_tkt_for!(True);
-impl_tkt_for!(False);
-impl_tkt_for!(Enum);
-impl_tkt_for!(Fn);
-impl_tkt_for!(Struct);
-impl_tkt_for!(Ret);
-impl_tkt_for!(Let);
-impl_tkt_for!(Colon);
-impl_tkt_for!(Ident);
-impl_tkt_for!(Equals);
-impl_tkt_for!(Int);
-impl_tkt_for!(Semi);
-impl_tkt_for!(Plus);
-impl_tkt_for!(Asterisk);
-impl_tkt_for!(OpenAngle);
-impl_tkt_for!(CloseAngle);
-impl_tkt_for!(OpenCurly);
-impl_tkt_for!(CloseCurly);
-impl_tkt_for!(OpenParen);
-impl_tkt_for!(CloseParen);
-impl_tkt_for!(OpenBracket);
-impl_tkt_for!(CloseBracket);
-impl_tkt_for!(Hyphen);
-impl_tkt_for!(Comma);
-impl_tkt_for!(Dot);
-impl_tkt_for!(DoubleDot);
-impl_tkt_for!(Pound);
-impl_tkt_for!(Ampersand);
-impl_tkt_for!(Str);
-impl_tkt_for!(Extern);
-impl_tkt_for!(Loop);
-impl_tkt_for!(For);
-impl_tkt_for!(In);
-impl_tkt_for!(Const);
-impl_tkt_for!(Caret);
-impl_tkt_for!(As);
-impl_tkt_for!(Slf);

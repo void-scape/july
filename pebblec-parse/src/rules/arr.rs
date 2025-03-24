@@ -1,9 +1,9 @@
 use super::expr::{Expr, ExprRule};
 use super::{Next, PErr, ParserRule, RResult};
-use crate::lex::buffer::*;
-use crate::lex::kind::TokenKind;
 use crate::combinator::alt::Alt;
 use crate::combinator::opt::Opt;
+use crate::lex::buffer::*;
+use crate::lex::kind::*;
 use crate::matc::*;
 use crate::stream::TokenStream;
 

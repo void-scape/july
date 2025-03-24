@@ -245,7 +245,6 @@ impl<'a> AirCtx<'a> {
     #[track_caller]
     pub fn expect_var(&self, ident: IdentId) -> Var {
         let builder = self.expect_func_builder();
-
         let ident_str = self.expect_ident(ident);
         self.var(ident)
             .or_else(|| {

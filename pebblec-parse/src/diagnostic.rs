@@ -1,8 +1,10 @@
 #![allow(unused)]
 use crate::lex::buffer::Span;
-use crate::lex::source::Source;
+use crate::lex::source::{Source, SourceMap};
 use annotate_snippets::{Level, Renderer, Snippet};
 use std::borrow::Cow;
+use std::ffi::OsStr;
+use std::marker::PhantomData;
 use std::panic::Location;
 
 #[derive(Debug)]
@@ -23,10 +25,10 @@ impl<'a> Diag<'a> {
         }
     }
 
-    pub fn sourced(title: impl Into<String>, source: &'a Source, msg: Msg) -> Self {
+    pub fn sourced(title: impl Into<String>, msg: Msg) -> Self {
         Self {
             inner: DiagInnerPtr::One(Box::new(
-                Sourced::new(source, msg).into_diagnostic(title.into()),
+                Sourced::new(msg.span.source as usize, msg).into_diagnostic(title.into()),
             )),
         }
     }
@@ -100,15 +102,15 @@ impl<'a> Diag<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DiagInner<'a> {
     title: String,
-    source: &'a str,
-    origin: Cow<'a, str>,
+    source: usize,
     level: Level,
     msgs: Vec<Msg>,
     compiler_loc: String,
     reported: bool,
+    _phantom: PhantomData<&'a str>,
 }
 
 impl Drop for DiagInner<'_> {
@@ -116,9 +118,6 @@ impl Drop for DiagInner<'_> {
         if !self.reported {
             //panic!("unreported error: {:#?}", self);
         }
-
-        let _ = std::mem::take(&mut self.msgs);
-        let _ = std::mem::replace(&mut self.origin, Cow::Borrowed(""));
     }
 }
 
@@ -233,23 +232,22 @@ impl<T> Spanned<T> {
     }
 }
 
-pub struct Sourced<'a, T> {
-    source: &'a Source,
+pub struct Sourced<T> {
+    source: usize,
     inner: T,
 }
 
-impl<'a, T> Sourced<'a, T> {
-    pub fn new(source: &'a Source, inner: T) -> Self {
+impl<T> Sourced<T> {
+    pub fn new(source: usize, inner: T) -> Self {
         Self { source, inner }
     }
 }
 
-impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
+impl<'a> Diagnostic<'a> for Sourced<Spanned<Label<'a>>> {
     fn into_diagnostic(self, title: String) -> DiagInner<'a> {
         DiagInner {
             title,
-            source: self.source.raw(),
-            origin: self.source.origin().to_string_lossy(),
+            source: self.source,
             level: Level::Error,
             reported: false,
             compiler_loc: String::new(),
@@ -259,43 +257,46 @@ impl<'a> Diagnostic<'a> for Sourced<'a, Spanned<Label<'a>>> {
                 self.inner.span,
                 self.inner.inner.label.to_string(),
             )],
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<'a> Diagnostic<'a> for Sourced<'a, Msg> {
+impl<'a> Diagnostic<'a> for Sourced<Msg> {
     fn into_diagnostic(self, title: String) -> DiagInner<'a> {
         DiagInner {
             title,
-            source: self.source.raw(),
-            origin: self.source.origin().to_string_lossy(),
+            source: self.source,
             level: Level::Error,
             msgs: vec![self.inner],
             compiler_loc: String::new(),
             reported: false,
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<'a> Diagnostic<'a> for Sourced<'a, Level> {
+impl<'a> Diagnostic<'a> for Sourced<Level> {
     fn into_diagnostic(self, title: String) -> DiagInner<'a> {
         DiagInner {
             title,
-            source: self.source.raw(),
-            origin: self.source.origin().to_string_lossy(),
+            source: self.source,
             level: self.inner,
             msgs: Vec::new(),
             compiler_loc: String::new(),
             reported: false,
+            _phantom: PhantomData,
         }
     }
 }
 
-pub fn report(diag: Diag) {
+pub fn report(source_map: &SourceMap, diag: Diag) {
     for mut diag in diag.into_inner() {
+        let source = source_map.source(diag.source);
+        let origin = source.origin.to_string_lossy();
         let message = diag.level.title(&diag.title).snippet(
-            Snippet::source(&diag.source)
-                .origin(&diag.origin)
+            Snippet::source(&source.source)
+                .origin(&origin)
                 .fold(true)
                 .annotations(
                     diag.msgs
@@ -306,13 +307,7 @@ pub fn report(diag: Diag) {
 
         let renderer = Renderer::styled();
         println!("{}", renderer.render(message));
-        println!("generated: {}", diag.compiler_loc);
+        //println!("generated: {}", diag.compiler_loc);
         diag.reported = true;
-    }
-}
-
-pub fn report_set<'a>(set: impl IntoIterator<Item = Diag<'a>>) {
-    for diag in set.into_iter() {
-        report(diag);
     }
 }

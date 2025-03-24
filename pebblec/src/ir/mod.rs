@@ -13,9 +13,10 @@ use pebblec_parse::diagnostic::{self, Diag, Msg};
 use pebblec_parse::lex::buffer::{Buffer, Span, TokenQuery};
 use pebblec_parse::lex::buffer::{TokenBuffer, TokenId};
 use pebblec_parse::lex::kind::TokenKind;
+use pebblec_parse::lex::source::SourceMap;
 use pebblec_parse::rules::prelude::PType;
 use pebblec_parse::rules::prelude::{self as rules, Attr};
-use pebblec_parse::{AssignKind, UOpKind};
+use pebblec_parse::{AssignKind, ItemKind, UOpKind};
 use pebblec_parse::{BinOpKind, Item};
 use resolve::resolve_types;
 use sem::sem_analysis;
@@ -41,119 +42,116 @@ pub mod ty;
 pub type ConstEvalOrder = Vec<IdentId>;
 
 pub fn lower<'a>(
-    tokens: &'a TokenBuffer<'a>,
+    ctx: &mut Ctx<'a>,
     items: &'a mut [Item],
-) -> Result<(Ctx<'a>, TypeKey, ConstEvalOrder), ()> {
-    let mut ctx = Ctx::new(tokens);
-
+) -> Result<(TypeKey, ConstEvalOrder), Diag<'a>> {
     let mut attrs = Vec::new();
     for item in items.iter_mut() {
-        match item {
-            Item::Attr(attr) => attrs.push(attr),
-            Item::Func(func) => {
+        ctx.active_source = item.source;
+        match &mut item.kind {
+            ItemKind::Attr(attr) => attrs.push(attr),
+            ItemKind::Func(func) => {
                 for attr in attrs.drain(..) {
                     if let Err(diag) = func.parse_attr(&ctx.token_buffer().stream(), attr) {
-                        diagnostic::report(diag);
+                        diagnostic::report(&ctx.source_map, diag);
                     }
                 }
             }
-            Item::Extern(exturn) => {
+            ItemKind::Extern(exturn) => {
                 for attr in attrs.drain(..) {
                     if let Err(diag) = exturn.parse_attr(&ctx.token_buffer().stream(), attr) {
-                        diagnostic::report(diag);
+                        diagnostic::report(&ctx.source_map, diag);
                     }
                 }
             }
             _ => {
                 for attr in attrs.drain(..) {
-                    diagnostic::report(ctx.report_warn(attr.span, "attribute ignored"))
+                    diagnostic::report(
+                        &ctx.source_map,
+                        ctx.report_warn(attr.span, "attribute ignored"),
+                    )
                 }
             }
         }
     }
 
+    // TODO: does not check for duplicate struct definitions
     let structs = items
         .iter()
-        .filter_map(|i| match i {
-            Item::Struct(strukt) => Some(strukt),
+        .filter_map(|i| match &i.kind {
+            ItemKind::Struct(strukt) => Some((i.source, strukt)),
             _ => None,
         })
-        .map(|s| (ctx.store_ident(s.name).id, s))
+        .map(|(source, s)| {
+            ctx.active_source = source;
+            (ctx.store_ident(s.name).id, s)
+        })
         .collect();
-    if let Err(e) = add_structs(&mut ctx, &structs) {
-        diagnostic::report(e);
-        return Err(());
-    }
+    add_structs(ctx, &structs)?;
     ctx.build_type_layouts();
 
     let sigs = lower_set(
         items
             .iter()
-            .filter_map(|i| match i {
-                Item::Func(func) => Some(func),
+            .filter_map(|i| match &i.kind {
+                ItemKind::Func(func) => Some((i.source, func)),
                 _ => None,
             })
-            .map(|f| func_sig(&mut ctx, f)),
+            .map(|(source, f)| {
+                ctx.active_source = source;
+                func_sig(ctx, f)
+            }),
     )?;
-    if let Err(e) = ctx.store_sigs(sigs) {
-        diagnostic::report(e);
-        return Err(());
-    }
+    ctx.store_sigs(sigs)?;
 
     let extern_sigs = lower_set(
         items
             .iter()
-            .filter_map(|i| match i {
-                Item::Extern(func) => Some(func),
+            .filter_map(|i| match &i.kind {
+                ItemKind::Extern(func) => Some((i.source, func)),
                 _ => None,
             })
-            .flat_map(|f| {
+            .flat_map(|(source, f)| {
+                ctx.active_source = source;
                 f.funcs
                     .iter()
-                    .map(|f| extern_sig(&mut ctx, f))
+                    .map(|f| extern_sig(ctx, f))
                     .collect::<Vec<_>>()
             }),
     )?;
-    if let Err(e) = ctx.store_sigs(extern_sigs) {
-        diagnostic::report(e);
-        return Err(());
-    }
+    ctx.store_sigs(extern_sigs)?;
 
     let consts = items
         .iter()
-        .filter_map(|i| match i {
-            Item::Const(konst) => Some(konst),
+        .filter_map(|i| match &i.kind {
+            ItemKind::Const(konst) => Some((i.source, konst)),
             _ => None,
         })
-        .map(|s| (ctx.store_ident(s.name).id, s))
+        .map(|(source, c)| {
+            ctx.active_source = source;
+            (ctx.store_ident(c.name).id, c)
+        })
         .collect();
-    let eval_order = match add_consts(&mut ctx, &consts) {
-        Ok(order) => order,
-        Err(e) => {
-            diagnostic::report(e);
-            return Err(());
-        }
-    };
+    let eval_order = add_consts(ctx, &consts)?;
 
     let funcs = lower_set(
         items
             .iter()
-            .filter_map(|i| match i {
-                Item::Func(func) => Some(func),
+            .filter_map(|i| match &i.kind {
+                ItemKind::Func(func) => Some((i.source, func)),
                 _ => None,
             })
-            .map(|f| func(&mut ctx, f)),
+            .map(|(source, f)| {
+                ctx.active_source = source;
+                func(ctx, f)
+            }),
     )?;
     ctx.store_funcs(funcs);
 
     sem_analysis_pre_typing(&ctx)?;
-    match resolve_types(&mut ctx) {
-        Ok(key) => sem_analysis(&ctx, &key).map(|_| (ctx, key, eval_order)),
-        Err(diag) => {
-            diagnostic::report(diag);
-            Err(())
-        }
-    }
+    let key = resolve_types(ctx)?;
+    sem_analysis(&ctx, &key)?;
+    Ok((key, eval_order))
 }
 
 fn add_structs<'a>(
@@ -204,7 +202,7 @@ fn add_structs_recur<'a>(
         loop {
             match ty {
                 rules::PType::Simple(id) => {
-                    if !ctx.tys.is_builtin(ctx.ident(*id)) {
+                    if !ctx.tys.is_builtin(ctx.as_str(id).as_ref()) {
                         if let Some(strukt) = retrieve_struct(&field.ty, ctx, structs) {
                             add_structs_recur(ctx, structs, defined, processing, strukt)?;
                         } else {
@@ -280,7 +278,7 @@ fn report_struct_cycle<'a>(
         .enumerate()
     {
         if i > 0 {
-            title.push_str(&format!("`{}`", ctx.ident(curr.strukt.name)));
+            title.push_str(&format!("`{}`", ctx.as_str(curr.strukt.name)));
             title.push_str(", ");
         }
 
@@ -423,7 +421,7 @@ fn report_const_cycle<'a>(
         .enumerate()
     {
         if i > 0 {
-            title.push_str(&format!("`{}`", ctx.ident(curr.konst.name)));
+            title.push_str(&format!("`{}`", ctx.as_str(curr.konst.name)));
             title.push_str(", ");
         }
 
@@ -443,8 +441,8 @@ fn report_const_cycle<'a>(
     ctx.errors(title, msgs)
 }
 
-fn lower_set<'a, O>(items: impl Iterator<Item = Result<O, Diag<'a>>>) -> Result<Vec<O>, ()> {
-    let mut error = false;
+fn lower_set<'a, O>(items: impl Iterator<Item = Result<O, Diag<'a>>>) -> Result<Vec<O>, Diag<'a>> {
+    let mut errors = Vec::new();
     let mut set = Vec::new();
     for item in items {
         match item {
@@ -452,12 +450,16 @@ fn lower_set<'a, O>(items: impl Iterator<Item = Result<O, Diag<'a>>>) -> Result<
                 set.push(item);
             }
             Err(diag) => {
-                diagnostic::report(diag);
-                error = true;
+                errors.push(diag);
             }
         }
     }
-    (!error).then_some(set).ok_or(())
+
+    if !errors.is_empty() {
+        Err(Diag::bundle(errors))
+    } else {
+        Ok(set)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -482,19 +484,19 @@ fn enom<'a>(ctx: &mut Ctx<'a>, enom: &rules::Enum) -> Result<Enum, Diag<'a>> {
     let mut variant_names = Vec::with_capacity(enom.variants.len());
 
     for field in enom.variants.iter() {
-        if variant_names.contains(&ctx.ident(field.name)) {
+        if variant_names.contains(&ctx.as_str(field.name)) {
             return Err(ctx.errors(
                 "failed to parse enum",
                 [
                     Msg::error(ctx.span(field.name), "variant already declared"),
                     Msg::note(
                         ctx.span(enom.name),
-                        format!("while parsing `{}`", ctx.ident(enom.name)),
+                        format!("while parsing `{}`", ctx.as_str(enom.name)),
                     ),
                 ],
             ));
         }
-        variant_names.push(ctx.ident(field.name));
+        variant_names.push(ctx.as_str(field.name));
     }
 
     Ok(Enum {
@@ -515,15 +517,15 @@ fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag<
     let mut field_names = Vec::with_capacity(strukt.fields.len());
 
     for field in strukt.fields.iter() {
-        if field_names.contains(&ctx.ident(field.name)) {
+        if field_names.contains(&ctx.as_str(field.name)) {
             return Err(ctx
                 .report_error(ctx.span(field.name), "failed to parse struct")
                 .msg(Msg::note(
                     ctx.span(strukt.name),
-                    format!("while parsing `{}`", ctx.ident(strukt.name)),
+                    format!("while parsing `{}`", ctx.as_str(strukt.name)),
                 )));
         }
-        field_names.push(ctx.ident(field.name));
+        field_names.push(ctx.as_str(field.name));
     }
 
     Ok(Struct {
@@ -590,7 +592,7 @@ fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig<'a>, Diag<'
 fn extern_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::ExternFunc) -> Result<Sig<'a>, Diag<'a>> {
     let params = params(ctx, &func.params)?;
 
-    match ctx.as_str(func.convention) {
+    match ctx.as_str(func.convention).as_ref() {
         "C" => {}
         c => {
             return Err(ctx.report_error(
@@ -621,7 +623,7 @@ fn extern_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::ExternFunc) -> Result<Sig<'a>
             .transpose()?
             .unwrap_or(TyId::UNIT),
         linkage: Linkage::External {
-            link: ctx.intern_str(ctx.as_str(link)),
+            link: ctx.intern_str(ctx.as_str(link).as_ref()),
         },
     })
 }
@@ -629,7 +631,7 @@ fn extern_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::ExternFunc) -> Result<Sig<'a>
 fn ptype<'a>(ctx: &mut Ctx<'a>, ty: &rules::PType) -> Result<(Span, TyId), Diag<'a>> {
     Ok(match ty {
         rules::PType::Simple(id) => {
-            let ty = match ctx.ident(*id) {
+            let ty = match ctx.as_str(id).as_ref() {
                 "u8" => ctx.tys.ty_id(&Ty::Int(IntTy::new_8(Sign::U))),
                 "u16" => ctx.tys.ty_id(&Ty::Int(IntTy::new_16(Sign::U))),
                 "u32" => ctx.tys.ty_id(&Ty::Int(IntTy::new_32(Sign::U))),
@@ -649,7 +651,7 @@ fn ptype<'a>(ctx: &mut Ctx<'a>, ty: &rules::PType) -> Result<(Span, TyId), Diag<
                     } else {
                         return Err(ctx.report_error(
                             ctx.span(*id),
-                            format!("expected type, got `{}`", ctx.ident(*id)),
+                            format!("expected type, got `{}`", ctx.as_str(id)),
                         ));
                     }
                 }
@@ -682,11 +684,15 @@ fn params<'a>(ctx: &mut Ctx<'a>, fparams: &[rules::Param]) -> Result<Vec<Param>,
     let mut params = Vec::with_capacity(fparams.len());
     for p in fparams.iter() {
         match p {
-            rules::Param::Named { name, colon, ty } => {
+            rules::Param::Named {
+                span,
+                name,
+                colon,
+                ty,
+            } => {
                 let (span, ty) = ptype(ctx, ty)?;
                 params.push(Param::Named {
-                    span: Span::from_spans(ctx.span(*name), span),
-                    ty_binding: Span::from_spans(ctx.span(*colon), span),
+                    span,
                     ident: ctx.store_ident(*name),
                     ty,
                 });
@@ -1038,7 +1044,7 @@ pub struct If<'a> {
 
 fn if_<'a>(
     ctx: &mut Ctx<'a>,
-    iff: TokenId,
+    span: Span,
     expr: &rules::Expr,
     blck: &rules::Block,
     otherwise: Option<&rules::Block>,
@@ -1055,13 +1061,8 @@ fn if_<'a>(
         None => None,
     };
 
-    let span = match otherwise {
-        Some(o) => o.span(),
-        None => blck.span(),
-    };
-
     Ok(If {
-        span: Span::from_spans(ctx.span(iff), span),
+        span,
         condition: ctx.intern(condition),
         block: ctx.intern(blck),
         otherwise,
@@ -1126,6 +1127,7 @@ pub struct Access<'a> {
 
 fn bin_op<'a>(
     ctx: &mut Ctx<'a>,
+    span: Span,
     kind: BinOpKind,
     lhs: &rules::Expr,
     rhs: &rules::Expr,
@@ -1135,7 +1137,7 @@ fn bin_op<'a>(
         let rhs_expr = pexpr(ctx, rhs)?;
 
         BinOp {
-            span: Span::from_spans(lhs_expr.span(), rhs_expr.span()),
+            span,
             lhs: ctx.intern(lhs_expr),
             rhs: ctx.intern(rhs_expr),
             kind,
@@ -1181,29 +1183,32 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag<'a>
     Ok(match expr {
         rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
         rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
-        rules::Expr::Bin(op, lhs, rhs) => Expr::Bin(bin_op(ctx, *op, lhs, rhs)?),
+        rules::Expr::Bin(span, op, lhs, rhs) => Expr::Bin(bin_op(ctx, *span, *op, lhs, rhs)?),
         rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
         rules::Expr::StructDef(def) => Expr::Struct(struct_def(ctx, def)?),
-        rules::Expr::If(iff, expr, block, otherwise) => {
-            Expr::If(if_(ctx, *iff, expr, block, otherwise.as_ref())?)
-        }
+        rules::Expr::If {
+            span,
+            condition,
+            block,
+            otherwise,
+        } => Expr::If(if_(ctx, *span, condition, block, otherwise.as_ref())?),
         rules::Expr::Bool(id) => Expr::Bool(BoolLit {
             span: ctx.span(*id),
             val: ctx.kind(*id) == TokenKind::True,
         }),
         rules::Expr::Str(str) => Expr::Str(StrLit {
             span: ctx.span(*str),
-            val: ctx.intern_str(ctx.as_str(*str)),
+            val: ctx.intern_str(ctx.as_str(str).as_ref()),
         }),
         rules::Expr::Loop(loop_, blck) => Expr::Loop(Loop {
             span: ctx.span(*loop_),
             block: block(ctx, blck)?,
         }),
         rules::Expr::Access { span, lhs, field } => Expr::Access(access(ctx, *span, lhs, *field)?),
-        rules::Expr::Unary(operator, kind, expr) => Expr::Unary({
+        rules::Expr::Unary(span, operator, kind, expr) => Expr::Unary({
             let expr = pexpr(ctx, expr)?;
             Unary {
-                span: Span::from_spans(ctx.span(*operator), expr.span()),
+                span: *span,
                 kind: *kind,
                 inner: ctx.intern(expr),
             }

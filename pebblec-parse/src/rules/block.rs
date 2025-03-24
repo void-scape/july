@@ -1,5 +1,6 @@
 use super::{Next, ParserRule, RResult};
 use crate::lex::buffer::*;
+use crate::lex::kind::*;
 use crate::stream::TokenStream;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*};
 

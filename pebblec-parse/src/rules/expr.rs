@@ -20,7 +20,7 @@ pub enum Expr {
     Lit(TokenId),
     Str(TokenId),
     Bool(TokenId),
-    Bin(BinOpKind, Box<Expr>, Box<Expr>),
+    Bin(Span, BinOpKind, Box<Expr>, Box<Expr>),
     Paren(Box<Expr>),
     Ret(Span, Option<Box<Expr>>),
     Assign(Assign),
@@ -48,7 +48,12 @@ pub enum Expr {
         method: TokenId,
         args: Vec<Expr>,
     },
-    If(TokenId, Box<Expr>, Block, Option<Block>),
+    If {
+        span: Span,
+        condition: Box<Expr>,
+        block: Block,
+        otherwise: Option<Block>,
+    },
     For {
         span: Span,
         iter: TokenId,
@@ -67,7 +72,7 @@ pub enum Expr {
         ty: PType,
     },
     Loop(TokenId, Block),
-    Unary(TokenId, UOpKind, Box<Expr>),
+    Unary(Span, TokenId, UOpKind, Box<Expr>),
 }
 
 impl Expr {
@@ -80,9 +85,7 @@ impl Expr {
             Self::Str(t) => token_buffer.span(*t),
             Self::Bool(t) => token_buffer.span(*t),
             Self::Paren(inner) => inner.span(token_buffer),
-            Self::Bin(_, lhs, rhs) => {
-                Span::from_spans(lhs.span(token_buffer), rhs.span(token_buffer))
-            }
+            Self::Bin(span, _, _, _) => *span,
             Self::Ret(span, _) => *span,
             Self::Assign(assign) => {
                 Span::from_spans(assign.lhs.span(token_buffer), assign.rhs.span(token_buffer))
@@ -96,20 +99,12 @@ impl Expr {
             Self::Access { span, .. } => *span,
             Self::IndexOf { span, .. } => *span,
             Self::Call { span, .. } => *span,
-            Self::If(t, _, block, otherwise) => {
-                if let Some(otherwise) = otherwise {
-                    Span::from_spans(token_buffer.span(*t), otherwise.span)
-                } else {
-                    Span::from_spans(token_buffer.span(*t), block.span)
-                }
-            }
+            Self::If { span, .. } => *span,
             Self::For { span, .. } => *span,
             Self::Range { span, .. } => *span,
             Self::Loop(t, block) => Span::from_spans(token_buffer.span(*t), block.span),
             Self::Cast { span, .. } => *span,
-            Self::Unary(t, _, expr) => {
-                Span::from_spans(token_buffer.span(*t), expr.span(token_buffer))
-            }
+            Self::Unary(span, _, _, _) => *span,
             Self::MethodCall { span, .. } => *span,
         }
     }
@@ -277,7 +272,8 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
             }
         }
 
-        let term = match stream.peek_kind() {
+        let peek = stream.peek_kind();
+        let term = match peek {
             Some(TokenKind::Ident) => match stream.peekn(1).map(|t| stream.kind(t)) {
                 Some(TokenKind::OpenParen) => {
                     let ident = stream.expect();
@@ -297,21 +293,24 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
             Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Expr::Lit(stream.expect())),
             Some(TokenKind::True) | Some(TokenKind::False) => Ok(Expr::Bool(stream.expect())),
             Some(TokenKind::Str) => Ok(Expr::Str(stream.expect())),
-            Some(TokenKind::Hyphen) => Ok(Expr::Unary(
-                stream.expect(),
-                UOpKind::Neg,
-                Box::new(TermRule::parse(stream)?),
-            )),
-            Some(TokenKind::Bang) => Ok(Expr::Unary(
-                stream.expect(),
-                UOpKind::Not,
-                Box::new(TermRule::parse(stream)?),
-            )),
-            Some(TokenKind::Ampersand) => Ok(Expr::Unary(
-                stream.expect(),
-                UOpKind::Ref,
-                Box::new(TermRule::parse(stream)?),
-            )),
+            Some(TokenKind::Hyphen) | Some(TokenKind::Bang) | Some(TokenKind::Ampersand) => Ok({
+                let t = stream.expect();
+                let expr = Box::new(TermRule::parse(stream)?);
+
+                let kind = match peek.unwrap() {
+                    TokenKind::Hyphen => UOpKind::Neg,
+                    TokenKind::Bang => UOpKind::Not,
+                    TokenKind::Ampersand => UOpKind::Ref,
+                    _ => unreachable!(),
+                };
+
+                Expr::Unary(
+                    Span::from_spans(stream.span(t), expr.span(stream.token_buffer())),
+                    t,
+                    kind,
+                    expr,
+                )
+            }),
             Some(TokenKind::OpenBracket) => Ok(Expr::Array(ArrDefRule::parse(stream)?)),
             Some(TokenKind::Break) => Ok(Expr::Break(stream.expect())),
             Some(TokenKind::Continue) => Ok(Expr::Continue(stream.expect())),
@@ -428,8 +427,16 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                     }
                     Err(_) => {
                         *stream = chk;
-                        term_result =
-                            Expr::Unary(stream.expect(), UOpKind::Deref, Box::new(term_result))
+
+                        let t = stream.expect();
+                        let expr = Box::new(term_result);
+
+                        term_result = Expr::Unary(
+                            Span::from_spans(stream.span(t), expr.span(stream.token_buffer())),
+                            t,
+                            UOpKind::Deref,
+                            expr,
+                        )
                     }
                 }
             } else if stream.match_peek::<As>() {
@@ -492,38 +499,59 @@ impl<'a, 's> ParserRule<'a, 's> for ExprRule {
             };
 
             let rhs = TermRule::parse(stream)?;
-            match bin {
+            let lhs = match bin {
                 None => {
                     assert!(lhs.is_some());
-                    bin = Some(Expr::Bin(op, Box::new(lhs.take().unwrap()), Box::new(rhs)));
+                    lhs.take().unwrap()
                 }
-                Some(lhs) => {
-                    bin = Some(Expr::Bin(op, Box::new(lhs), Box::new(rhs)));
-                }
-            }
+                Some(lhs) => lhs,
+            };
+
+            bin = Some(Expr::Bin(
+                Span::from_spans(
+                    lhs.span(stream.token_buffer()),
+                    rhs.span(stream.token_buffer()),
+                ),
+                op,
+                Box::new(lhs),
+                Box::new(rhs),
+            ));
         }
 
         match bin {
-            Some(bin) => Ok(reorder_expr(bin)),
-            None => Ok(reorder_expr(lhs.take().unwrap())),
+            Some(bin) => Ok(reorder_expr(stream, bin)),
+            None => Ok(reorder_expr(stream, lhs.take().unwrap())),
         }
     }
 }
 
-fn reorder_expr(expr: Expr) -> Expr {
+fn reorder_expr(stream: &TokenStream, expr: Expr) -> Expr {
     match expr {
-        Expr::Paren(inner) => Expr::Paren(Box::new(reorder_expr(*inner))),
-        Expr::Bin(op, lhs, rhs) => {
-            let lhs = reorder_expr(*lhs);
-            let rhs = Box::new(reorder_expr(*rhs));
+        Expr::Paren(inner) => Expr::Paren(Box::new(reorder_expr(stream, *inner))),
+        Expr::Bin(_, op, lhs, rhs) => {
+            let lhs = reorder_expr(stream, *lhs);
+            let rhs = Box::new(reorder_expr(stream, *rhs));
 
             match lhs {
-                Expr::Bin(lhs_op, lhs_lhs, lhs_rhs)
+                Expr::Bin(_, lhs_op, lhs_lhs, lhs_rhs)
                     if lhs_op.precedence() < op.precedence() && !matches!(lhs, Expr::Paren(_)) =>
                 {
-                    Expr::Bin(lhs_op, lhs_lhs, Box::new(Expr::Bin(op, lhs_rhs, rhs)))
+                    let rhs_span = Span::from_spans(
+                        lhs_rhs.span(stream.token_buffer()),
+                        rhs.span(stream.token_buffer()),
+                    );
+                    let rhs = Box::new(Expr::Bin(rhs_span, op, lhs_rhs, rhs));
+
+                    let span = Span::from_spans(lhs_lhs.span(stream.token_buffer()), rhs_span);
+                    Expr::Bin(span, lhs_op, lhs_lhs, rhs)
                 }
-                _ => Expr::Bin(op, Box::new(lhs), rhs),
+                _ => {
+                    let span = Span::from_spans(
+                        lhs.span(stream.token_buffer()),
+                        rhs.span(stream.token_buffer()),
+                    );
+                    Expr::Bin(span, op, Box::new(lhs), rhs)
+                }
             }
         }
         _ => expr,
