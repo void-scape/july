@@ -1,8 +1,7 @@
 use super::*;
-use pebblec_parse::lex::buffer::Buffer;
 use std::ops::Deref;
 
-pub fn sem_analysis_pre_typing<'a>(ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
+pub fn sem_analysis_pre_typing<'a>(ctx: &Ctx<'a>) -> Result<(), Diag> {
     let mut ctx = SemCtx::new(ctx);
 
     ctx.sem_try(entry);
@@ -15,35 +14,31 @@ pub fn sem_analysis_pre_typing<'a>(ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
     }
 }
 
-pub fn sem_analysis<'a>(_ctx: &Ctx<'a>, _key: &TypeKey) -> Result<(), Diag<'a>> {
+pub fn sem_analysis(_ctx: &Ctx, _key: &TypeKey) -> Result<(), Diag> {
     Ok(())
 }
 
-struct SemCtx<'a, 'b> {
-    ctx: &'a Ctx<'b>,
+struct SemCtx<'a> {
+    ctx: &'a Ctx<'a>,
     //key: &'a TypeKey,
-    diags: Vec<Diag<'b>>,
+    diags: Vec<Diag>,
 }
 
-impl<'a, 'b> SemCtx<'a, 'b> {
-    pub fn new(
-        ctx: &'a Ctx<'b>,
-        //key: &'a TypeKey
-    ) -> Self {
+impl<'a> SemCtx<'a> {
+    pub fn new(ctx: &'a Ctx<'a>) -> Self {
         Self {
             diags: Vec::new(),
             ctx,
-            //key,
         }
     }
 
-    pub fn sem_try(&mut self, f: impl Fn(&mut SemCtx<'a, 'b>) -> Result<(), Diag<'b>>) {
+    pub fn sem_try(&mut self, f: impl Fn(&mut SemCtx) -> Result<(), Diag>) {
         if let Err(diag) = f(self) {
             self.diags.push(diag);
         }
     }
 
-    pub fn sem_func(&mut self, f: impl Fn(&SemCtx<'a, 'b>, &Func) -> Result<(), Diag<'b>>) {
+    pub fn sem_func(&mut self, f: impl Fn(&SemCtx, &Func) -> Result<(), Diag>) {
         let mut errs = Vec::new();
         for func in self.funcs.iter() {
             if !func.is_intrinsic() {
@@ -56,15 +51,15 @@ impl<'a, 'b> SemCtx<'a, 'b> {
     }
 }
 
-impl<'a, 'b> Deref for SemCtx<'a, 'b> {
-    type Target = Ctx<'b>;
+impl<'a> Deref for SemCtx<'a> {
+    type Target = Ctx<'a>;
 
     fn deref(&self) -> &Self::Target {
         self.ctx
     }
 }
 
-fn entry<'a, 'b>(ctx: &mut SemCtx<'a, 'b>) -> Result<(), Diag<'b>> {
+fn entry(ctx: &mut SemCtx) -> Result<(), Diag> {
     if let Some(func) = ctx
         .funcs
         .iter()
@@ -72,37 +67,37 @@ fn entry<'a, 'b>(ctx: &mut SemCtx<'a, 'b>) -> Result<(), Diag<'b>> {
     {
         if func.sig.params.len() > 0 {
             Err(ctx.report_error(func.sig.span, "`main` cannot have any parameters"))
-        } else if func.sig.ty != ctx.tys.get_ty_id(&Ty::Int(IntTy::new_32(Sign::I))).unwrap() {
+        } else if func.sig.ty != Ty::I32 {
             Err(ctx.report_error(func.sig.span, "`main` must return `i32`"))
         } else {
             Ok(())
         }
     } else {
-        let help = "consider adding a `main: () [-> i32]` function";
+        let help = "consider adding `main: () -> i32 { 0 }`";
         let error = "could not find entry point `main`";
 
-        todo!();
-        //if ctx.token_buffer().len() == 0 {
-        //    Err(ctx
-        //        .report_error(ctx.token_buffer(), error)
-        //        .wrap(ctx.report_help(Span::empty(), help)))
-        //} else {
-        //    Err(ctx
-        //        .report_error(Span::empty(), error)
-        //        .wrap(ctx.report_help(ctx.token_buffer().last().unwrap(), help)))
-        //}
+        let buf = ctx.source_map.buffers().next().unwrap();
+        if buf.len() == 0 {
+            Err(ctx.report_error(
+                Span::from_range(0..0).with_source(buf.source_id() as u32),
+                format!("{}: {}", error, help),
+            ))
+        } else {
+            let span = ctx.span(buf.last().unwrap());
+            Err(ctx.report_error(span, error).msg(Msg::help(span, help)))
+        }
     }
 }
 
-fn end_is_return<'a, 'b>(ctx: &SemCtx<'a, 'b>, func: &Func) -> Result<(), Diag<'b>> {
-    if func.sig.ty == TyId::UNIT && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
+fn end_is_return(ctx: &SemCtx, func: &Func) -> Result<(), Diag> {
+    if func.sig.ty == Ty::UNIT && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
         Err(ctx
             .report_error(
                 func.block.end.as_ref().unwrap().span(),
                 "invalid return type: expected `()`",
             )
             .msg(Msg::help(func.sig.span, "function has no return type")))
-    } else if func.sig.ty != TyId::UNIT && func.block.end.is_none() {
+    } else if func.sig.ty != Ty::UNIT && func.block.end.is_none() {
         if let Some(stmt) = func.block.stmts.last() {
             match stmt {
                 Stmt::Semi(semi) => match semi {
@@ -119,7 +114,7 @@ fn end_is_return<'a, 'b>(ctx: &SemCtx<'a, 'b>, func: &Func) -> Result<(), Diag<'
                     stmt.span(),
                     format!(
                         "invalid return type: expected `{}`, got `()`",
-                        ctx.ty_str(func.sig.ty)
+                        func.sig.ty.to_string(ctx)
                     ),
                 )
                 .msg(Msg::help(func.sig.span, "inferred from signature")))
@@ -128,7 +123,7 @@ fn end_is_return<'a, 'b>(ctx: &SemCtx<'a, 'b>, func: &Func) -> Result<(), Diag<'
                 func.block.span,
                 format!(
                     "invalid return type: expected `{}`",
-                    ctx.ty_str(func.sig.ty)
+                    func.sig.ty.to_string(ctx)
                 ),
             ))
         }

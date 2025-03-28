@@ -21,9 +21,3 @@ impl Hash for LitKind {
         }
     }
 }
-
-impl LitKind {
-    pub fn is_int(&self) -> bool {
-        matches!(self, Self::Int(_))
-    }
-}

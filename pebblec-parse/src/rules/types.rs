@@ -1,15 +1,16 @@
 use super::{Next, PErr, ParserRule};
 use crate::combinator::alt::Alt;
 use crate::combinator::spanned::Spanned;
-use crate::lex::buffer::{Span, TokenBuffer, TokenId, TokenQuery};
+use crate::lex::buffer::{Span, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
 use crate::lex::kind::*;
 use crate::stream::TokenStream;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PType {
-    Simple(TokenId),
+    Simple(Span, TokenId),
     Ref {
+        span: Span,
         borrow: TokenId,
         inner: Box<PType>,
     },
@@ -25,12 +26,10 @@ pub enum PType {
 }
 
 impl PType {
-    pub fn span(&self, buffer: &TokenBuffer) -> Span {
+    pub fn span(&self) -> Span {
         match self {
-            Self::Simple(id) => buffer.span(*id),
-            Self::Ref { borrow, inner } => {
-                Span::from_spans(buffer.span(*borrow), inner.span(buffer))
-            }
+            Self::Simple(span, _) => *span,
+            Self::Ref { span, .. } => *span,
             Self::Array { span, .. } => *span,
             Self::Slice { span, .. } => *span,
         }
@@ -39,7 +38,7 @@ impl PType {
     pub fn peel_refs(&self) -> &PType {
         match self {
             Self::Ref { inner, .. } => inner.peel_refs(),
-            Self::Simple(_) | Self::Slice { .. } | Self::Array { .. } => self,
+            Self::Simple(_, _) | Self::Slice { .. } | Self::Array { .. } => self,
         }
     }
 }
@@ -47,10 +46,10 @@ impl PType {
 #[derive(Debug, Default)]
 pub struct TypeRule;
 
-impl<'a, 's> ParserRule<'a, 's> for TypeRule {
+impl<'a, 's> ParserRule<'a> for TypeRule {
     type Output = PType;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> super::RResult<Self::Output> {
         Alt::<(SimpleType, RefType, ArrayType)>::parse(stream).map_err(|diag| {
             if diag.recoverable() {
                 stream.fail("expected type")
@@ -68,18 +67,20 @@ const BUILTIN_TYPES: &[&str] = &[
 #[derive(Debug, Default)]
 pub struct SimpleType;
 
-impl<'a, 's> ParserRule<'a, 's> for SimpleType {
+impl<'a, 's> ParserRule<'a> for SimpleType {
     type Output = PType;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> super::RResult<Self::Output> {
         if let Some(str) = stream.peek().map(|t| stream.as_str(t)) {
             if BUILTIN_TYPES.contains(&str.as_ref()) {
-                return Ok(PType::Simple(stream.expect()));
+                let t = stream.expect();
+                return Ok(PType::Simple(stream.span(t), t));
             }
         }
 
         if stream.match_peek::<Ident>() {
-            Ok(PType::Simple(stream.expect()))
+            let t = stream.expect();
+            Ok(PType::Simple(stream.span(t), t))
         } else {
             Err(stream.recover("expected a type"))
         }
@@ -89,14 +90,17 @@ impl<'a, 's> ParserRule<'a, 's> for SimpleType {
 #[derive(Debug, Default)]
 pub struct RefType;
 
-impl<'a, 's> ParserRule<'a, 's> for RefType {
+impl<'a, 's> ParserRule<'a> for RefType {
     type Output = PType;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> super::RResult<Self::Output> {
         if stream.match_peek::<Ampersand>() {
+            let t = stream.expect();
+            let inner = Box::new(TypeRule::parse(stream).map_err(PErr::fail)?);
             Ok(PType::Ref {
-                borrow: stream.expect(),
-                inner: Box::new(TypeRule::parse(stream).map_err(PErr::fail)?),
+                span: Span::from_spans(stream.span(t), inner.span()),
+                borrow: t,
+                inner,
             })
         } else {
             Err(stream.recover("expected a type with reference"))
@@ -107,10 +111,10 @@ impl<'a, 's> ParserRule<'a, 's> for RefType {
 #[derive(Debug, Default)]
 pub struct ArrayType;
 
-impl<'a, 's> ParserRule<'a, 's> for ArrayType {
+impl<'a, 's> ParserRule<'a> for ArrayType {
     type Output = PType;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> super::RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> super::RResult<Self::Output> {
         if !stream.match_peek::<OpenBracket>() {
             return Err(stream.recover("expected `[`"));
         }
@@ -144,7 +148,7 @@ impl<'a, 's> ParserRule<'a, 's> for ArrayType {
                 let span = spanned.span();
                 let (_open, inner, _semi, size, _close) = spanned.into_inner();
                 let Ok(size) = stream.as_str(size).parse::<usize>() else {
-                    return Err(PErr::Fail(stream.full_error(
+                    return Err(PErr::Fail(stream.report_error(
                         "expected a positive integer size for an array type",
                         stream.span(size),
                     )));

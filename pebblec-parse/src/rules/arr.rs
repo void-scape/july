@@ -23,10 +23,10 @@ pub enum ArrDef {
 #[derive(Debug, Default)]
 pub struct ArrDefRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ArrDefRule {
+impl<'a, 's> ParserRule<'a> for ArrDefRule {
     type Output = ArrDef;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         Alt::<(ArrRepeatedDefRule, ArrElemDefRule)>::parse(stream)
     }
 }
@@ -34,10 +34,10 @@ impl<'a, 's> ParserRule<'a, 's> for ArrDefRule {
 #[derive(Debug, Default)]
 pub struct ArrElemDefRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ArrElemDefRule {
+impl<'a, 's> ParserRule<'a> for ArrElemDefRule {
     type Output = ArrDef;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let open = Next::<OpenBracket>::parse(stream)?;
         let end = stream.find_matched_delim_offset::<Bracket>();
         let mut slice = stream.slice(end);
@@ -79,10 +79,10 @@ impl<'a, 's> ParserRule<'a, 's> for ArrElemDefRule {
 #[derive(Debug, Default)]
 pub struct ArrRepeatedDefRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ArrRepeatedDefRule {
+impl<'a, 's> ParserRule<'a> for ArrRepeatedDefRule {
     type Output = ArrDef;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let open = Next::<OpenBracket>::parse(stream)?;
         let end = stream.find_matched_delim_offset::<Bracket>();
         let mut slice = stream.slice(end);

@@ -148,7 +148,7 @@ pub enum ItemKind {
     Extern(ExternBlock),
 }
 
-pub fn parse<'a>(buffer: &'a TokenBuffer) -> Result<Vec<Item>, Diag<'a>> {
+pub fn parse<'a>(buffer: &'a TokenBuffer) -> Result<Vec<Item>, Diag> {
     let mut items = Vec::new();
     let mut diags = Vec::new();
     let mut stream = buffer.stream();
@@ -231,7 +231,7 @@ pub fn parse<'a>(buffer: &'a TokenBuffer) -> Result<Vec<Item>, Diag<'a>> {
                             if let Some(_self) = func.params.iter().find(|p| {
                                 matches!(p, Param::Slf(_)) || matches!(p, Param::SlfRef(_))
                             }) {
-                                diags.push(PErr::Fail(stream.full_error(
+                                diags.push(PErr::Fail(stream.report_error(
                                     "extern function cannot contain `self`",
                                     match _self {
                                         Param::Slf(t) => stream.span(*t),

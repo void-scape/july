@@ -18,10 +18,10 @@ pub enum Stmt {
 
 pub struct StmtRule;
 
-impl<'a, 's> ParserRule<'a, 's> for StmtRule {
+impl<'a, 's> ParserRule<'a> for StmtRule {
     type Output = Stmt;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let chk = *stream;
         match LetRule::parse(stream) {
             Ok(let_) => Ok(let_),
@@ -48,10 +48,10 @@ impl<'a, 's> ParserRule<'a, 's> for StmtRule {
 
 pub struct LetRule;
 
-impl<'a, 's> ParserRule<'a, 's> for LetRule {
+impl<'a, 's> ParserRule<'a> for LetRule {
     type Output = Stmt;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<Let>() {
             return Err(PErr::Recover(stream.error("expected `let`")));
         }
@@ -79,10 +79,10 @@ impl<'a, 's> ParserRule<'a, 's> for LetRule {
 #[derive(Debug, Default)]
 pub struct AssignRule;
 
-impl<'a, 's> ParserRule<'a, 's> for AssignRule {
+impl<'a, 's> ParserRule<'a> for AssignRule {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus, Hyphen)>>());
         let expr = ExprRule::parse(&mut slice)?;
         stream.eat_until::<Any<(Equals, Plus, Hyphen)>>();
@@ -93,10 +93,16 @@ impl<'a, 's> ParserRule<'a, 's> for AssignRule {
                 if stream.match_peek::<Equals>() {
                     Err(stream.recover("expected assignment, got equality"))
                 } else {
+                    let lhs = Box::new(expr);
+                    let rhs = Box::new(ExprRule::parse(stream).map_err(PErr::fail)?);
                     Ok(Expr::Assign(Assign {
+                        span: Span::from_spans(
+                            lhs.span(stream.token_buffer()),
+                            rhs.span(stream.token_buffer()),
+                        ),
                         kind: AssignKind::Equals,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(ExprRule::parse(stream).map_err(PErr::fail)?),
+                        lhs,
+                        rhs,
                     }))
                 }
             }
@@ -104,11 +110,20 @@ impl<'a, 's> ParserRule<'a, 's> for AssignRule {
                 let _plus = stream.expect();
                 let next = stream.next();
                 match next.map(|next| stream.kind(next)) {
-                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
-                        kind: AssignKind::Add,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(ExprRule::parse(stream).map_err(PErr::fail)?),
-                    })),
+                    Some(TokenKind::Equals) => Ok({
+                        let lhs = Box::new(expr);
+                        let rhs = Box::new(ExprRule::parse(stream).map_err(PErr::fail)?);
+
+                        Expr::Assign(Assign {
+                            span: Span::from_spans(
+                                lhs.span(stream.token_buffer()),
+                                rhs.span(stream.token_buffer()),
+                            ),
+                            kind: AssignKind::Add,
+                            lhs,
+                            rhs,
+                        })
+                    }),
                     _ => Err(stream.recover("expected `+`")),
                 }
             }
@@ -116,11 +131,20 @@ impl<'a, 's> ParserRule<'a, 's> for AssignRule {
                 let _plus = stream.expect();
                 let next = stream.next();
                 match next.map(|next| stream.kind(next)) {
-                    Some(TokenKind::Equals) => Ok(Expr::Assign(Assign {
-                        kind: AssignKind::Sub,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(ExprRule::parse(stream).map_err(PErr::fail)?),
-                    })),
+                    Some(TokenKind::Equals) => Ok({
+                        let lhs = Box::new(expr);
+                        let rhs = Box::new(ExprRule::parse(stream).map_err(PErr::fail)?);
+
+                        Expr::Assign(Assign {
+                            span: Span::from_spans(
+                                lhs.span(stream.token_buffer()),
+                                rhs.span(stream.token_buffer()),
+                            ),
+                            kind: AssignKind::Sub,
+                            lhs,
+                            rhs,
+                        })
+                    }),
                     _ => Err(stream.recover("expected `-`")),
                 }
             }
@@ -131,10 +155,10 @@ impl<'a, 's> ParserRule<'a, 's> for AssignRule {
 
 pub struct CntrlFlowRule;
 
-impl<'a, 's> ParserRule<'a, 's> for CntrlFlowRule {
+impl<'a, 's> ParserRule<'a> for CntrlFlowRule {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<If>() {
             return Err(PErr::Recover(stream.error("expected `if`")));
         }
@@ -173,10 +197,10 @@ impl<'a, 's> ParserRule<'a, 's> for CntrlFlowRule {
 
 pub struct ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe;
 
-impl<'a, 's> ParserRule<'a, 's> for ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe {
+impl<'a, 's> ParserRule<'a> for ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let offset = stream.find_offset::<OpenCurly>();
         let mut slice = stream.slice(offset);
         stream.eat_n(offset);
@@ -196,10 +220,10 @@ impl<'a, 's> ParserRule<'a, 's> for ToFirstOpenCurlyExprButSubjectToChangeInOthe
 
 pub struct LoopRule;
 
-impl<'a, 's> ParserRule<'a, 's> for LoopRule {
+impl<'a, 's> ParserRule<'a> for LoopRule {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<Loop>() {
             return Err(PErr::Recover(stream.error("expected `loop`")));
         }
@@ -212,10 +236,10 @@ impl<'a, 's> ParserRule<'a, 's> for LoopRule {
 
 pub struct ForRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ForRule {
+impl<'a, 's> ParserRule<'a> for ForRule {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<For>() {
             return Err(PErr::Recover(stream.error("expected `for`")));
         }

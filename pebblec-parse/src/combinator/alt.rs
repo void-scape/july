@@ -6,14 +6,14 @@ use crate::{rules::*, stream::TokenStream};
 #[derive(Debug, Default)]
 pub struct Alt<T>(T);
 
-impl<'a, 's, O, A, B> ParserRule<'a, 's> for Alt<(A, B)>
+impl<'a,  O, A, B> ParserRule<'a> for Alt<(A, B)>
 where
-    A: ParserRule<'a, 's, Output = O>,
-    B: ParserRule<'a, 's, Output = O>,
+    A: ParserRule<'a, Output = O>,
+    B: ParserRule<'a, Output = O>,
 {
     type Output = O;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         match A::parse(stream) {
             Err(err) => {
@@ -29,15 +29,15 @@ where
     }
 }
 
-impl<'a, 's, O, A, B, C> ParserRule<'a, 's> for Alt<(A, B, C)>
+impl<'a,  O, A, B, C> ParserRule<'a> for Alt<(A, B, C)>
 where
-    A: ParserRule<'a, 's, Output = O>,
-    B: ParserRule<'a, 's, Output = O>,
-    C: ParserRule<'a, 's, Output = O>,
+    A: ParserRule<'a, Output = O>,
+    B: ParserRule<'a, Output = O>,
+    C: ParserRule<'a, Output = O>,
 {
     type Output = O;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         match A::parse(stream) {
             Err(err) => {
@@ -63,16 +63,16 @@ where
     }
 }
 
-impl<'a, 's, O, A, B, C, D> ParserRule<'a, 's> for Alt<(A, B, C, D)>
+impl<'a,  O, A, B, C, D> ParserRule<'a> for Alt<(A, B, C, D)>
 where
-    A: ParserRule<'a, 's, Output = O>,
-    B: ParserRule<'a, 's, Output = O>,
-    C: ParserRule<'a, 's, Output = O>,
-    D: ParserRule<'a, 's, Output = O>,
+    A: ParserRule<'a, Output = O>,
+    B: ParserRule<'a, Output = O>,
+    C: ParserRule<'a, Output = O>,
+    D: ParserRule<'a, Output = O>,
 {
     type Output = O;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         match A::parse(stream) {
             Err(err) => {
@@ -108,17 +108,17 @@ where
     }
 }
 
-impl<'a, 's, O, A, B, C, D, E> ParserRule<'a, 's> for Alt<(A, B, C, D, E)>
+impl<'a,  O, A, B, C, D, E> ParserRule<'a> for Alt<(A, B, C, D, E)>
 where
-    A: ParserRule<'a, 's, Output = O>,
-    B: ParserRule<'a, 's, Output = O>,
-    C: ParserRule<'a, 's, Output = O>,
-    D: ParserRule<'a, 's, Output = O>,
-    E: ParserRule<'a, 's, Output = O>,
+    A: ParserRule<'a, Output = O>,
+    B: ParserRule<'a, Output = O>,
+    C: ParserRule<'a, Output = O>,
+    D: ParserRule<'a, Output = O>,
+    E: ParserRule<'a, Output = O>,
 {
     type Output = O;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         match A::parse(stream) {
             Err(err) => {
@@ -164,18 +164,18 @@ where
     }
 }
 
-impl<'a, 's, O, A, B, C, D, E, F> ParserRule<'a, 's> for Alt<(A, B, C, D, E, F)>
+impl<'a,  O, A, B, C, D, E, F> ParserRule<'a> for Alt<(A, B, C, D, E, F)>
 where
-    A: ParserRule<'a, 's, Output = O>,
-    B: ParserRule<'a, 's, Output = O>,
-    C: ParserRule<'a, 's, Output = O>,
-    D: ParserRule<'a, 's, Output = O>,
-    E: ParserRule<'a, 's, Output = O>,
-    F: ParserRule<'a, 's, Output = O>,
+    A: ParserRule<'a, Output = O>,
+    B: ParserRule<'a, Output = O>,
+    C: ParserRule<'a, Output = O>,
+    D: ParserRule<'a, Output = O>,
+    E: ParserRule<'a, Output = O>,
+    F: ParserRule<'a, Output = O>,
 {
     type Output = O;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         match A::parse(stream) {
             Err(err) => {

@@ -3,6 +3,7 @@ use crate::lex::kind::*;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
 use std::ops::Range;
+use std::sync::Arc;
 
 pub trait Buffer<'a> {
     fn token_buffer(&self) -> &TokenBuffer<'a>;
@@ -69,7 +70,7 @@ impl TokenId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenBuffer<'a> {
     tokens: Vec<Token>,
-    source: Source,
+    source: Arc<Source>,
     /// Reference to the source file
     _phantom: PhantomData<&'a str>,
 }
@@ -82,7 +83,7 @@ impl<'a> TokenBuffer<'a> {
 
         Self {
             tokens,
-            source,
+            source: Arc::new(source),
             _phantom: PhantomData,
         }
     }
@@ -91,7 +92,11 @@ impl<'a> TokenBuffer<'a> {
         self.source.id
     }
 
-    pub fn source(&self) -> &Source {
+    pub fn source(&self) -> Arc<Source> {
+        self.source.clone()
+    }
+
+    pub fn source_ref(&self) -> &Source {
         &self.source
     }
 
@@ -193,15 +198,7 @@ impl Span {
         self.start as usize..self.end as usize
     }
 
-    pub(crate) fn empty() -> Self {
-        Self {
-            start: 0,
-            end: 0,
-            source: u32::MAX,
-        }
-    }
-
-    pub(crate) fn from_range(range: Range<usize>) -> Self {
+    pub fn from_range(range: Range<usize>) -> Self {
         Self {
             start: range.start as u32,
             end: range.end as u32,
@@ -209,7 +206,7 @@ impl Span {
         }
     }
 
-    pub(crate) fn from_range_u32(range: Range<u32>) -> Self {
+    pub fn from_range_u32(range: Range<u32>) -> Self {
         Self {
             start: range.start,
             end: range.end,
@@ -217,7 +214,7 @@ impl Span {
         }
     }
 
-    pub(crate) fn with_source(self, source: u32) -> Self {
+    pub fn with_source(self, source: u32) -> Self {
         Self {
             start: self.start,
             end: self.end,

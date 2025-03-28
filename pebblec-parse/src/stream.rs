@@ -1,25 +1,27 @@
 use super::matc::{DelimPair, MatchTokenKind};
 use super::rules::PErr;
-use crate::diagnostic::{Diag, Msg};
+use crate::diagnostic::Diag;
 use crate::lex::buffer::{Buffer, Span, TokenBuffer, TokenId, TokenQuery};
 use crate::lex::kind::TokenKind;
+use annotate_snippets::Level;
+use std::borrow::Cow;
 
 impl<'s> TokenBuffer<'s> {
-    pub fn stream<'a>(&'a self) -> TokenStream<'a, 's> {
+    pub fn stream<'a>(&'a self) -> TokenStream<'a> {
         TokenStream::new(self)
     }
 }
 
 // TODO: makes many assumptions
 #[derive(Debug, Clone, Copy)]
-pub struct TokenStream<'a, 's> {
-    buffer: &'a TokenBuffer<'s>,
+pub struct TokenStream<'a> {
+    buffer: &'a TokenBuffer<'a>,
     start: usize,
     end: usize,
     index: usize,
 }
 
-impl<'a, 's> Iterator for TokenStream<'a, 's> {
+impl<'a, 's> Iterator for TokenStream<'a> {
     type Item = TokenId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -27,13 +29,13 @@ impl<'a, 's> Iterator for TokenStream<'a, 's> {
     }
 }
 
-impl<'a, 's> Buffer<'s> for TokenStream<'a, 's> {
-    fn token_buffer(&self) -> &TokenBuffer<'s> {
+impl<'a> Buffer<'a> for TokenStream<'a> {
+    fn token_buffer(&self) -> &TokenBuffer<'a> {
         self.buffer
     }
 }
 
-impl<'a, 's> TokenStream<'a, 's> {
+impl<'a, 's> TokenStream<'a> {
     fn new(buffer: &'a TokenBuffer<'s>) -> Self {
         Self {
             start: 0,
@@ -89,13 +91,13 @@ impl<'a, 's> TokenStream<'a, 's> {
     pub fn consume_matched_delimiters_inclusive<T: DelimPair>(&mut self) {
         assert!(
             self.next()
-                .is_some_and(|t| T::matches_open(Some(self.kind(t))))
+                .is_none_or(|t| T::matches_open(Some(self.kind(t))))
         );
         let offset = self.find_matched_delim_offset::<T>();
         self.eat_n(offset);
         assert!(
             self.next()
-                .is_some_and(|t| T::matches_close(Some(self.kind(t))))
+                .is_none_or(|t| T::matches_close(Some(self.kind(t))))
         );
     }
 
@@ -107,30 +109,30 @@ impl<'a, 's> TokenStream<'a, 's> {
     }
 
     #[track_caller]
-    pub fn full_error(&self, title: impl Into<String>, span: Span) -> Diag<'s> {
-        Diag::sourced(title, Msg::error_span(span)).loc(std::panic::Location::caller())
+    pub fn report_error(&self, title: impl Into<Cow<'static, str>>, span: Span) -> Diag {
+        Diag::new(Level::Error, self.buffer.source(), span, title, Vec::new())
     }
 
     #[track_caller]
-    pub fn error(&self, msg: impl Into<String>) -> Diag<'s> {
+    pub fn error(&self, title: impl Into<Cow<'static, str>>) -> Diag {
         let prev = self.prev();
         match self.token_buffer().token(prev.next()) {
-            Some(next) => self.full_error(msg, next.span),
+            Some(next) => self.report_error(title, next.span),
             None => {
                 let span = self.buffer.span(prev);
-                self.full_error(msg, span)
+                self.report_error(title, span)
             }
         }
     }
 
     #[track_caller]
-    pub fn recover(&self, msg: impl Into<String>) -> PErr<'s> {
-        PErr::Recover(self.error(msg))
+    pub fn recover(&self, title: impl Into<Cow<'static, str>>) -> PErr {
+        PErr::Recover(self.error(title))
     }
 
     #[track_caller]
-    pub fn fail(&self, msg: impl Into<String>) -> PErr<'s> {
-        PErr::Fail(self.error(msg))
+    pub fn fail(&self, title: impl Into<Cow<'static, str>>) -> PErr {
+        PErr::Fail(self.error(title))
     }
 
     pub fn remaining(&self) -> usize {

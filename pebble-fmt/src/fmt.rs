@@ -1,11 +1,8 @@
 use crate::node::*;
 use pebblec_arena::BlobArena;
-use pebblec_parse::lex::buffer::{TokenBuffer, TokenId, TokenQuery};
-use pebblec_parse::lex::source::{Source, SourceMap};
+use pebblec_parse::ItemKind;
+use pebblec_parse::lex::source::Source;
 use pebblec_parse::lex::{Lexer, io};
-use pebblec_parse::{Item, ItemKind};
-use std::borrow::Borrow;
-use std::ops::Deref;
 use std::path::Path;
 
 // TODO: add config

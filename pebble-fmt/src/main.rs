@@ -12,11 +12,11 @@ mod fmt;
 mod fmt_tests;
 mod node;
 
-/// Formatter for the Pebble programming language
+/// Pebble Formatter
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Name of the `.peb` file to format
+    /// path to a `.peb` file
     #[arg(short, long)]
     file: String,
 }
@@ -24,7 +24,7 @@ struct Args {
 fn main() -> ExitCode {
     let args = Args::parse();
 
-    //std::io::set_output_capture(Some(Default::default()));
+    std::io::set_output_capture(Some(Default::default()));
     let result = panic::catch_unwind(|| fmt::fmt(&args.file));
     let capture = std::io::set_output_capture(None);
 

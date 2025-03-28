@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 /// Evaluates if the [`While`] loop should continue.
 pub trait Condition<'a, 's> {
-    fn eval(stream: &mut TokenStream<'a, 's>) -> bool;
+    fn eval(stream: &mut TokenStream<'a>) -> bool;
 }
 
 /// Evaluates `true` if the next token matches `T`.
@@ -16,7 +16,7 @@ impl<'a, 's, T> Condition<'a, 's> for NextToken<T>
 where
     T: MatchTokenKind,
 {
-    fn eval(stream: &mut TokenStream<'a, 's>) -> bool {
+    fn eval(stream: &mut TokenStream<'a>) -> bool {
         T::matches(stream.peek().map(|t| stream.kind(t)))
     }
 }
@@ -26,7 +26,7 @@ where
 pub struct Remaining<const N: usize>(PhantomData<[u8; N]>);
 
 impl<'a, 's, const N: usize> Condition<'a, 's> for Remaining<N> {
-    fn eval(stream: &mut TokenStream<'a, 's>) -> bool {
+    fn eval(stream: &mut TokenStream<'a>) -> bool {
         stream.remaining() <= N
     }
 }
@@ -36,7 +36,7 @@ impl<'a, 's, const N: usize> Condition<'a, 's> for Remaining<N> {
 pub struct Atleast<const N: usize>(PhantomData<[u8; N]>);
 
 impl<'a, 's, const N: usize> Condition<'a, 's> for Atleast<N> {
-    fn eval(stream: &mut TokenStream<'a, 's>) -> bool {
+    fn eval(stream: &mut TokenStream<'a>) -> bool {
         stream.remaining() >= N
     }
 }
@@ -48,15 +48,15 @@ pub struct While<C, T> {
     _rules: T,
 }
 
-impl<'a, 's, C, T> ParserRule<'a, 's> for While<C, T>
+impl<'a, 's, C, T> ParserRule<'a> for While<C, T>
 where
     C: Condition<'a, 's>,
-    T: ParserRule<'a, 's>,
+    T: ParserRule<'a>,
 {
-    type Output = Vec<<T as ParserRule<'a, 's>>::Output>;
+    type Output = Vec<<T as ParserRule<'a>>::Output>;
 
     #[track_caller]
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let mut results = Vec::new();
         while !stream.is_empty() && C::eval(stream) {
             results.push(T::parse(stream)?);

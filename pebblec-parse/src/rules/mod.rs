@@ -1,13 +1,12 @@
 use crate::{
-    diagnostic::{Diag, Msg},
-    lex::buffer::Buffer,
+    diagnostic::Diag,
     matc::{Any, MatchTokenKind},
 };
 use crate::{
-    lex::buffer::{TokenBuffer, TokenId},
+    lex::buffer::TokenId,
     {TokenQuery, stream::TokenStream},
 };
-use std::{marker::PhantomData, panic::Location};
+use std::marker::PhantomData;
 
 mod arr;
 mod attributes;
@@ -38,21 +37,21 @@ pub mod prelude {
     pub use super::uze::*;
 }
 
-pub trait ParserRule<'a, 's> {
+pub trait ParserRule<'a> {
     type Output;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output>;
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output>;
 }
 
-pub type RResult<'a, T> = Result<T, PErr<'a>>;
+pub type RResult<T> = Result<T, PErr>;
 
 #[derive(Debug)]
-pub enum PErr<'a> {
-    Recover(Diag<'a>),
-    Fail(Diag<'a>),
+pub enum PErr {
+    Recover(Diag),
+    Fail(Diag),
 }
 
-impl<'a> PErr<'a> {
+impl PErr {
     pub fn recoverable(&self) -> bool {
         matches!(self, Self::Recover(_))
     }
@@ -73,12 +72,12 @@ impl<'a> PErr<'a> {
 
     pub fn wrap(self, other: Self) -> Self {
         match self {
-            Self::Recover(diag) => Self::Recover(diag.wrap(other.into_diag())),
-            Self::Fail(diag) => Self::Fail(diag.wrap(other.into_diag())),
+            Self::Recover(diag) => Self::Recover(diag.join(other.into_diag())),
+            Self::Fail(diag) => Self::Fail(diag.join(other.into_diag())),
         }
     }
 
-    pub fn into_diag(self) -> Diag<'a> {
+    pub fn into_diag(self) -> Diag {
         match self {
             Self::Recover(diag) => diag,
             Self::Fail(diag) => diag,
@@ -104,7 +103,7 @@ impl<C, N, R> Default for Rule<C, N, R> {
     }
 }
 
-impl<'a, 's, C, N, R> ParserRule<'a, 's> for Rule<C, N, R>
+impl<'a, C, N, R> ParserRule<'a> for Rule<C, N, R>
 where
     C: MatchTokenKind,
     N: MatchTokenKind,
@@ -113,33 +112,29 @@ where
     type Output = TokenId;
 
     #[track_caller]
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, TokenId> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<TokenId> {
         match (stream.next(), stream.peek()) {
             (Some(c), Some(n)) => {
                 if C::matches(Some(stream.kind(c))) && N::matches(Some(stream.kind(n))) {
                     Ok(c)
                 } else {
-                    Err(R::report(stream.token_buffer(), Some(c), stream.prev()))
+                    Err(R::report(stream, Some(c), stream.prev()))
                 }
             }
             (Some(c), None) => {
                 if C::matches(Some(stream.kind(c))) && N::matches(None) {
                     Ok(c)
                 } else {
-                    Err(R::report(stream.token_buffer(), Some(c), stream.prev()))
+                    Err(R::report(stream, Some(c), stream.prev()))
                 }
             }
-            (None, _) => Err(R::report(stream.token_buffer(), None, stream.prev())),
+            (None, _) => Err(R::report(stream, None, stream.prev())),
         }
     }
 }
 
 pub trait ReportDiag {
-    fn report<'a, 's>(
-        buffer: &'a TokenBuffer<'s>,
-        token: Option<TokenId>,
-        prev: TokenId,
-    ) -> PErr<'s>;
+    fn report(stream: &TokenStream, token: Option<TokenId>, prev: TokenId) -> PErr;
 }
 
 #[derive(Default)]
@@ -151,33 +146,29 @@ where
     N: MatchTokenKind,
 {
     #[track_caller]
-    fn report<'a, 's>(
-        buffer: &'a TokenBuffer<'s>,
-        token: Option<TokenId>,
-        prev: TokenId,
-    ) -> PErr<'s> {
+    fn report(stream: &TokenStream, token: Option<TokenId>, prev: TokenId) -> PErr {
         let (msg, span) = if let Some(token) = token {
-            (C::expect(), buffer.span(token))
+            (C::expect(), stream.span(token))
         } else {
-            (C::expect(), buffer.span(prev))
+            (C::expect(), stream.span(prev))
         };
 
-        PErr::Recover(Diag::sourced(msg, Msg::error_span(span)).loc(Location::caller()))
+        PErr::Recover(stream.report_error(msg, span))
     }
 }
 
 macro_rules! impl_parser_rule {
     ($($T:ident),*) => {
-        impl<'a, 's, $($T,)*> ParserRule<'a, 's> for ($($T,)*)
+        impl<'a, 's, $($T,)*> ParserRule<'a> for ($($T,)*)
         where
-            $($T: ParserRule<'a, 's>,)*
+            $($T: ParserRule<'a>,)*
         {
-            type Output = ($(<$T as ParserRule<'a, 's>>::Output,)*);
+            type Output = ($(<$T as ParserRule<'a>>::Output,)*);
 
             #[track_caller]
             fn parse(
-                stream: &mut TokenStream<'a, 's>,
-            ) -> RResult<'s, Self::Output> {
+                stream: &mut TokenStream<'a>,
+            ) -> RResult<Self::Output> {
                 Ok(($(
                     $T::parse(stream)?,
                 )*))

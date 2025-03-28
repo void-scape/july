@@ -17,10 +17,10 @@ pub struct Const {
 #[derive(Default)]
 pub struct ConstRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ConstRule {
+impl<'a, 's> ParserRule<'a> for ConstRule {
     type Output = Const;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let spanned = Spanned::<(
             Next<Ident>,
             Next<Colon>,

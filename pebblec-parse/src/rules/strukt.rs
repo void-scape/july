@@ -25,10 +25,10 @@ pub struct Field {
 #[derive(Debug, Default)]
 pub struct StructRule;
 
-impl<'a, 's> ParserRule<'a, 's> for StructRule {
+impl<'a, 's> ParserRule<'a> for StructRule {
     type Output = Struct;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let (name, _, _) =
             <(Next<Ident>, Next<Colon>, Next<kind::Struct>) as ParserRule>::parse(stream)?;
         let (block_span, fields) = StructBlockRule::parse(stream).map_err(PErr::fail)?;
@@ -43,10 +43,10 @@ impl<'a, 's> ParserRule<'a, 's> for StructRule {
 #[derive(Default)]
 pub struct StructBlockRule;
 
-impl<'a, 's> ParserRule<'a, 's> for StructBlockRule {
+impl<'a, 's> ParserRule<'a> for StructBlockRule {
     type Output = (Span, Vec<Field>);
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let chk = *stream;
         match Spanned::<(Next<OpenCurly>, StructFieldDecl, Next<CloseCurly>)>::parse(stream) {
             Ok(block) => {
@@ -68,10 +68,10 @@ impl<'a, 's> ParserRule<'a, 's> for StructBlockRule {
 #[derive(Debug, Default)]
 pub struct StructFieldDecl;
 
-impl<'a, 's> ParserRule<'a, 's> for StructFieldDecl {
+impl<'a, 's> ParserRule<'a> for StructFieldDecl {
     type Output = Vec<Field>;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let mut fields = Vec::new();
 
         while !stream.match_peek::<CloseCurly>() {
@@ -109,10 +109,10 @@ pub struct FieldDef {
 #[derive(Debug, Default)]
 pub struct StructDefRule;
 
-impl<'a, 's> ParserRule<'a, 's> for StructDefRule {
+impl<'a, 's> ParserRule<'a> for StructDefRule {
     type Output = StructDef;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let (name, (block_span, fields)) = <(Next<Ident>, StructDefBlockRule)>::parse(stream)?;
         Ok(StructDef {
             name,
@@ -126,10 +126,10 @@ impl<'a, 's> ParserRule<'a, 's> for StructDefRule {
 #[derive(Default)]
 pub struct StructDefBlockRule;
 
-impl<'a, 's> ParserRule<'a, 's> for StructDefBlockRule {
+impl<'a, 's> ParserRule<'a> for StructDefBlockRule {
     type Output = (Span, Vec<FieldDef>);
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         match Spanned::<(Next<OpenCurly>, StructFieldDef, Next<CloseCurly>)>::parse(stream) {
             Ok(block) => {
                 let span = block.span();
@@ -146,10 +146,10 @@ impl<'a, 's> ParserRule<'a, 's> for StructDefBlockRule {
 #[derive(Debug, Default)]
 pub struct StructFieldDef;
 
-impl<'a, 's> ParserRule<'a, 's> for StructFieldDef {
+impl<'a, 's> ParserRule<'a> for StructFieldDef {
     type Output = Vec<FieldDef>;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let mut fields = Vec::new();
 
         while !stream.match_peek::<CloseCurly>() {

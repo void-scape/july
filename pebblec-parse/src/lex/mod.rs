@@ -111,10 +111,11 @@ const fn symbol_table() -> [TokenKind; 256] {
 }
 
 fn symbols<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
-    if input
-        .peek_token()
-        .is_some_and(|(_, t)| SYMBOL_TABLE[t as usize] != DUMMY_SYM)
-    {
+    if input.peek_token().is_some_and(|(_, t)| {
+        SYMBOL_TABLE
+            .get(t as usize)
+            .is_some_and(|s| *s != DUMMY_SYM)
+    }) {
         let (sym, span) = any.with_span().parse_next(input)?;
         Ok(Token::new(
             SYMBOL_TABLE[sym as usize],
@@ -161,10 +162,11 @@ const fn delim_table() -> [TokenKind; 256] {
 }
 
 fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
-    if input
-        .peek_token()
-        .is_some_and(|(_, t)| DELIM_TABLE[t as usize] != DUMMY_DELIM)
-    {
+    if input.peek_token().is_some_and(|(_, t)| {
+        DELIM_TABLE
+            .get(t as usize)
+            .is_some_and(|d| *d != DUMMY_DELIM)
+    }) {
         let (sym, span) = any.with_span().parse_next(input)?;
         Ok(Token::new(
             DELIM_TABLE[sym as usize],
@@ -237,8 +239,12 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
     let (result, span) = take_while(1.., |c: char| {
         !c.is_whitespace()
             && c != '.'
-            && SYMBOL_TABLE[c as usize] == DUMMY_SYM
-            && DELIM_TABLE[c as usize] == DUMMY_DELIM
+            && SYMBOL_TABLE
+                .get(c as usize)
+                .is_some_and(|s| *s == DUMMY_SYM)
+            && DELIM_TABLE
+                .get(c as usize)
+                .is_some_and(|d| *d == DUMMY_DELIM)
     })
     .with_span()
     .parse_next(input)?;

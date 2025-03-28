@@ -4,14 +4,14 @@ use crate::{rules::*, stream::TokenStream};
 #[derive(Debug, Default)]
 pub struct Opt<T>(T);
 
-impl<'a, 's, T> ParserRule<'a, 's> for Opt<T>
+impl<'a, 's, T> ParserRule<'a> for Opt<T>
 where
-    T: ParserRule<'a, 's>,
+    T: ParserRule<'a>,
 {
-    type Output = Option<<T as ParserRule<'a, 's>>::Output>;
+    type Output = Option<<T as ParserRule<'a>>::Output>;
 
     #[track_caller]
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let chck = *stream;
 
         match T::parse(stream) {
@@ -30,16 +30,16 @@ pub struct XNor<T>(T);
 
 macro_rules! impl_xnor {
     ($(($n:tt, $T:ident)),*) => {
-        impl<'a, 's, $($T,)*> ParserRule<'a, 's> for XNor<($($T,)*)>
+        impl<'a, 's, $($T,)*> ParserRule<'a> for XNor<($($T,)*)>
         where
-            $($T: ParserRule<'a, 's> + Default,)*
+            $($T: ParserRule<'a> + Default,)*
         {
-            type Output = Option<($(<$T as ParserRule<'a, 's>>::Output,)*)>;
+            type Output = Option<($(<$T as ParserRule<'a>>::Output,)*)>;
 
             #[track_caller]
             fn parse(
-                stream: &mut TokenStream<'a, 's>,
-            ) -> RResult<'s, Self::Output> {
+                stream: &mut TokenStream<'a>,
+            ) -> RResult<Self::Output> {
                 let chck = *stream;
 
                 let results = ($({

@@ -33,7 +33,7 @@ pub struct Variant {
 //        buffer: &'a TokenBuffer<'a>,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
-//    ) -> RResult<'a, Self::Output> {
+//    ) -> RResult<Self::Output> {
 //        let (name, _, _, (block_span, variants)) =
 //            <(Next<Ident>, Next<Colon>, Next<matc::Enum>, EnumBlockRule) as ParserRule>::parse(
 //                buffer, stream, stack,
@@ -57,7 +57,7 @@ pub struct Variant {
 //        buffer: &'a TokenBuffer<'a>,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
-//    ) -> RResult<'a, Self::Output> {
+//    ) -> RResult<Self::Output> {
 //        let start = buffer.span(stream.prev());
 //        match Spanned::<(Next<OpenCurly>, VariantDecl, Next<CloseCurly>)>::parse(
 //            buffer, stream, stack,
@@ -92,7 +92,7 @@ pub struct Variant {
 //        buffer: &'a TokenBuffer<'a>,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
-//    ) -> RResult<'a, Self::Output> {
+//    ) -> RResult<Self::Output> {
 //        let mut fields = Vec::new();
 //
 //        while !stream.match_peek::<CloseCurly>() {
@@ -135,7 +135,7 @@ pub struct Variant {
 //        buffer: &'a TokenBuffer<'a>,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
-//    ) -> RResult<'a, Self::Output> {
+//    ) -> RResult<Self::Output> {
 //        let (name, _, _, variant) =
 //            <(Next<Ident>, Next<Colon>, Next<Colon>, Next<Ident>)>::parse(buffer, stream, stack)?;
 //        Ok(EnumDef {

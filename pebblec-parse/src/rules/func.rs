@@ -20,11 +20,11 @@ pub struct Func {
 }
 
 impl Func {
-    pub fn parse_attr<'a, 's>(
+    pub fn parse_attr<'a>(
         &mut self,
-        stream: &TokenStream<'a, 's>,
+        stream: &TokenStream<'a>,
         attr: &Attribute,
-    ) -> Result<(), Diag<'s>> {
+    ) -> Result<(), Diag> {
         assert!(
             attr.tokens.len() == 1,
             "add more attribute parsing: {:#?}",
@@ -39,7 +39,7 @@ impl Func {
                 self.attributes.push(Attr::Intrinsic);
                 Ok(())
             }
-            str => Err(stream.full_error(format!("invalid attribute `{}`", str), attr.span)),
+            str => Err(stream.report_error(format!("invalid attribute `{}`", str), attr.span)),
         }
     }
 }
@@ -58,11 +58,11 @@ pub struct ExternBlock {
 }
 
 impl ExternBlock {
-    pub fn parse_attr<'a, 's>(
+    pub fn parse_attr<'a>(
         &mut self,
-        stream: &TokenStream<'a, 's>,
+        stream: &TokenStream<'a>,
         attr: &Attribute,
-    ) -> Result<(), Diag<'s>> {
+    ) -> Result<(), Diag> {
         assert!(attr.tokens.len() == 4, "add more attribute parsing");
 
         if attr
@@ -77,7 +77,7 @@ impl ExternBlock {
 
             Ok(())
         } else {
-            Err(stream.full_error("invalid attributes for external function", attr.span))
+            Err(stream.report_error("invalid attributes for external function", attr.span))
         }
     }
 }
@@ -107,10 +107,10 @@ pub enum Param {
 #[derive(Default)]
 pub struct FnRule;
 
-impl<'a, 's> ParserRule<'a, 's> for FnRule {
+impl<'a, 's> ParserRule<'a> for FnRule {
     type Output = Func;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         match Spanned::<(
             Next<Ident>,
             Next<Colon>,
@@ -171,11 +171,11 @@ impl<'a, 's> ParserRule<'a, 's> for FnRule {
 #[derive(Default)]
 pub struct ExternFnRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ExternFnRule {
+impl<'a, 's> ParserRule<'a> for ExternFnRule {
     type Output = ExternBlock;
 
     #[track_caller]
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<Extern>() {
             return Err(PErr::Recover(stream.error("expected `extern`")));
         }
@@ -227,10 +227,10 @@ impl<'a, 's> ParserRule<'a, 's> for ExternFnRule {
 #[derive(Debug, Default)]
 pub struct ParamsRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
+impl<'a, 's> ParserRule<'a> for ParamsRule {
     type Output = Vec<Param>;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         let _open = match Next::<OpenParen>::parse(stream) {
             Err(err) => {
@@ -276,10 +276,7 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
                         params.push((
                             comma,
                             Param::Named {
-                                span: Span::from_spans(
-                                    stream.span(name),
-                                    ty.span(stream.token_buffer()),
-                                ),
+                                span: Span::from_spans(stream.span(name), ty.span()),
                                 name,
                                 colon,
                                 ty,
@@ -311,10 +308,10 @@ impl<'a, 's> ParserRule<'a, 's> for ParamsRule {
 
 pub struct ArgsRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ArgsRule {
+impl<'a, 's> ParserRule<'a> for ArgsRule {
     type Output = (Span, Vec<Expr>);
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let str = *stream;
         let open = match Next::<OpenParen>::parse(stream) {
             Err(err) => {

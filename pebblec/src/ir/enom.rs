@@ -102,7 +102,7 @@ impl EnumStore {
             HashMap<EnumId, Layout>,
             HashMap<EnumId, HashMap<IdentId, usize>>,
         ),
-        Diag<'a>,
+        Diag,
     > {
         let mut map = HashMap::default();
         let mut variants = HashMap::default();
@@ -129,7 +129,7 @@ impl EnumStore {
         variants: &mut HashMap<EnumId, HashMap<IdentId, usize>>,
         enom: EnumId,
         prev: Option<IdentId>,
-    ) -> Result<(), Diag<'a>> {
+    ) -> Result<(), Diag> {
         let enum_id = enom;
         //let enom = &self.buf[enom.0];
 

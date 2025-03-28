@@ -13,10 +13,10 @@ pub struct Attribute {
 
 pub struct AttributeRule;
 
-impl<'a, 's> ParserRule<'a, 's> for AttributeRule {
+impl<'a, 's> ParserRule<'a> for AttributeRule {
     type Output = Attribute;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let pound = stream.expect();
         let _bracket = stream.expect();
         let offset = stream.find_matched_delim_offset::<Bracket>();
@@ -27,7 +27,7 @@ impl<'a, 's> ParserRule<'a, 's> for AttributeRule {
         let tokens = slice.drain();
         match tokens.len() {
             0 => {
-                return Err(PErr::Fail(stream.full_error(
+                return Err(PErr::Fail(stream.report_error(
                     "expected atleast one argument in attribute",
                     stream.span(stream.prev()),
                 )));

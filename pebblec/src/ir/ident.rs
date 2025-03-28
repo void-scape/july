@@ -34,8 +34,4 @@ impl<'a> IdentStore<'a> {
     pub fn get_ident(&self, id: IdentId) -> Option<&str> {
         self.buf.get(id.0).map(|s| s.as_str())
     }
-
-    pub fn get_id(&self, str: &str) -> Option<IdentId> {
-        self.map.get(&str.to_owned()).copied()
-    }
 }

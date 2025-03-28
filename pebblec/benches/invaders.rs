@@ -1,56 +1,42 @@
-use std::ffi::OsString;
+use std::time::Instant;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use pebblec::air::ctx::AirCtx;
-use pebblec::comp::CompUnit;
 use pebblec::ir::ctx::Ctx;
 use pebblec::{air, ir};
-use pebblec_parse::lex::source::{Source, SourceMap};
-use pebblec_parse::lex::*;
+use pebblec_parse::lex::source::SourceMap;
+
+const INVADERS: &str = "../demo/invaders.peb";
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let source = Source::new("../demo/invaders.peb").unwrap();
-    c.bench_function("lex invaders", |b| {
+    c.bench_function("source map parse", |b| {
+        b.iter_with_large_drop(|| {
+            let mut source_map = SourceMap::from_path(INVADERS).unwrap();
+            source_map.parse().unwrap();
+        });
+    })
+    .bench_function("ir parse", |b| {
         b.iter_batched(
-            || source.clone(),
-            |source| Lexer::new(source).lex().unwrap(),
-            criterion::BatchSize::LargeInput,
-        )
-    });
-
-    let buf = Lexer::new(source).lex().unwrap();
-    let mut map = SourceMap::default();
-    map.insert(buf);
-    let origin = OsString::from("../demo/invaders.peb");
-    c.bench_function("parse invaders", |b| {
-        b.iter_batched(
-            || map.clone(),
-            |mut map| CompUnit::parse(&origin, &mut map).unwrap(),
-            criterion::BatchSize::LargeInput,
-        )
-    });
-
-    let mut items = CompUnit::parse(&origin, &mut map).unwrap();
-    c.bench_function("ir invaders", |b| {
-        b.iter_batched(
-            || (map.clone(), items.clone()),
-            |(map, mut items)| {
-                let mut ctx = Ctx::new(map);
-                _ = ir::lower(&mut ctx, &mut items).unwrap();
+            || {
+                let mut source_map = SourceMap::from_path(INVADERS).unwrap();
+                let items = source_map.parse().unwrap();
+                (source_map, items)
+            },
+            |(source_map, items)| {
+                let start = Instant::now();
+                let ctx = Ctx::new(source_map);
+                ir::lower_items(ctx, items).unwrap();
+                start.elapsed()
             },
             criterion::BatchSize::LargeInput,
-        )
-    });
-
-    let mut ctx = Ctx::new(map);
-    let (key, const_eval_order) = ir::lower(&mut ctx, &mut items).unwrap();
-    let mut air_ctx = AirCtx::new(&ctx, &key);
-    c.bench_function("air invaders", |b| {
+        );
+    })
+    .bench_function("gen bytecode", |b| {
         b.iter_batched(
-            || const_eval_order.clone(),
-            |const_eval_order| {
-                _ = air::lower(&ctx, &key, const_eval_order);
+            || {
+                let source_map = SourceMap::from_path(INVADERS).unwrap();
+                ir::lower(source_map).unwrap()
             },
+            |ir| air::lower(ir),
             criterion::BatchSize::LargeInput,
         );
     });

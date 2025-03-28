@@ -1,32 +1,36 @@
-use indexmap::IndexMap;
-
 use super::data::{Bss, BssEntry};
-use super::{Air, AirFunc, AirFuncBuilder, BlockId, OffsetVar, Reg, Var};
+use super::{Air, AirFunc, AirFuncBuilder, AirLinkage, AirSig, BlockId, OffsetVar, Reg, Var};
+use crate::air::Args;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
 use crate::ir::sig::{Param, Sig};
 use crate::ir::ty::infer::SymbolTable;
-use crate::ir::ty::store::{TyId, TyStore};
-use crate::ir::ty::{Ty, TypeKey, Width};
+use crate::ir::ty::store::TyStore;
+use crate::ir::ty::{Ty, TyKind, TypeKey, Width};
 use crate::ir::{self, *};
+use indexmap::IndexMap;
+use pebblec_arena::BlobArena;
 use std::collections::HashMap;
 use std::ops::Deref;
 
 #[derive(Debug)]
-pub struct AirCtx<'a> {
-    pub tys: TyStore<'a>,
-    pub key: &'a TypeKey,
+pub struct AirCtx<'a, 'ctx> {
+    pub tys: TyStore,
+    pub key: TypeKey,
     pub tables: Vec<SymbolTable<Var>>,
-    ctx: &'a Ctx<'a>,
+    pub air_sigs: HashMap<IdentId, &'a AirSig<'a>>,
+    pub storage: BlobArena,
+
+    ctx: &'ctx Ctx<'ctx>,
     var_index: usize,
     func_args: IndexMap<Ident, Var>,
-    ty_map: IndexMap<Var, TyId>,
+    ty_map: IndexMap<Var, Ty>,
     bss: Bss,
     func: Option<FuncHash>,
-    instr_builder: InstrBuilder<'a>,
+    instr_builder: InstrBuilder<'a, 'ctx>,
 }
 
-impl PartialEq for AirCtx<'_> {
+impl PartialEq for AirCtx<'_, '_> {
     fn eq(&self, other: &Self) -> bool {
         self.tys == other.tys
             && self.key == other.key
@@ -40,12 +44,48 @@ impl PartialEq for AirCtx<'_> {
     }
 }
 
-impl<'a> AirCtx<'a> {
-    pub fn new(ctx: &'a Ctx<'a>, key: &'a TypeKey) -> Self {
+impl<'a, 'ctx> AirCtx<'a, 'ctx> {
+    pub fn new(ctx: &'ctx Ctx<'ctx>, key: TypeKey, tys: TyStore) -> Self {
+        let storage = BlobArena::default();
+        let air_sigs = ctx
+            .sigs
+            .iter()
+            .map(|(ident, sig)| {
+                (
+                    *ident,
+                    &*storage.alloc(AirSig {
+                        ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
+                        ty: sig.ty,
+                        params: if sig.params.is_empty() {
+                            &[]
+                        } else {
+                            storage.alloc_slice(
+                                &sig.params
+                                    .iter()
+                                    .map(|p| match p {
+                                        Param::Named { ty, .. } => *ty,
+                                        _ => todo!(),
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
+                        },
+                        // TODO: make this prettier
+                        linkage: match sig.linkage {
+                            sig::Linkage::Local => AirLinkage::Local,
+                            sig::Linkage::External { link } => AirLinkage::External {
+                                link: storage.alloc_str(link),
+                            },
+                        },
+                    }),
+                )
+            })
+            .collect();
+
         Self {
             ctx,
             key,
-            tys: ctx.tys.clone(),
+            tys,
+            air_sigs,
             var_index: 0,
             tables: Vec::new(),
             func_args: IndexMap::default(),
@@ -53,18 +93,23 @@ impl<'a> AirCtx<'a> {
             bss: Bss::default(),
             func: None,
             instr_builder: InstrBuilder::Const(Vec::new()),
+            storage,
         }
     }
 
+    pub fn into_inner(self) -> BlobArena {
+        self.storage
+    }
+
     #[track_caller]
-    pub fn active_sig(&self) -> &'a Sig<'a> {
+    pub fn active_sig(&self) -> &Sig {
         match &self.instr_builder {
             InstrBuilder::Func(b) => b.func.sig,
             InstrBuilder::Const(_) => panic!("cannot call function in const setting"),
         }
     }
 
-    pub fn start_func(&mut self, func: &'a ir::Func) -> BlockId {
+    pub fn start_func(&mut self, func: &'ctx ir::Func) -> BlockId {
         self.func = Some(func.hash());
         let mut builder = AirFuncBuilder::new(func);
         let id = builder.new_block();
@@ -80,7 +125,7 @@ impl<'a> AirCtx<'a> {
     #[track_caller]
     pub fn finish_func(&mut self) -> AirFunc<'a> {
         match &mut self.instr_builder {
-            InstrBuilder::Func(b) => b.build(),
+            InstrBuilder::Func(b) => b.build(&self.air_sigs),
             InstrBuilder::Const(_) => panic!("called `finish_func` with const builder"),
         }
     }
@@ -94,7 +139,7 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    fn expect_func_builder(&self) -> &AirFuncBuilder<'a> {
+    fn expect_func_builder(&self) -> &AirFuncBuilder<'a, 'ctx> {
         match &self.instr_builder {
             InstrBuilder::Func(b) => b,
             InstrBuilder::Const(_) => panic!("called `expect_func_builder` with const builder"),
@@ -102,7 +147,7 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    fn expect_func_builder_mut(&mut self) -> &mut AirFuncBuilder<'a> {
+    fn expect_func_builder_mut(&mut self) -> &mut AirFuncBuilder<'a, 'ctx> {
         match &mut self.instr_builder {
             InstrBuilder::Func(b) => b,
             InstrBuilder::Const(_) => panic!("called `expect_func_builder` with const builder"),
@@ -169,7 +214,7 @@ impl<'a> AirCtx<'a> {
 
     pub fn push_pop_sp<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         // TODO: this sort of leaks?
-        let sp = OffsetVar::zero(self.anon_var(TyId::USIZE));
+        let sp = OffsetVar::zero(self.anon_var(Ty::USIZE));
         self.ins(Air::ReadSP(sp));
         let result = f(self);
         self.ins(Air::WriteSP(sp));
@@ -188,14 +233,14 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    pub fn new_var_registered(&mut self, ident: &Ident, ty: TyId) -> Var {
+    pub fn new_var_registered(&mut self, ident: &Ident, ty: Ty) -> Var {
         let var = self.anon_var(ty);
         self.register_var(ident, var);
         var
     }
 
     #[track_caller]
-    pub fn new_func_arg_var_registered(&mut self, ident: &Ident, ty: TyId) -> Var {
+    pub fn new_func_arg_var_registered(&mut self, ident: &Ident, ty: Ty) -> Var {
         let var = self.anon_var_no_salloc(ty);
         self.func_args.insert(*ident, var);
         var
@@ -212,7 +257,7 @@ impl<'a> AirCtx<'a> {
         }
     }
 
-    pub fn anon_var_no_salloc(&mut self, ty: TyId) -> Var {
+    pub fn anon_var_no_salloc(&mut self, ty: Ty) -> Var {
         let idx = self.var_index;
         self.var_index += 1;
         self.ty_map.insert(Var(idx), ty);
@@ -221,13 +266,13 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    pub fn anon_var(&mut self, ty: TyId) -> Var {
+    pub fn anon_var(&mut self, ty: Ty) -> Var {
         let var = self.anon_var_no_salloc(ty);
-        self.ins(Air::SAlloc(var, self.tys.ty(ty).size(self)));
+        self.ins(Air::SAlloc(var, ty.size(&self.tys)));
         var
     }
 
-    pub fn func_arg_var(&mut self, ident: Ident, ty: TyId) -> Var {
+    pub fn func_arg_var(&mut self, ident: Ident, ty: Ty) -> Var {
         match self.func_args.get(&ident) {
             Some(arg) => *arg,
             None => self.new_func_arg_var_registered(&ident, ty),
@@ -248,7 +293,7 @@ impl<'a> AirCtx<'a> {
         let ident_str = self.expect_ident(ident);
         self.var(ident)
             .or_else(|| {
-                builder.func.sig.params.iter().find_map(|p| match p {
+                builder.func.sig.params.iter().find_map(|p| match &p {
                     Param::Named { ident: name, .. } => {
                         if name.id == ident {
                             self.func_args.get(name).copied()
@@ -269,11 +314,11 @@ impl<'a> AirCtx<'a> {
     }
 
     #[track_caller]
-    pub fn expect_var_ty(&self, var: Var) -> TyId {
+    pub fn expect_var_ty(&self, var: Var) -> Ty {
         *self.ty_map.get(&var).expect("invalid var")
     }
 
-    pub fn var_ty(&self, ident: &Ident) -> TyId {
+    pub fn var_ty(&self, ident: &Ident) -> Ty {
         let set = self.key.ident_set(ident.id);
         match set.len() {
             0 => panic!("ident not keyed: {:?}", ident),
@@ -320,7 +365,7 @@ pub struct LoopCtx {
 
 pub const RET_REG: Reg = Reg::A;
 
-impl<'a> AirCtx<'a> {
+impl<'a, 'ctx> AirCtx<'a, 'ctx> {
     pub fn ins(&mut self, instr: Air<'a>) {
         match &mut self.instr_builder {
             InstrBuilder::Const(instrs) => instrs.push(instr),
@@ -335,14 +380,23 @@ impl<'a> AirCtx<'a> {
         }
     }
 
-    pub fn ret_var(&mut self, var: OffsetVar, ty: TyId) {
-        match self.tys.ty(ty) {
-            Ty::Bool => self.ret_ivar(var, Width::BOOL),
-            Ty::Int(ty) => self.ret_ivar(var, ty.width()),
-            Ty::Float(ty) => self.ret_ivar(var, ty.width()),
-            Ty::Array(_, _) | Ty::Slice(_) | Ty::Ref(&Ty::Str) | Ty::Struct(_) => self.ret_ptr(var),
-            Ty::Ref(_) => self.ret_ivar(var, Width::PTR),
-            ty @ Ty::Unit | ty @ Ty::Str => panic!("cannot return {:?}", ty),
+    pub fn call(&mut self, call: &Call, args: Args) {
+        let sig = call.sig;
+        let air_sig = self.air_sigs.get(&sig.ident).unwrap();
+        self.ins(Air::Call(air_sig, args));
+    }
+
+    pub fn ret_var(&mut self, var: OffsetVar, ty: Ty) {
+        match ty.0 {
+            TyKind::Bool => self.ret_ivar(var, Width::BOOL),
+            TyKind::Int(ty) => self.ret_ivar(var, ty.width()),
+            TyKind::Float(ty) => self.ret_ivar(var, ty.width()),
+            TyKind::Array(_, _)
+            | TyKind::Slice(_)
+            | TyKind::Ref(TyKind::Str)
+            | TyKind::Struct(_) => self.ret_ptr(var),
+            TyKind::Ref(_) => self.ret_ivar(var, Width::PTR),
+            ty @ TyKind::Unit | ty @ TyKind::Str => panic!("cannot return {:?}", ty),
         }
     }
 
@@ -357,8 +411,8 @@ impl<'a> AirCtx<'a> {
     }
 }
 
-impl<'a> Deref for AirCtx<'a> {
-    type Target = Ctx<'a>;
+impl<'a, 'ctx> Deref for AirCtx<'a, 'ctx> {
+    type Target = Ctx<'ctx>;
 
     fn deref(&self) -> &Self::Target {
         &self.ctx
@@ -366,7 +420,7 @@ impl<'a> Deref for AirCtx<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-enum InstrBuilder<'a> {
-    Func(AirFuncBuilder<'a>),
+enum InstrBuilder<'a, 'ctx> {
+    Func(AirFuncBuilder<'a, 'ctx>),
     Const(Vec<Air<'a>>),
 }

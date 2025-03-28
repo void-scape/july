@@ -196,7 +196,7 @@ startup: (renderer: &Renderer) -> GameState {
         load_bmp_texture(cs("./demo/bullet.bmp\0"), renderer),
     ];
     
-    for texture in textures{
+    for texture in textures {
         if texture* as u64 == NULL { exit(1); }
     }
     
@@ -274,7 +274,7 @@ update: (state: &GameState) {
         state*.player_pos.y += mov_vec.y * norm;
     }
     
-    for bullet in state*.bullets{
+    for bullet in state*.bullets {
         if bullet*.alive {
             bullet*.pos.y -= BULLET_SPEED;
             
@@ -291,7 +291,7 @@ render: (renderer: &Renderer, state: &GameState) {
     
     let dst = FRect { x: 0., y: 0., w: 100., h: 100. };
     
-    for bullet in state*.bullets{
+    for bullet in state*.bullets {
         if bullet*.alive {
             dst.x = bullet*.pos.x;
             dst.y = bullet*.pos.y;

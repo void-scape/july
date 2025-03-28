@@ -112,6 +112,7 @@ impl Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
+    pub span: Span,
     pub kind: AssignKind,
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
@@ -141,10 +142,10 @@ impl Precedence for BinOpKind {
 }
 
 // TODO: ranges should be operators will low precedence
-impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
+impl<'a, 's> ParserRule<'a> for BinOpKindRule {
     type Output = BinOpKind;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         match stream.peek_kind() {
             Some(TokenKind::Plus)
             | Some(TokenKind::Hyphen)
@@ -154,7 +155,7 @@ impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
                 let plus = tmp.expect();
                 if tmp.peek_kind() == Some(TokenKind::Equals) {
                     let equals = tmp.expect();
-                    return Err(PErr::Fail(stream.full_error(
+                    return Err(PErr::Fail(stream.report_error(
                         "cannot assign expression",
                         Span::from_spans(stream.span(plus), stream.span(equals)),
                     )));
@@ -172,7 +173,7 @@ impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
                 } else {
                     *stream = chk;
                     return Err(PErr::Fail(
-                        stream.full_error("cannot assign expression", stream.span(equals)),
+                        stream.report_error("cannot assign expression", stream.span(equals)),
                     ));
                 }
             }
@@ -183,7 +184,7 @@ impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
                 } else {
                     *stream = chk;
                     return Err(PErr::Fail(
-                        stream.full_error("cannot assign expression", stream.span(bang)),
+                        stream.report_error("cannot assign expression", stream.span(bang)),
                     ));
                 }
             }
@@ -233,10 +234,10 @@ impl<'a, 's> ParserRule<'a, 's> for BinOpKindRule {
 
 pub struct TermRule;
 
-impl<'a, 's> ParserRule<'a, 's> for TermRule {
+impl<'a, 's> ParserRule<'a> for TermRule {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let Some(start_span) = stream.peek().map(|t| stream.span(t)) else {
             return Err(stream.recover("expected expression term"));
         };
@@ -319,16 +320,17 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 let offset = stream.find_matched_delim_offset::<Paren>();
                 let mut slice = stream.slice(offset);
                 stream.eat_n(offset);
-                let inner = ExprRule::parse(&mut slice).map_err(|_| {
-                    PErr::Fail(
-                        stream
-                            .full_error("expected expression within delimiters", stream.span(open)),
-                    )
-                })?;
+                let inner =
+                    ExprRule::parse(&mut slice).map_err(|_| {
+                        PErr::Fail(stream.report_error(
+                            "expected expression within delimiters",
+                            stream.span(open),
+                        ))
+                    })?;
 
                 if stream.is_empty() {
                     return Err(PErr::Fail(
-                        stream.full_error("mismatched delimiter", stream.span(open)),
+                        stream.report_error("mismatched delimiter", stream.span(open)),
                     ));
                 }
 
@@ -336,7 +338,7 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 stream.expect();
                 Ok(Expr::Paren(Box::new(inner)))
             }
-            _ => Err(PErr::Recover(stream.full_error(
+            _ => Err(PErr::Recover(stream.report_error(
                 "expected term",
                 stream.span(stream.peek().unwrap()),
             ))),
@@ -377,7 +379,7 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 let dot = stream.expect();
 
                 if !stream.match_peek::<Ident>() {
-                    return Err(PErr::Fail(stream.full_error(
+                    return Err(PErr::Fail(stream.report_error(
                         "invalid access: expected identifier after `.`",
                         stream.span(dot),
                     )));
@@ -405,7 +407,7 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                 let index_expr = ExprRule::parse(stream)?;
 
                 if !stream.match_peek::<CloseBracket>() {
-                    return Err(PErr::Fail(stream.full_error(
+                    return Err(PErr::Fail(stream.report_error(
                         "unclosed array index: expected `]`",
                         stream.span(open_bracket),
                     )));
@@ -447,7 +449,7 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
                         term_result = Expr::Cast {
                             span: Span::from_spans(
                                 term_result.span(stream.token_buffer()),
-                                ty.span(stream.token_buffer()),
+                                ty.span(),
                             ),
                             lhs: Box::new(term_result),
                             ty,
@@ -470,10 +472,10 @@ impl<'a, 's> ParserRule<'a, 's> for TermRule {
 #[derive(Debug, Default)]
 pub struct ExprRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ExprRule {
+impl<'a, 's> ParserRule<'a> for ExprRule {
     type Output = Expr;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if stream.match_peek::<Ret>() {
             let t = stream.expect();
             return Ok(Expr::Ret(

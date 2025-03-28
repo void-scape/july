@@ -1,7 +1,7 @@
 use super::Expr;
-use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
-use super::ty::store::TyId;
+use super::ty::Ty;
+use super::ty::store::TyStore;
 use pebblec_parse::lex::buffer::Span;
 use std::collections::HashMap;
 
@@ -14,7 +14,7 @@ pub struct Struct {
 }
 
 impl Struct {
-    pub fn get_field_ty(&self, field: IdentId) -> Option<TyId> {
+    pub fn get_field_ty(&self, field: IdentId) -> Option<Ty> {
         self.fields
             .iter()
             .find(|f| f.name.id == field)
@@ -22,13 +22,13 @@ impl Struct {
     }
 
     #[track_caller]
-    pub fn field_ty(&self, field: IdentId) -> TyId {
+    pub fn field_ty(&self, field: IdentId) -> Ty {
         self.get_field_ty(field).expect("invalid field")
     }
 
     #[track_caller]
-    pub fn field_offset(&self, ctx: &Ctx, field: IdentId) -> i32 {
-        let map = ctx.tys.fields(ctx.expect_struct_id(self.name.id));
+    pub fn field_offset(&self, tys: &TyStore, field: IdentId) -> i32 {
+        let map = tys.fields(tys.expect_struct_id(self.name.id));
         map.fields.get(&field).expect("invalid field").1
     }
 }
@@ -37,7 +37,7 @@ impl Struct {
 pub struct Field {
     pub span: Span,
     pub name: Ident,
-    pub ty: TyId,
+    pub ty: Ty,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
@@ -56,11 +56,11 @@ pub struct FieldDef<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldMap {
-    pub fields: HashMap<IdentId, (TyId, ByteOffset)>,
+    pub fields: HashMap<IdentId, (Ty, ByteOffset)>,
 }
 
 impl FieldMap {
-    pub fn field_ty(&self, field: IdentId) -> Option<TyId> {
+    pub fn field_ty(&self, field: IdentId) -> Option<Ty> {
         self.fields.get(&field).map(|(ty, _)| *ty)
     }
 }

@@ -19,10 +19,10 @@ pub struct Use {
 #[derive(Debug, Default)]
 pub struct UseRule;
 
-impl<'a, 's> ParserRule<'a, 's> for UseRule {
+impl<'a> ParserRule<'a> for UseRule {
     type Output = Use;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<kind::Use>() {
             return Err(PErr::Recover(stream.error("expected `use`")));
         }

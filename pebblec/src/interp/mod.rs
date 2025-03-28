@@ -1,9 +1,9 @@
 use self::ctx::InterpCtx;
-use crate::air::{Air, AirFunc, Bits, ConstData, IntKind, OffsetVar, Prim};
-use crate::ir::ctx::Ctx;
-use crate::ir::sig::{Linkage, Param, Sig};
-use crate::ir::ty::store::TyId;
-use crate::ir::ty::{FloatTy, Sign, Ty, Width};
+use crate::air::{
+    Air, AirFunc, AirLinkage, AirSig, Bits, ByteCode, ConstData, IntKind, OffsetVar, Prim,
+};
+use crate::ir::ty::store::TyStore;
+use crate::ir::ty::{FloatTy, Sign, Ty, TyKind, Width};
 use core::str;
 use libffi::low::CodePtr;
 use libffi::middle::{Arg, Cif, Type};
@@ -13,23 +13,34 @@ use std::ffi::{c_char, c_void};
 mod ctx;
 mod stack;
 
-pub fn run<'a>(ctx: &'a Ctx<'a>, air_funcs: &[AirFunc], consts: &[Air<'a>], log: bool) -> i32 {
-    let libs = load_libraries(ctx.sigs.values().copied());
+pub struct InterpInstance<'a> {
+    bytecode: &'a ByteCode<'a>,
+}
 
-    let main = air_funcs
-        .iter()
-        .find(|f| ctx.expect_ident(f.func.sig.ident) == "main")
-        .unwrap();
-    entry(ctx, main, air_funcs, &libs, consts, log)
+impl<'a> InterpInstance<'a> {
+    pub fn new(bytecode: &'a ByteCode<'a>) -> Self {
+        Self { bytecode }
+    }
+
+    pub fn run(&self, log: bool) -> i32 {
+        let libs = load_libraries(self.bytecode.extern_sigs.values().copied());
+        let main = self
+            .bytecode
+            .funcs
+            .iter()
+            .find(|f| f.sig.ident == "main")
+            .unwrap();
+        entry(main, self.bytecode, &libs, log)
+    }
 }
 
 fn load_libraries<'a>(
-    sigs: impl Iterator<Item = &'a Sig<'a>>,
+    sigs: impl Iterator<Item = &'a AirSig<'a>>,
 ) -> HashMap<&'a str, libloading::Library> {
     let mut links = HashSet::<&str>::default();
     for sig in sigs {
         match sig.linkage {
-            Linkage::External { link } => {
+            AirLinkage::External { link } => {
                 links.insert(link);
             }
             _ => {}
@@ -43,17 +54,15 @@ fn load_libraries<'a>(
 }
 
 fn entry(
-    ctx: &Ctx,
     main: &AirFunc,
-    air_funcs: &[AirFunc],
+    bytecode: &ByteCode,
     libs: &HashMap<&str, libloading::Library>,
-    consts: &[Air],
     log: bool,
 ) -> i32 {
-    let mut ctx = InterpCtx::new(ctx);
-    ctx.consts(consts);
+    let mut ctx = InterpCtx::new(&bytecode.tys);
+    ctx.consts(&bytecode.consts);
     loop {
-        match execute(&mut ctx, air_funcs, libs, log) {
+        match execute(&mut ctx, &bytecode.funcs, libs, log) {
             InstrResult::Break => break,
             InstrResult::Continue => continue,
             InstrResult::Ok => {}
@@ -64,7 +73,7 @@ fn entry(
 
     ctx.start_func(main);
     loop {
-        match execute(&mut ctx, air_funcs, libs, log) {
+        match execute(&mut ctx, &bytecode.funcs, libs, log) {
             InstrResult::Break => break,
             InstrResult::Continue => continue,
             InstrResult::Ok => {}
@@ -175,16 +184,16 @@ fn execute<'a>(
         Air::Ret => return ctx.pop_frame(),
         Air::Call(sig, args) => {
             match sig.linkage {
-                Linkage::Local => {
+                AirLinkage::Local => {
                     let func = air_funcs
                         .iter()
-                        .find(|f| f.func.sig.ident == sig.ident)
+                        .find(|f| f.sig.ident == sig.ident)
                         .unwrap_or_else(|| panic!("invalid func"));
                     ctx.start_func(func);
 
-                    if ctx.expect_ident(sig.ident) == "printf" {
+                    if sig.ident == "printf" {
                         let (ty, fmt) = args.vars.first().unwrap();
-                        assert_eq!(*ty, TyId::STR_LIT);
+                        assert_eq!(*ty, Ty::STR_LIT);
                         let fmt = OffsetVar::zero(*fmt);
                         let len = ctx.stack.read_var::<u64>(fmt);
                         let addr = ctx.stack.read_var::<u64>(fmt.add(Width::W64));
@@ -198,9 +207,9 @@ fn execute<'a>(
                         let mut args = args.vars.iter();
                         let _fmt = args.next();
                         let mut buf = String::with_capacity(str.len());
-                        for entry in
-                            str.chars()
-                                .map(|c| if c == '%' { Entry::Arg } else { Entry::Char(c) })
+                        for entry in str
+                            .chars()
+                            .map(|c| if c == '%' { Entry::Arg } else { Entry::Char(c) })
                         {
                             match entry {
                                 Entry::Char(c) => buf.push(c),
@@ -210,8 +219,8 @@ fn execute<'a>(
                                     match args.next() {
                                         Some((ty, var)) => {
                                             let var = OffsetVar::zero(*var);
-                                            match ctx.tys.ty(*ty) {
-                                                Ty::Int(ty) => match ty.kind() {
+                                            match ty.0 {
+                                                TyKind::Int(ty) => match ty.kind() {
                                                     IntKind::U8 => {
                                                         print!("{}", ctx.stack.read_var::<u8>(var))
                                                     }
@@ -237,7 +246,7 @@ fn execute<'a>(
                                                         print!("{}", ctx.stack.read_var::<i64>(var))
                                                     }
                                                 },
-                                                Ty::Float(float) => match float {
+                                                TyKind::Float(float) => match float {
                                                     FloatTy::F32 => {
                                                         print!("{}", ctx.stack.read_var::<f32>(var))
                                                     }
@@ -245,11 +254,11 @@ fn execute<'a>(
                                                         print!("{}", ctx.stack.read_var::<f64>(var))
                                                     }
                                                 },
-                                                Ty::Bool => {
+                                                TyKind::Bool => {
                                                     print!("{}", ctx.stack.read_var::<u8>(var) == 1)
                                                 }
-                                                Ty::Ref(&Ty::Str) => todo!(),
-                                                Ty::Ref(_) => {
+                                                TyKind::Ref(TyKind::Str) => todo!(),
+                                                TyKind::Ref(_) => {
                                                     print!("{:#x}", ctx.stack.read_var::<u64>(var))
                                                 }
                                                 ty => unimplemented!("printf arg: {ty:?}"),
@@ -273,36 +282,29 @@ fn execute<'a>(
 
                     return InstrResult::Continue;
                 }
-                Linkage::External { link } => {
+                AirLinkage::External { link } => {
                     // TODO: build these once
 
                     let lib = libs.get(link).unwrap();
                     let func: libloading::Symbol<*mut c_void> =
-                        unsafe { lib.get(ctx.expect_ident(sig.ident).as_bytes()).unwrap() };
+                        unsafe { lib.get(sig.ident.as_bytes()).unwrap() };
 
                     let mut params = Vec::with_capacity(sig.params.len());
                     for param in sig.params.iter() {
-                        match param {
-                            Param::Named { ty, .. } => {
-                                params.push(ctx.tys.ty(*ty).libffi_type(ctx))
-                            }
-                            Param::Slf(_) | Param::SlfRef(_) => {
-                                unreachable!()
-                            }
-                        }
+                        params.push(param.libffi_type(ctx.tys))
                     }
 
-                    let ty = if sig.ty == TyId::UNIT {
+                    let ty = if sig.ty == Ty::UNIT {
                         Type::void()
                     } else {
-                        ctx.tys.ty(sig.ty).libffi_type(ctx)
+                        sig.ty.libffi_type(ctx.tys)
                     };
                     let cif = Cif::new(params.into_iter(), ty);
 
-                    let size = if sig.ty == TyId::UNIT {
+                    let size = if sig.ty == Ty::UNIT {
                         0
                     } else {
-                        ctx.tys.ty(sig.ty).size(ctx)
+                        sig.ty.size(&ctx.tys)
                     };
 
                     let args = args
@@ -319,39 +321,36 @@ fn execute<'a>(
                             1 => {
                                 let result =
                                     cif.call::<u8>(CodePtr(func.into_raw().as_raw_ptr()), &args);
-
-                                match ctx.tys.ty(sig.ty) {
-                                    Ty::Bool => {
+                                match sig.ty.0 {
+                                    TyKind::Bool => {
                                         ctx.a.w(result as u64);
                                     }
-                                    Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => ctx.a.w(result as u64),
+                                    TyKind::Ref(TyKind::Str) => todo!(),
+                                    TyKind::Ref(_) => ctx.a.w(result as u64),
                                     _ => todo!(),
                                 }
                             }
                             2 => {
                                 let result =
                                     cif.call::<u16>(CodePtr(func.into_raw().as_raw_ptr()), &args);
-
-                                match ctx.tys.ty(sig.ty) {
-                                    Ty::Bool => {
+                                match sig.ty.0 {
+                                    TyKind::Bool => {
                                         ctx.a.w(result as u64);
                                     }
-                                    Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => ctx.a.w(result as u64),
+                                    TyKind::Ref(TyKind::Str) => todo!(),
+                                    TyKind::Ref(_) => ctx.a.w(result as u64),
                                     _ => todo!(),
                                 }
                             }
                             4 => {
                                 let result =
                                     cif.call::<u32>(CodePtr(func.into_raw().as_raw_ptr()), &args);
-
-                                match ctx.tys.ty(sig.ty) {
-                                    Ty::Bool => {
+                                match sig.ty.0 {
+                                    TyKind::Bool => {
                                         ctx.a.w(result as u64);
                                     }
-                                    Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => ctx.a.w(result as u64),
+                                    TyKind::Ref(TyKind::Str) => todo!(),
+                                    TyKind::Ref(_) => ctx.a.w(result as u64),
                                     _ => todo!(),
                                 }
                             }
@@ -359,14 +358,14 @@ fn execute<'a>(
                                 let result =
                                     cif.call::<u64>(CodePtr(func.into_raw().as_raw_ptr()), &args);
 
-                                match ctx.tys.ty(sig.ty) {
-                                    Ty::Bool => {
+                                match sig.ty.0 {
+                                    TyKind::Bool => {
                                         ctx.a.w(result);
                                     }
-                                    Ty::Ref(Ty::Str) => todo!(),
-                                    Ty::Ref(_) => ctx.a.w(result),
-                                    Ty::Struct(id) => {
-                                        let bytes = ctx.tys.struct_layout(id).size;
+                                    TyKind::Ref(TyKind::Str) => todo!(),
+                                    TyKind::Ref(_) => ctx.a.w(result),
+                                    TyKind::Struct(id) => {
+                                        let bytes = ctx.tys.struct_layout(*id).size;
                                         let addr = ctx.stack.anon_alloc(bytes);
                                         ctx.stack.write_bits(Bits::from_u64(result), addr as usize);
                                         ctx.a.w(addr as u64);
@@ -672,10 +671,10 @@ fn execute<'a>(
     InstrResult::Ok
 }
 
-impl Ty<'_> {
-    pub fn libffi_type(&self, ctx: &Ctx) -> Type {
+impl TyKind {
+    pub fn libffi_type(&self, tys: &TyStore) -> Type {
         match self {
-            Ty::Int(ty) => match ty.kind() {
+            TyKind::Int(ty) => match ty.kind() {
                 IntKind::I8 => Type::i8(),
                 IntKind::U8 => Type::u8(),
                 IntKind::I16 => Type::i16(),
@@ -685,21 +684,17 @@ impl Ty<'_> {
                 IntKind::I64 => Type::i64(),
                 IntKind::U64 => Type::u64(),
             },
-            Ty::Float(ty) => match ty {
+            TyKind::Float(ty) => match ty {
                 FloatTy::F32 => Type::f32(),
                 FloatTy::F64 => Type::f64(),
             },
-            Ty::Str => Type::pointer(),
-            Ty::Bool => Type::u8(),
-            Ty::Ref(Ty::Str) => Type::structure([Type::u64(), Type::pointer()]),
-            Ty::Ref(_) => Type::pointer(),
-            Ty::Struct(id) => Type::structure(
-                ctx.tys
-                    .strukt(*id)
-                    .fields
-                    .iter()
-                    .map(|f| ctx.tys.ty(f.ty).libffi_type(ctx)),
-            ),
+            TyKind::Str => Type::pointer(),
+            TyKind::Bool => Type::u8(),
+            TyKind::Ref(TyKind::Str) => Type::structure([Type::u64(), Type::pointer()]),
+            TyKind::Ref(_) => Type::pointer(),
+            TyKind::Struct(id) => {
+                Type::structure(tys.strukt(*id).fields.iter().map(|f| f.ty.libffi_type(tys)))
+            }
             ty => todo!("{ty:?}"),
         }
     }

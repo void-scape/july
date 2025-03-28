@@ -1,5 +1,5 @@
 use crate::ir::mem::Layout;
-use crate::ir::ty::store::TyId;
+use crate::ir::ty::Ty;
 use pebblec_arena::BlobArena;
 
 #[derive(Debug, Default)]
@@ -19,7 +19,7 @@ impl Bss {
 
 #[derive(Debug, Clone, Hash)]
 pub struct BssEntry {
-    ty: TyId,
+    ty: Ty,
     layout: Layout,
     data: *const u8,
 }
@@ -31,9 +31,9 @@ impl PartialEq for BssEntry {
 }
 
 impl BssEntry {
-    pub fn str_lit(data: *const u8) -> Self {
+    pub fn str_lit(data: *const u8) -> BssEntry {
         Self {
-            ty: TyId::STR_LIT,
+            ty: Ty::STR_LIT,
             layout: Layout::FAT_PTR,
             data,
         }

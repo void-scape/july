@@ -1,11 +1,11 @@
-use super::store::TyId;
-use super::{FloatTy, IntTy, Sign, Ty, TyVar, TypeKey};
+use super::{Ty, TyVar, TypeKey};
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
 use indexmap::IndexMap;
 use pebblec_parse::diagnostic::{Diag, Msg};
 use pebblec_parse::lex::buffer::Span;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
+use std::panic::Location;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolTable<T> {
@@ -50,12 +50,12 @@ pub struct Cnst {
     pub kind: CnstKind,
     pub src: Span,
     pub var: Span,
-    pub loc: String,
+    pub loc: &'static Location<'static>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CnstKind {
-    Ty(TyId),
+    Ty(Ty),
     Integral(Integral),
     Equate(TyVar),
 }
@@ -70,8 +70,8 @@ impl InferCtx {
     pub fn in_scope<'a, R>(
         &mut self,
         ctx: &mut Ctx<'a>,
-        f: impl FnOnce(&mut Ctx<'a>, &mut Self) -> Result<R, Diag<'a>>,
-    ) -> Result<R, Diag<'a>> {
+        f: impl FnOnce(&mut Ctx<'a>, &mut Self) -> Result<R, Diag>,
+    ) -> Result<R, Diag> {
         self.tables.push(SymbolTable::default());
         let result = f(ctx, self);
         let unify_result = self.unify_top_scope(ctx);
@@ -79,7 +79,7 @@ impl InferCtx {
             Ok(inner) => unify_result.map(|_| inner),
             Err(diag) => match unify_result {
                 Ok(_) => Err(diag),
-                Err(unify_err) => Err(diag.wrap(unify_err)),
+                Err(unify_err) => Err(diag.join(unify_err)),
             },
         }
     }
@@ -153,7 +153,7 @@ impl InferCtx {
 
     // TODO: if there are any conflicting absolute types, say from a parameter binding or a struct
     // definition, then this will return none and cause spurious type errors
-    pub fn guess_var_ty(&self, ctx: &Ctx, var: TyVar) -> Option<TyId> {
+    pub fn guess_var_ty(&self, ctx: &Ctx, var: TyVar) -> Option<Ty> {
         let cnsts = self.constraints.get(&var).expect(INVALID);
         self.unify_constraints(ctx, var, &cnsts.1).ok()
     }
@@ -184,7 +184,7 @@ impl InferCtx {
         let span = self.var_span(var);
         let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
         cnsts.push(Cnst {
-            loc: std::panic::Location::caller().to_string(),
+            loc: std::panic::Location::caller(),
             kind: CnstKind::Integral(integral),
             var: span,
             src,
@@ -192,11 +192,11 @@ impl InferCtx {
     }
 
     #[track_caller]
-    pub fn eq(&mut self, var: TyVar, ty: TyId, src: Span) {
+    pub fn eq(&mut self, var: TyVar, ty: Ty, src: Span) {
         let span = self.var_span(var);
         let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
         cnsts.push(Cnst {
-            loc: std::panic::Location::caller().to_string(),
+            loc: std::panic::Location::caller(),
             kind: CnstKind::Ty(ty),
             var: span,
             src,
@@ -223,14 +223,14 @@ impl InferCtx {
         let other_span = self.var_span(other);
         let (_, cnsts) = self.constraints.get_mut(&var).expect(INVALID);
         cnsts.push(Cnst {
-            loc: std::panic::Location::caller().to_string(),
+            loc: std::panic::Location::caller(),
             kind: CnstKind::Equate(other),
             var: span,
             src: other_span,
         })
     }
 
-    pub fn unify_top_scope<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Diag<'a>> {
+    pub fn unify_top_scope<'a>(&mut self, ctx: &Ctx<'a>) -> Result<(), Diag> {
         let mut errors = Vec::new();
 
         let top_scope = self.tables.pop();
@@ -266,7 +266,7 @@ impl InferCtx {
         ctx: &Ctx<'a>,
         var: TyVar,
         constraints: &[Cnst],
-    ) -> Result<TyId, Diag<'a>> {
+    ) -> Result<Ty, Diag> {
         let mut integral = None;
         let mut abs = None;
 
@@ -276,9 +276,9 @@ impl InferCtx {
         for c in constraints.iter() {
             match &c.kind {
                 CnstKind::Ty(ty) => {
-                    if abs.is_some_and(|(abs, _): (TyId, _)| !ty.equiv(ctx, abs)) {
-                        let ty_str = ctx.ty_str(abs.unwrap().0);
-                        let other = ctx.ty_str(*ty);
+                    if abs.is_some_and(|(abs, _): (Ty, _)| !ty.equiv(*abs.0)) {
+                        let ty_str = abs.unwrap().0.to_string(ctx);
+                        let other = ty.to_string(ctx);
 
                         // TODO: better error reporting, describe where the value is used
                         //
@@ -295,7 +295,7 @@ impl InferCtx {
                             //    abs.unwrap().1,
                             //    format!("but this is of type `{}`", ty_str),
                             //))
-                            .msg(Msg::info(c.src, &c.loc)));
+                            .msg(Msg::info(c.src, c.loc.to_string())));
                     }
 
                     if abs.is_none() {
@@ -311,10 +311,9 @@ impl InferCtx {
 
         if let Some((abs, _)) = abs {
             if let Some((span, integral)) = integral {
-                let ty = ctx.tys.ty(abs);
-                if (matches!(integral, Integral::Int) && !ty.is_int())
-                    && (matches!(integral, Integral::Float) && !ty.is_float())
-                    && (matches!(integral, Integral::Int) && !ty.is_ref())
+                if (matches!(integral, Integral::Int) && !abs.is_int())
+                    && (matches!(integral, Integral::Float) && !abs.is_float())
+                    && (matches!(integral, Integral::Int) && abs.is_ref())
                 {
                     return Err(ctx.mismatch(self.var_span(var), "an integer", abs).msg(
                         Msg::note(
@@ -329,8 +328,8 @@ impl InferCtx {
         } else {
             if let Some((_, integral)) = integral {
                 Ok(match integral {
-                    Integral::Int => ctx.tys.builtin(Ty::Int(IntTy::new_64(Sign::I))),
-                    Integral::Float => ctx.tys.builtin(Ty::Float(FloatTy::F64)),
+                    Integral::Int => Ty::ISIZE,
+                    Integral::Float => Ty::FSIZE,
                 })
             } else {
                 Err(ctx.report_error(

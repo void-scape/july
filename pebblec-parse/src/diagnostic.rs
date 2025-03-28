@@ -3,311 +3,220 @@ use crate::lex::buffer::Span;
 use crate::lex::source::{Source, SourceMap};
 use annotate_snippets::{Level, Renderer, Snippet};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::panic::Location;
+use std::sync::Arc;
 
+/// Compiler diagnostic.
+///
+/// `Diag` can be one or many [`RawDiag`]s. Each [`RawDiag`] represents a single diagnostic
+/// message with a title, origin, and span. [`RawDiag`]s can hold additional [`Msg`]s that
+/// will appear within the same report.
+///
+/// `Diag`s are rendered with [`annotate_snippets`] in [`Diag::report`].
 #[derive(Debug)]
-pub struct Diag<'a> {
-    inner: DiagInnerPtr<'a>,
+pub enum Diag {
+    Single(RawDiag),
+    Bundle(Vec<RawDiag>),
 }
 
-#[derive(Debug)]
-pub enum DiagInnerPtr<'a> {
-    One(Box<DiagInner<'a>>),
-    Many(Vec<DiagInner<'a>>),
-}
-
-impl<'a> Diag<'a> {
-    pub fn new(title: impl Into<String>, diag: impl Diagnostic<'a>) -> Self {
-        Self {
-            inner: DiagInnerPtr::One(Box::new(diag.into_diagnostic(title.into()))),
-        }
-    }
-
-    pub fn sourced(title: impl Into<String>, msg: Msg) -> Self {
-        Self {
-            inner: DiagInnerPtr::One(Box::new(
-                Sourced::new(msg.span.source as usize, msg).into_diagnostic(title.into()),
-            )),
-        }
-    }
-
-    pub fn wrap(self, other: Self) -> Self {
-        let mut new = self.into_inner();
-        new.extend(other.into_inner());
-        Self {
-            inner: DiagInnerPtr::Many(new),
-        }
-    }
-
-    /// Panics if bundle is empty
+impl Diag {
     #[track_caller]
-    pub fn bundle(bundle: impl IntoIterator<Item = Self>) -> Self {
-        let mut iter = bundle.into_iter();
-        let Some(mut first) = iter.next() else {
-            panic!("bundle cannot be empty");
-        };
-
-        for diag in iter {
-            first = first.wrap(diag);
-        }
-
-        first
+    pub fn new(
+        level: Level,
+        source: Arc<Source>,
+        span: Span,
+        title: impl Into<Cow<'static, str>>,
+        msgs: Vec<Msg>,
+    ) -> Self {
+        Self::Single(RawDiag {
+            level,
+            source,
+            span,
+            title: title.into(),
+            msgs,
+            loc: Location::caller(),
+        })
     }
 
-    pub fn level(mut self, level: Level) -> Self {
-        match &mut self.inner {
-            DiagInnerPtr::One(diag) => {
-                diag.level = level;
-            }
-            DiagInnerPtr::Many(diags) => {
-                diags.last_mut().map(|diag| diag.level = level);
+    /// Panics when `bundle` is empty
+    #[track_caller]
+    pub fn bundle(bundle: impl IntoIterator<Item = Diag>) -> Self {
+        let mut buf = Vec::new();
+        for diag in bundle.into_iter() {
+            match diag {
+                Diag::Single(raw) => buf.push(raw),
+                Diag::Bundle(bundle) => buf.extend(bundle),
             }
         }
-        self
+        assert!(!buf.is_empty());
+        Self::Bundle(buf)
     }
 
+    /// Append `msg` to the most recent `RawDiag`.
     pub fn msg(mut self, msg: Msg) -> Self {
-        match &mut self.inner {
-            DiagInnerPtr::One(diag) => {
-                diag.msgs.push(msg);
-            }
-            DiagInnerPtr::Many(diags) => {
-                diags.last_mut().map(|diag| diag.msgs.push(msg));
-            }
+        match &mut self {
+            Self::Single(raw) => raw.msgs.push(msg),
+            // cannot have an empty bundle
+            Self::Bundle(bundle) => bundle.last_mut().unwrap().msgs.push(msg),
         }
+
         self
     }
 
-    pub fn loc(mut self, loc: &Location) -> Self {
-        match &mut self.inner {
-            DiagInnerPtr::One(diag) => {
-                diag.compiler_loc = loc.to_string();
+    /// Append `msgs` to the most recent `RawDiag`.
+    pub fn msgs(mut self, msgs: impl IntoIterator<Item = Msg>) -> Self {
+        match &mut self {
+            Self::Single(raw) => {
+                raw.msgs.extend(msgs);
             }
-            DiagInnerPtr::Many(diags) => {
-                diags
-                    .last_mut()
-                    .map(|diag| diag.compiler_loc = loc.to_string());
-            }
+            // cannot have an empty bundle
+            Self::Bundle(bundle) => bundle.last_mut().unwrap().msgs.extend(msgs),
         }
+
         self
     }
 
-    fn into_inner(self) -> Vec<DiagInner<'a>> {
-        match self.inner {
-            DiagInnerPtr::One(diag) => vec![*diag],
-            DiagInnerPtr::Many(diags) => diags,
+    /// Concat two sets of `RawDiag` together.
+    ///
+    /// Useful to `bundle` diagnostics together for simple `Result<T, Diag>` types.
+    pub fn join(self, other: Self) -> Self {
+        match self {
+            Self::Single(raw) => match other {
+                Self::Single(other_raw) => Self::Bundle(vec![raw, other_raw]),
+                Self::Bundle(mut bundle) => {
+                    bundle.push(raw);
+                    Self::Bundle(bundle)
+                }
+            },
+            Self::Bundle(mut bundle) => match other {
+                Self::Single(raw) => {
+                    bundle.push(raw);
+                    Self::Bundle(bundle)
+                }
+                Self::Bundle(other_bundle) => {
+                    bundle.extend(other_bundle);
+                    Self::Bundle(bundle)
+                }
+            },
+        }
+    }
+
+    /// Write diagnostics in `self` to stdout.
+    #[track_caller]
+    pub fn report(self) {
+        match self {
+            Self::Single(raw) => raw.report(),
+            Self::Bundle(bundle) => bundle.into_iter().for_each(RawDiag::report),
         }
     }
 }
 
+/// Generic message associated with a [`RawDiag`].
+///
+/// Use [`Diag::msg`] or [`Diag::msgs`] to associate a message or collection of messages with a [`Diag`].
 #[derive(Debug)]
-pub struct DiagInner<'a> {
-    title: String,
-    source: usize,
-    level: Level,
-    msgs: Vec<Msg>,
-    compiler_loc: String,
-    reported: bool,
-    _phantom: PhantomData<&'a str>,
-}
-
-impl Drop for DiagInner<'_> {
-    fn drop(&mut self) {
-        if !self.reported {
-            //panic!("unreported error: {:#?}", self);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct Msg {
-    pub level: Level,
-    pub span: Span,
-    pub label: String,
+    level: Level,
+    // TODO: this is dangerous, it may have a different source than the diag
+    span: Span,
+    msg: Cow<'static, str>,
 }
 
+#[allow(unused)]
 impl Msg {
-    pub fn new(level: Level, span: Span, label: impl Into<String>) -> Self {
+    pub fn new(level: Level, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
         Self {
-            label: label.into(),
             level,
             span,
+            msg: msg.into(),
         }
     }
 
-    pub fn empty() -> Self {
-        Self::new(Level::Error, Span::empty(), "")
+    pub fn spanned(level: Level, span: Span) -> Self {
+        Self::new(level, span, "")
     }
 
-    pub fn error(span: Span, label: impl Into<String>) -> Self {
-        Self::new(Level::Error, span, label)
+    pub fn error(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(Level::Error, span, msg)
     }
 
-    pub fn warn(span: Span, label: impl Into<String>) -> Self {
-        Self::new(Level::Warning, span, label)
+    pub fn warning(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(Level::Warning, span, msg)
     }
 
-    pub fn warn_span(span: Span) -> Self {
-        Self::new(Level::Warning, span, "")
+    pub fn info(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(Level::Info, span, msg)
+    }
+
+    pub fn note(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(Level::Note, span, msg)
+    }
+
+    pub fn help(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(Level::Help, span, msg)
     }
 
     pub fn error_span(span: Span) -> Self {
-        Self::new(Level::Error, span, "")
+        Self::spanned(Level::Error, span)
     }
 
-    pub fn note(span: Span, label: impl Into<String>) -> Self {
-        Self::new(Level::Note, span, label)
-    }
-
-    pub fn note_span(span: Span) -> Self {
-        Self::new(Level::Note, span, "")
-    }
-
-    pub fn info(span: Span, label: impl Into<String>) -> Self {
-        Self::new(Level::Info, span, label)
+    pub fn warning_span(span: Span) -> Self {
+        Self::spanned(Level::Warning, span)
     }
 
     pub fn info_span(span: Span) -> Self {
-        Self::new(Level::Info, span, "")
+        Self::spanned(Level::Info, span)
     }
 
-    pub fn help(span: Span, label: impl Into<String>) -> Self {
-        Self::new(Level::Help, span, label)
+    pub fn note_span(span: Span) -> Self {
+        Self::spanned(Level::Note, span)
     }
 
     pub fn help_span(span: Span) -> Self {
-        Self::new(Level::Help, span, "")
+        Self::spanned(Level::Help, span)
     }
 }
 
-pub trait Diagnostic<'a> {
-    fn into_diagnostic(self, title: String) -> DiagInner<'a>;
-}
-
-pub struct Label<'a> {
-    label: Cow<'a, str>,
+#[derive(Debug)]
+pub struct RawDiag {
     level: Level,
-}
-
-impl<'a> Label<'a> {
-    pub fn new(label: &'a str, level: Level) -> Self {
-        Self {
-            label: Cow::Borrowed(label),
-            level,
-        }
-    }
-
-    pub fn new_owned(label: String, level: Level) -> Self {
-        Self {
-            label: Cow::Owned(label),
-            level,
-        }
-    }
-
-    pub fn error(label: impl Into<Cow<'a, str>>) -> Self {
-        Self {
-            label: label.into(),
-            level: Level::Error,
-        }
-    }
-
-    pub fn note(label: impl Into<Cow<'a, str>>) -> Self {
-        Self {
-            label: label.into(),
-            level: Level::Note,
-        }
-    }
-}
-
-pub struct Spanned<T> {
+    source: Arc<Source>,
     span: Span,
-    inner: T,
+    title: Cow<'static, str>,
+    msgs: Vec<Msg>,
+    loc: &'static Location<'static>,
 }
 
-impl<T> Spanned<T> {
-    pub fn new(span: Span, inner: T) -> Self {
-        Self { span, inner }
-    }
-}
+impl RawDiag {
+    #[track_caller]
+    pub fn report(mut self) {
+        assert!(
+            self.msgs
+                .iter()
+                .all(|msg| msg.span.source == self.source.id as u32),
+            "source: {}\n{:#?}",
+            self.source.id,
+            self.msgs
+        );
 
-pub struct Sourced<T> {
-    source: usize,
-    inner: T,
-}
-
-impl<T> Sourced<T> {
-    pub fn new(source: usize, inner: T) -> Self {
-        Self { source, inner }
-    }
-}
-
-impl<'a> Diagnostic<'a> for Sourced<Spanned<Label<'a>>> {
-    fn into_diagnostic(self, title: String) -> DiagInner<'a> {
-        DiagInner {
-            title,
-            source: self.source,
-            level: Level::Error,
-            reported: false,
-            compiler_loc: String::new(),
-
-            msgs: vec![Msg::new(
-                self.inner.inner.level,
-                self.inner.span,
-                self.inner.inner.label.to_string(),
-            )],
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<'a> Diagnostic<'a> for Sourced<Msg> {
-    fn into_diagnostic(self, title: String) -> DiagInner<'a> {
-        DiagInner {
-            title,
-            source: self.source,
-            level: Level::Error,
-            msgs: vec![self.inner],
-            compiler_loc: String::new(),
-            reported: false,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<'a> Diagnostic<'a> for Sourced<Level> {
-    fn into_diagnostic(self, title: String) -> DiagInner<'a> {
-        DiagInner {
-            title,
-            source: self.source,
-            level: self.inner,
-            msgs: Vec::new(),
-            compiler_loc: String::new(),
-            reported: false,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-pub fn report(source_map: &SourceMap, diag: Diag) {
-    for mut diag in diag.into_inner() {
-        let source = source_map.source(diag.source);
-        let origin = source.origin.to_string_lossy();
-        let message = diag.level.title(&diag.title).snippet(
-            Snippet::source(&source.source)
+        let origin = self.source.origin.to_string_lossy();
+        self.msgs.push(Msg::error_span(self.span));
+        let message = self.level.title(&self.title).snippet(
+            Snippet::source(&self.source.source)
                 .origin(&origin)
                 .fold(true)
                 .annotations(
-                    diag.msgs
+                    self.msgs
                         .iter()
-                        .map(|msg| msg.level.span(msg.span.range()).label(&msg.label)),
+                        .map(|msg| msg.level.span(msg.span.range()).label(&msg.msg)),
                 ),
         );
 
         let renderer = Renderer::styled();
         println!("{}", renderer.render(message));
-        //println!("generated: {}", diag.compiler_loc);
-        diag.reported = true;
+        println!("generated: {}", self.loc);
     }
 }

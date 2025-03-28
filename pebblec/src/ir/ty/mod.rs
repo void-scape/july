@@ -1,46 +1,83 @@
-use self::store::TyId;
+use self::store::TyStore;
+
 use super::ctx::Ctx;
 use super::ident::{Ident, IdentId};
 use super::mem::Layout;
 use super::strukt::StructId;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 pub mod infer;
 pub mod store;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Ty<'a> {
+pub struct Ty(pub &'static TyKind);
+
+#[allow(unused)]
+impl Ty {
+    pub const UNIT: Self = Ty(&TyKind::Unit);
+
+    pub const USIZE: Self = Ty(&TyKind::Int(IntTy::USIZE));
+    pub const ISIZE: Self = Ty(&TyKind::Int(IntTy::ISIZE));
+    pub const I32: Self = Ty(&TyKind::Int(IntTy::new_32(Sign::I)));
+
+    pub const FSIZE: Self = Ty(&TyKind::Float(FloatTy::SIZE));
+    pub const F32: Self = Ty(&TyKind::Float(FloatTy::F32));
+    pub const F64: Self = Ty(&TyKind::Float(FloatTy::F64));
+
+    pub const BOOL: Self = Ty(&TyKind::Bool);
+
+    pub const PTR: Self = Ty(&TyKind::Int(IntTy::PTR));
+    pub const ANON_PTR: Self = Self::USIZE;
+
+    pub const STR_LIT: Self = Ty(&TyKind::Ref(&TyKind::Str));
+}
+
+impl Deref for Ty {
+    type Target = TyKind;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TyKind {
     Int(IntTy),
     Float(FloatTy),
     /// TODO: store struct in Ty itself?
     Struct(StructId),
-    Ref(&'a Ty<'a>),
-    Array(usize, &'a Ty<'a>),
-    Slice(&'a Ty<'a>),
+    Ref(&'static TyKind),
+    Array(usize, &'static TyKind),
+    Slice(&'static TyKind),
     Bool,
     Str,
     Unit,
 }
 
-impl<'a> Ty<'a> {
-    pub const PTR_SIZE: usize = 8;
-    pub const FAT_PTR_SIZE: usize = 16;
+impl TyKind {
+    pub const PTR_SIZE: usize = IntTy::PTR.size();
+    pub const FAT_PTR_SIZE: usize = 2 * IntTy::PTR.size();
 
-    pub fn size(&self, ctx: &Ctx) -> usize {
+    pub fn size(&self, tys: &TyStore) -> usize {
         match self {
             Self::Unit => 0,
             Self::Bool => 1,
             Self::Ref(inner) => match inner {
-                Ty::Str | Ty::Slice(_) => Self::FAT_PTR_SIZE,
+                Self::Str | Self::Slice(_) => Self::FAT_PTR_SIZE,
                 _ => Self::PTR_SIZE,
             },
             Self::Int(int) => int.size(),
             Self::Float(float) => float.size(),
             Self::Str => panic!("size of str is unknown"),
-            Self::Struct(id) => ctx.tys.struct_layout(*id).size,
-            Self::Array(len, inner) => inner.size(ctx) * len,
+            Self::Struct(id) => tys.struct_layout(*id).size,
+            Self::Array(len, inner) => inner.size(tys) * len,
             Self::Slice(_) => todo!("size of slice is unknown"),
         }
+    }
+
+    pub fn is_unit(&self) -> bool {
+        matches!(self, Self::Unit)
     }
 
     pub fn is_int(&self) -> bool {
@@ -52,7 +89,7 @@ impl<'a> Ty<'a> {
     }
 
     pub fn is_ref(&self) -> bool {
-        matches!(self, Self::Ref(ty) if **ty != Ty::Str)
+        matches!(self, Self::Ref(ty) if **ty != Self::Str)
     }
 
     pub fn is_arr(&self) -> bool {
@@ -61,10 +98,6 @@ impl<'a> Ty<'a> {
 
     pub fn is_slice(&self) -> bool {
         matches!(self, Self::Slice(_))
-    }
-
-    pub fn is_ref_slice(&self) -> bool {
-        matches!(self, Self::Ref(Self::Slice(_)))
     }
 
     pub fn is_castable(&self) -> bool {
@@ -76,22 +109,6 @@ impl<'a> Ty<'a> {
             | Self::Slice(_)
             | Self::Unit => false,
             Self::Int(_) | Self::Float(_) | Self::Bool | Self::Ref(_) => true,
-        }
-    }
-
-    #[track_caller]
-    pub fn layout(&self, ctx: &Ctx) -> Layout {
-        match self {
-            Self::Unit => Layout::new(0, 1),
-            Self::Bool => Layout::splat(1),
-            Self::Int(int) => int.layout(),
-            Self::Float(float) => float.layout(),
-            Self::Ref(Self::Str) => Layout::FAT_PTR,
-            Self::Ref(Self::Slice(_)) => Layout::FAT_PTR,
-            Self::Str | Self::Ref(_) => Layout::PTR,
-            Self::Array(len, inner) => inner.layout(ctx).to_array(*len),
-            Self::Slice(_) => todo!("unsized"),
-            Self::Struct(id) => ctx.tys.struct_layout(*id),
         }
     }
 
@@ -131,27 +148,34 @@ impl<'a> Ty<'a> {
         }
     }
 
-    pub fn peel_refs(&self) -> (&Ty<'a>, usize) {
-        match self {
-            Self::Ref(inner) => {
-                let (ty, level) = inner.peel_refs();
-                (ty, level + 1)
-            }
-            inner => (inner, 0),
-        }
-    }
+    //pub fn peel_refs(&'static self) -> (Ty, usize) {
+    //    match self {
+    //        Self::Ref(inner) => {
+    //            let (ty, level) = inner.peel_refs();
+    //            (ty, level + 1)
+    //        }
+    //        inner => (Ty(inner), 0),
+    //    }
+    //}
+    //
+    //pub fn peel_one_ref(&'static self) -> Ty {
+    //    match self {
+    //        Self::Ref(inner) => Ty(*inner),
+    //        inner => Ty(inner),
+    //    }
+    //}
+    //
+    //pub fn ref_inner_ty(&'static self) -> Option<Ty> {
+    //    match self {
+    //        Self::Ref(inner) => Some(Ty(*inner)),
+    //        _ => None,
+    //    }
+    //}
 
-    pub fn peel_one_ref(&self) -> &Ty {
-        match self {
-            Self::Ref(inner) => inner,
-            inner => inner,
-        }
-    }
-
-    pub fn ref_inner_ty(&self, ctx: &Ctx<'a>) -> Option<Result<TyId, ()>> {
-        match self {
-            Self::Ref(inner) => Some(ctx.tys.get_ty_id(inner).ok_or(())),
-            _ => None,
+    pub fn equiv(self, other: Self) -> bool {
+        match (self, other) {
+            (TyKind::Ref(TyKind::Array(_, lhs)), TyKind::Ref(TyKind::Slice(rhs))) => lhs == rhs,
+            _ => self == other,
         }
     }
 }
@@ -258,6 +282,8 @@ pub enum FloatTy {
 }
 
 impl FloatTy {
+    pub const SIZE: Self = Self::F64;
+
     pub const fn size(&self) -> usize {
         match self {
             Self::F32 => 4,
@@ -289,11 +315,11 @@ pub struct TyVar(usize);
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TypeKey {
-    key: HashMap<IdentId, Vec<(Ident, TyId)>>,
+    key: HashMap<IdentId, Vec<(Ident, Ty)>>,
 }
 
 impl TypeKey {
-    pub fn insert(&mut self, ident: Ident, ty: TyId) {
+    pub fn insert(&mut self, ident: Ident, ty: Ty) {
         let entry = self.key.entry(ident.id).or_default();
         let elem = (ident, ty);
         if entry.contains(&elem) {
@@ -309,7 +335,7 @@ impl TypeKey {
         }
     }
 
-    pub fn ident_set(&self, ident: IdentId) -> &[(Ident, TyId)] {
+    pub fn ident_set(&self, ident: IdentId) -> &[(Ident, Ty)] {
         self.key
             .get(&ident)
             .map(Vec::as_slice)

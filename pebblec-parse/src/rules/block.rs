@@ -13,10 +13,10 @@ pub struct Block {
 #[derive(Default)]
 pub struct BlockRules;
 
-impl<'a, 's> ParserRule<'a, 's> for BlockRules {
+impl<'a, 's> ParserRule<'a> for BlockRules {
     type Output = Block;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<OpenCurly>() {
             return Err(stream.recover("expected `{`"));
         }
@@ -40,10 +40,10 @@ impl<'a, 's> ParserRule<'a, 's> for BlockRules {
 #[derive(Debug, Default)]
 pub struct StmtSeqRules;
 
-impl<'a, 's> ParserRule<'a, 's> for StmtSeqRules {
+impl<'a, 's> ParserRule<'a> for StmtSeqRules {
     type Output = Vec<Stmt>;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let mut instrs = Vec::new();
 
         while !stream.match_peek::<CloseCurly>() {

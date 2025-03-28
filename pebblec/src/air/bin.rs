@@ -2,19 +2,17 @@ use super::ctx::AirCtx;
 use super::{OffsetVar, eval_expr};
 use crate::air::{Air, Bits, ConstData, Reg, extract_var_from_expr};
 use crate::ir::lit::LitKind;
-use crate::ir::ty::store::TyId;
-use crate::ir::ty::{FloatTy, IntTy, Sign, Ty, Width};
+use crate::ir::ty::{Sign, Ty, TyKind, Width};
 use crate::ir::*;
 
 /// Evaluate `bin` and assign to `dst`.
 ///
 /// Panics
 ///     `bin` does not evaluate to `ty`
-pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'a BinOp) {
+pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
     let out = ty;
-    let ty = ctx.tys.ty(ty);
-    match ty {
-        Ty::Int(ty) => {
+    match ty.0 {
+        TyKind::Int(ty) => {
             let width = ty.width();
             let sign = ty.sign();
             match bin.kind {
@@ -41,7 +39,7 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                 }
             }
         }
-        Ty::Float(ty) => {
+        TyKind::Float(ty) => {
             let width = ty.width();
             let sign = Sign::I;
             match bin.kind {
@@ -72,7 +70,7 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                 | BinOpKind::Bor => panic!("invalid op"),
             }
         }
-        Ty::Bool => {
+        TyKind::Bool => {
             let ty = match (bin.lhs.infer(ctx), bin.rhs.infer(ctx)) {
                 (InferTy::Ty(lhs), InferTy::Ty(rhs)) => {
                     assert_eq!(lhs, rhs);
@@ -81,23 +79,23 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
                 (InferTy::Ty(ty), _) | (_, InferTy::Ty(ty)) => ty,
                 (InferTy::Int, other) => {
                     assert_eq!(InferTy::Int, other);
-                    ctx.tys.builtin(Ty::Int(IntTy::new_64(Sign::I)))
+                    Ty::ISIZE
                 }
                 (InferTy::Float, other) => {
                     assert_eq!(InferTy::Float, other);
-                    ctx.tys.builtin(Ty::Float(FloatTy::F64))
+                    Ty::FSIZE
                 }
             };
 
             let lhs = prepare_expr(ctx, ty, bin.lhs);
             let rhs = prepare_expr(ctx, ty, bin.rhs);
 
-            let (width, sign) = match ctx.tys.ty(ty) {
-                Ty::Int(int) => (int.width(), int.sign()),
-                Ty::Float(float) => (float.width(), Sign::I),
-                Ty::Bool => (Width::BOOL, Sign::U),
-                Ty::Ref(&Ty::Str) => unreachable!(),
-                Ty::Ref(_) => {
+            let (width, sign) = match ty.0 {
+                TyKind::Int(int) => (int.width(), int.sign()),
+                TyKind::Float(float) => (float.width(), Sign::I),
+                TyKind::Bool => (Width::BOOL, Sign::U),
+                TyKind::Ref(TyKind::Str) => unreachable!(),
+                TyKind::Ref(_) => {
                     // TODO: NULL
                     (Width::PTR, Sign::U)
                 }
@@ -144,40 +142,40 @@ pub fn assign_bin_op<'a>(ctx: &mut AirCtx<'a>, dst: OffsetVar, ty: TyId, bin: &'
 }
 
 /// Evaluate `bin` for its side effects then throw away.
-pub fn eval_bin_op<'a>(ctx: &mut AirCtx<'a>, bin: &'a BinOp) {
+pub fn eval_bin_op(ctx: &mut AirCtx, bin: &BinOp) {
     eval_expr(ctx, &bin.lhs);
     eval_expr(ctx, &bin.rhs);
 }
 
-pub fn aquire_accessor_field<'a>(ctx: &mut AirCtx<'a>, access: &'a Access) -> (OffsetVar, TyId) {
+pub fn aquire_accessor_field(ctx: &mut AirCtx, access: &Access) -> (OffsetVar, Ty) {
     let ty = access.lhs.infer_abs(ctx).unwrap();
     let var = extract_var_from_expr(ctx, ty, access.lhs);
 
-    let id = ctx.tys.ty(ty).expect_struct();
+    let id = ty.expect_struct();
     let mut strukt = ctx.tys.strukt(id);
 
     let mut offset = 0;
     for (i, acc) in access.accessors.iter().rev().enumerate() {
         let ty = strukt.field_ty(acc.id);
         if i == access.accessors.len() - 1 {
-            let field_offset = strukt.field_offset(ctx, acc.id);
+            let field_offset = strukt.field_offset(&ctx.tys, acc.id);
             return (var.add((offset + field_offset) as usize), ty);
         }
 
-        match ctx.tys.ty(ty) {
-            Ty::Struct(id) => {
-                let field_offset = strukt.field_offset(ctx, acc.id);
+        match ty.0 {
+            TyKind::Struct(id) => {
+                let field_offset = strukt.field_offset(&ctx.tys, acc.id);
                 offset += field_offset;
-                strukt = ctx.tys.strukt(id);
+                strukt = ctx.tys.strukt(*id);
             }
-            Ty::Array(_, _)
-            | Ty::Slice(_)
-            | Ty::Ref(_)
-            | Ty::Str
-            | Ty::Int(_)
-            | Ty::Float(_)
-            | Ty::Bool
-            | Ty::Unit => {
+            TyKind::Array(_, _)
+            | TyKind::Slice(_)
+            | TyKind::Ref(_)
+            | TyKind::Str
+            | TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Bool
+            | TyKind::Unit => {
                 panic!("cannot access field on {ty:?}")
             }
         }
@@ -358,27 +356,21 @@ pub enum BinOpArg {
     Float(f64),
 }
 
-fn visit<'a>(
-    op: impl BinOpVisitWith,
-    ctx: &mut AirCtx<'a>,
-    ty: TyId,
-    dst: OffsetVar,
-    bin: &'a BinOp<'a>,
-) {
+fn visit(op: impl BinOpVisitWith, ctx: &mut AirCtx, ty: Ty, dst: OffsetVar, bin: &BinOp) {
     let lhs = prepare_expr(ctx, ty, bin.lhs);
     let rhs = prepare_expr(ctx, ty, bin.rhs);
     op.visit_with(ctx, dst, lhs, rhs);
 }
 
-fn prepare_expr<'a>(ctx: &mut AirCtx<'a>, ty: TyId, expr: &'a Expr) -> BinOpArg {
+fn prepare_expr(ctx: &mut AirCtx, ty: Ty, expr: &Expr) -> BinOpArg {
     match expr {
         Expr::Lit(lit) => match lit.kind {
             LitKind::Int(lit) => {
-                assert!(ctx.tys.ty(ty).is_int());
+                assert!(ty.is_int());
                 BinOpArg::Int(*lit)
             }
             LitKind::Float(float) => {
-                assert!(ctx.tys.ty(ty).is_float());
+                assert!(ty.is_float());
                 BinOpArg::Float(*float)
             }
         },
@@ -387,7 +379,7 @@ fn prepare_expr<'a>(ctx: &mut AirCtx<'a>, ty: TyId, expr: &'a Expr) -> BinOpArg 
 }
 
 pub trait BinOpVisitWith {
-    fn visit_with<'a>(&self, ctx: &mut AirCtx<'a>, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg);
+    fn visit_with(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg);
 }
 
 pub trait FloatAlgebra: AgnosticBinOpLeaves + AllFloatBinOpLeaves {}
@@ -397,22 +389,16 @@ macro_rules! impl_float_algebra {
     ($ty:ident) => {
         impl FloatAlgebra for $ty {}
         impl BinOpVisitWith for $ty {
-            fn visit_with<'a>(
-                &self,
-                ctx: &mut AirCtx<'a>,
-                dst: OffsetVar,
-                lhs: BinOpArg,
-                rhs: BinOpArg,
-            ) {
+            fn visit_with(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
                 visit_float(self, ctx, dst, rhs, lhs);
             }
         }
     };
 }
 
-fn visit_float<'a>(
+fn visit_float(
     op: &impl FloatAlgebra,
-    ctx: &mut AirCtx<'a>,
+    ctx: &mut AirCtx,
     dst: OffsetVar,
     lhs: BinOpArg,
     rhs: BinOpArg,
@@ -442,13 +428,7 @@ macro_rules! impl_int_algebra {
     ($ty:ident) => {
         impl IntAlgebra for $ty {}
         impl BinOpVisitWith for $ty {
-            fn visit_with<'a>(
-                &self,
-                ctx: &mut AirCtx<'a>,
-                dst: OffsetVar,
-                lhs: BinOpArg,
-                rhs: BinOpArg,
-            ) {
+            fn visit_with(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
                 visit_int(self, ctx, dst, rhs, lhs);
             }
         }
@@ -462,13 +442,7 @@ macro_rules! impl_cmp {
         impl FloatAlgebra for $ty {}
 
         impl BinOpVisitWith for $ty {
-            fn visit_with<'a>(
-                &self,
-                ctx: &mut AirCtx<'a>,
-                dst: OffsetVar,
-                lhs: BinOpArg,
-                rhs: BinOpArg,
-            ) {
+            fn visit_with(&self, ctx: &mut AirCtx, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
                 match (&lhs, &rhs) {
                     (BinOpArg::Float(_), _) | (_, BinOpArg::Float(_)) => {
                         visit_float(self, ctx, dst, rhs, lhs);
@@ -482,13 +456,7 @@ macro_rules! impl_cmp {
     };
 }
 
-fn visit_int<'a>(
-    op: &impl IntAlgebra,
-    ctx: &mut AirCtx<'a>,
-    dst: OffsetVar,
-    lhs: BinOpArg,
-    rhs: BinOpArg,
-) {
+fn visit_int(op: &impl IntAlgebra, ctx: &mut AirCtx, dst: OffsetVar, lhs: BinOpArg, rhs: BinOpArg) {
     match (rhs, lhs) {
         (BinOpArg::Var(var), BinOpArg::Int(lit)) => {
             op.visit_leaf(ctx, dst, var, lit);

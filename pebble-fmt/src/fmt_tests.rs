@@ -1,13 +1,6 @@
-use std::ffi::OsString;
-
 use super::*;
-use pebblec::air::ctx::AirCtx;
-use pebblec::air::{self, Air};
 use pebblec::comp::CompUnit;
-use pebblec::ir;
-use pebblec::ir::ctx::Ctx;
-use pebblec_parse::lex::Lexer;
-use pebblec_parse::lex::source::{Source, SourceMap};
+use pebblec::interp::InterpInstance;
 
 const INVADERS: &str = "res/invaders_unformatted.peb";
 const TESTS: &str = "res/tests_unformatted.peb";
@@ -38,53 +31,29 @@ fn codegen() {
 
 #[test]
 fn language_tests() {
-    assert_eq!(0, CompUnit::default().path(TESTS).compile(false));
     assert_eq!(
         0,
-        CompUnit::default()
-            .source(Source::from_string(
-                "tests",
-                fmt::fmt(TESTS).unwrap().unwrap()
-            ))
-            .compile(false)
+        InterpInstance::new(&CompUnit::default().panicking_compile(TESTS).unwrap()).run(false)
+    );
+    assert_eq!(
+        0,
+        InterpInstance::new(
+            &CompUnit::default()
+                .panicking_compile_string("fmt-tests", fmt::fmt(TESTS).unwrap().unwrap())
+                .unwrap()
+        )
+        .run(false)
     );
 }
 
 fn codegen_with(path: &str) {
-    let origin = OsString::from(&TESTS);
-    let mut first_source_map = SourceMap::from_paths([TESTS]).unwrap();
-    let mut first_items = CompUnit::parse(&origin, &mut first_source_map).unwrap();
-    let mut first_ctx = Ctx::new(first_source_map.clone());
-    let (first_key, first_const_eval_order) = ir::lower(&mut first_ctx, &mut first_items).unwrap();
-    let (first_air_funcs, first_consts) =
-        air::lower(&first_ctx, &first_key, first_const_eval_order);
+    let unfmt = CompUnit::default().panicking_compile(path).unwrap();
+    let fmt = CompUnit::default()
+        .panicking_compile_string("fmt-tests", fmt::fmt(path).unwrap().unwrap())
+        .unwrap();
 
-    let mut source_map =
-        SourceMap::from_strings([("fmt-tests", fmt::fmt(TESTS).unwrap().unwrap())]).unwrap();
-    let mut items = CompUnit::parse(&origin, &mut source_map).unwrap();
-    let mut ctx = Ctx::new(source_map);
-    let (key, const_eval_order) = ir::lower(&mut ctx, &mut items).unwrap();
-    let (air_funcs, consts) = air::lower(&ctx, &key, const_eval_order);
-
-    assert_eq!(first_air_funcs.len(), air_funcs.len());
-    for (first_func, func) in first_air_funcs.iter().zip(air_funcs.iter()) {
-        let first_instrs = first_func.instrs();
-        let instrs = func.instrs();
-
-        assert_eq!(first_instrs.len(), instrs.len());
-        for (first_instr, instr) in first_instrs.iter().zip(instrs.iter()) {
-            match (first_instr, instr) {
-                (Air::Call(first_sig, first_args), Air::Call(sig, args)) => {
-                    assert_eq!(
-                        first_ctx.expect_ident(first_sig.ident),
-                        ctx.expect_ident(sig.ident),
-                    );
-                    assert_eq!(first_args, args);
-                }
-                _ => assert_eq!(first_instr, instr),
-            }
-        }
-    }
-
-    assert_eq!(first_consts, consts);
+    // TyStore stores span information
+    assert_eq!(unfmt.extern_sigs, fmt.extern_sigs);
+    assert_eq!(unfmt.consts, fmt.consts);
+    assert_eq!(unfmt.funcs, fmt.funcs);
 }

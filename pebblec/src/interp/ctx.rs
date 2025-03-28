@@ -1,9 +1,8 @@
-use super::stack::Stack;
 use super::InstrResult;
+use super::stack::Stack;
 use crate::air::{Air, AirFunc, BlockId, Reg};
-use crate::ir::ctx::Ctx;
+use crate::ir::ty::store::TyStore;
 use crate::ir::ty::FloatTy;
-use std::ops::Deref;
 use std::slice;
 
 #[derive(Default)]
@@ -33,7 +32,7 @@ impl<'a> Frame<'a> {
 
 pub struct InterpCtx<'a> {
     pub stack: Stack,
-    pub ctx: &'a Ctx<'a>,
+    pub tys: &'a TyStore,
     frames: Vec<Frame<'a>>,
 
     func_block: Option<(&'a AirFunc<'a>, BlockId)>,
@@ -42,14 +41,6 @@ pub struct InterpCtx<'a> {
 
     pub a: BitsReg,
     pub b: BitsReg,
-}
-
-impl<'a> Deref for InterpCtx<'a> {
-    type Target = Ctx<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        self.ctx
-    }
 }
 
 macro_rules! debug_op {
@@ -79,9 +70,9 @@ macro_rules! debug_flop {
 }
 
 impl<'a> InterpCtx<'a> {
-    pub fn new(ctx: &'a Ctx<'a>) -> Self {
+    pub fn new(tys: &'a TyStore) -> Self {
         Self {
-            ctx,
+            tys,
             stack: Stack::default(),
             frames: Vec::new(),
             func_block: None,
@@ -146,7 +137,7 @@ impl<'a> InterpCtx<'a> {
             None => {
                 match self.func_block {
                     Some((f, _)) => {
-                        if self.expect_ident(f.func.sig.ident) == "main" {
+                        if f.sig.ident == "main" {
                             return InstrResult::Break;
                         }
                     }
@@ -180,9 +171,7 @@ impl<'a> InterpCtx<'a> {
             Some((f, block)) => {
                 println!(
                     "[\u{1b}[32m{}\u{1b}[39m:{:?}::D]\u{1b}[1m\u{1b}[35m {:?}\u{1b}[39m\u{1b}[22m",
-                    self.expect_ident(f.func.sig.ident),
-                    block,
-                    instr
+                    f.sig.ident, block, instr
                 );
             }
             None => {
@@ -297,22 +286,16 @@ impl<'a> InterpCtx<'a> {
                         Some((f, _)) => {
                             println!(
                                 " | proc {} -> proc {} @ instr #{}",
-                                self.expect_ident(f.func.sig.ident),
-                                self.expect_ident(func.func.sig.ident),
-                                instr
+                                f.sig.ident, func.sig.ident, instr
                             );
                         }
                         None => {
-                            println!(
-                                " | ??? -> proc {} @ instr #{}",
-                                self.expect_ident(func.func.sig.ident),
-                                instr
-                            );
+                            println!(" | ??? -> proc {} @ instr #{}", func.sig.ident, instr);
                         }
                     },
                     None => match self.func_block {
                         Some((f, _)) => {
-                            println!(" | proc {} -> ???", self.expect_ident(f.func.sig.ident),);
+                            println!(" | proc {} -> ???", f.sig.ident);
                         }
                         None => {
                             println!(" | ??? -> ???");
@@ -324,11 +307,11 @@ impl<'a> InterpCtx<'a> {
             Air::Call(sig, args) => {
                 println!(
                     " | call proc [{}({:?})]",
-                    self.expect_ident(sig.ident),
+                    sig.ident,
                     &args
                         .vars
                         .iter()
-                        .map(|(ty, var)| (self.ty_str(*ty), var))
+                        .map(|(ty, var)| (format!("{ty:?}"), var))
                         .collect::<Vec<_>>(),
                 );
             }

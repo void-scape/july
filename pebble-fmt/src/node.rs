@@ -199,9 +199,9 @@ pub fn check_whitespace<'a>(
 
     let mut slice = if let Some(prev_span) = buf.prev(token).map(|t| buf.span(t)) {
         let start = prev_span.end as usize;
-        &buf.source().source[start..end]
+        &buf.source_ref().source[start..end]
     } else {
-        &buf.source().source[..end]
+        &buf.source_ref().source[..end]
     };
 
     loop {
@@ -279,7 +279,7 @@ fn nodify_params<'a>(
 
 fn nodify_ty<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, ty: &PType) -> Node<'a> {
     match ty {
-        PType::Simple(t) => Node::Text(buf.as_str(*t)),
+        PType::Simple(_, t) => Node::Text(buf.as_str(*t)),
         PType::Ref { inner, .. } => {
             Node::group(arena, &[Node::Text("&"), nodify_ty(buf, arena, inner)])
         }
@@ -407,7 +407,7 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, expr: &Expr) -> 
                 Node::Text("return")
             }
         }
-        Expr::Assign(Assign { kind, lhs, rhs }) => Node::group(
+        Expr::Assign(Assign { kind, lhs, rhs, .. }) => Node::group(
             arena,
             &[
                 nodify_expr(buf, arena, lhs),
@@ -477,10 +477,10 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, expr: &Expr) -> 
             ],
         ),
         Expr::If {
-            span,
             condition,
             block,
             otherwise,
+            ..
         } => {
             if let Some(otherwise) = otherwise {
                 Node::group(
@@ -518,6 +518,7 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, expr: &Expr) -> 
                 Node::token(buf, iter),
                 Node::Text(" in "),
                 nodify_expr(buf, arena, iterable),
+                Node::space(),
                 nodify_block(buf, arena, block, BreakCond::Always),
             ],
         ),

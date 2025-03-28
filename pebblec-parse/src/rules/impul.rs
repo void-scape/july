@@ -16,10 +16,10 @@ pub struct Impl {
 #[derive(Debug, Default)]
 pub struct ImplRule;
 
-impl<'a, 's> ParserRule<'a, 's> for ImplRule {
+impl<'a, 's> ParserRule<'a> for ImplRule {
     type Output = Impl;
 
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if !stream.match_peek::<kind::Impl>() {
             return Err(PErr::Recover(stream.error("expected `impl`")));
         }

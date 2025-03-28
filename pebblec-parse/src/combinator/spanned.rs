@@ -6,14 +6,14 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Default)]
 pub struct Spanned<T>(T);
 
-impl<'a, 's, T> ParserRule<'a, 's> for Spanned<T>
+impl<'a, 's, T> ParserRule<'a> for Spanned<T>
 where
-    T: ParserRule<'a, 's>,
+    T: ParserRule<'a>,
 {
-    type Output = SpannedR<<T as ParserRule<'a, 's>>::Output>;
+    type Output = SpannedR<<T as ParserRule<'a>>::Output>;
 
     #[track_caller]
-    fn parse(stream: &mut TokenStream<'a, 's>) -> RResult<'s, Self::Output> {
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let Some(first) = stream.peek().map(|t| stream.span(t)) else {
             return Err(stream.recover("expected tokens"));
         };
