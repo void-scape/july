@@ -1,6 +1,6 @@
 # ![Pebble](logo.svg)
 
-[![ci](https://github.com/void-scape/pebble/workflows/ci.yml/badge.svg)](https://github.com/void-scape/pebble/actions/workflows/ci.yml)
+[![ci](https://github.com/void-scape/pebble/actions/workflows/ci.yml/badge.svg)](https://github.com/void-scape/pebble/actions/workflows/ci.yml)
 
 **Pebble** is a statically typed programming language with **arbitrary code execution at compile time**.
 
