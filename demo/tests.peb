@@ -1,6 +1,8 @@
 use core::basic;
 use core::intrinsics;
 
+use import;
+
 main: () -> i32 {
     test(double(2) == 4);
     test(double(4) == 8);
@@ -18,6 +20,7 @@ main: () -> i32 {
     test(arr_ref_deref());
     test(cast_clobber());
     test(bitwise_ops());
+    test(imported_func() == 69);
     
     0
 }

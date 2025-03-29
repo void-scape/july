@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 mod fmt;
-#[cfg(test)]
-mod fmt_tests;
 mod node;
+#[cfg(test)]
+mod tests;
 
 /// Pebble Formatter
 #[derive(Parser, Debug)]

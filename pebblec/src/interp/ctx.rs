@@ -1,8 +1,9 @@
 use super::InstrResult;
 use super::stack::Stack;
+use crate::air::data::Bss;
 use crate::air::{Air, AirFunc, BlockId, Reg};
-use crate::ir::ty::store::TyStore;
 use crate::ir::ty::FloatTy;
+use crate::ir::ty::store::TyStore;
 use std::slice;
 
 #[derive(Default)]
@@ -31,6 +32,8 @@ impl<'a> Frame<'a> {
 }
 
 pub struct InterpCtx<'a> {
+    // garauntee that bss will be in memory for raw pointer access
+    _bss: &'a Bss,
     pub stack: Stack,
     pub tys: &'a TyStore,
     frames: Vec<Frame<'a>>,
@@ -70,9 +73,10 @@ macro_rules! debug_flop {
 }
 
 impl<'a> InterpCtx<'a> {
-    pub fn new(tys: &'a TyStore) -> Self {
+    pub fn new(tys: &'a TyStore, bss: &'a Bss) -> Self {
         Self {
             tys,
+            _bss: bss,
             stack: Stack::default(),
             frames: Vec::new(),
             func_block: None,

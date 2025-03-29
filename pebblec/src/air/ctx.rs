@@ -97,8 +97,8 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
         }
     }
 
-    pub fn into_inner(self) -> BlobArena {
-        self.storage
+    pub fn into_inner(self) -> (BlobArena, Bss) {
+        (self.storage, self.bss)
     }
 
     #[track_caller]

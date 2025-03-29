@@ -488,6 +488,7 @@ fn konst<'a>(ctx: &mut Ctx<'a>, konst: &rules::Const) -> Result<Const<'a>, Diag>
     })
 }
 
+#[allow(unused)]
 fn enom<'a>(ctx: &mut Ctx<'a>, enom: &rules::Enum) -> Result<Enum, Diag> {
     let mut variant_names = Vec::with_capacity(enom.variants.len());
 
@@ -515,6 +516,7 @@ fn enom<'a>(ctx: &mut Ctx<'a>, enom: &rules::Enum) -> Result<Enum, Diag> {
     })
 }
 
+#[allow(unused)]
 fn variant<'a>(ctx: &mut Ctx<'a>, variant: &rules::Variant) -> Variant {
     Variant {
         span: variant.span,
@@ -1369,12 +1371,13 @@ pub struct MethodCall<'a> {
     pub args: &'a [Expr<'a>],
 }
 
+#[allow(unused)]
 fn method_call<'a>(
-    _ctx: &mut Ctx<'a>,
-    _span: Span,
-    _lhs: &rules::Expr,
-    _name: TokenId,
-    _call_args: &[rules::Expr],
+    ctx: &mut Ctx<'a>,
+    span: Span,
+    lhs: &rules::Expr,
+    name: TokenId,
+    call_args: &[rules::Expr],
 ) -> Result<MethodCall<'a>, Diag> {
     todo!()
     //let name = ctx.store_ident(name);

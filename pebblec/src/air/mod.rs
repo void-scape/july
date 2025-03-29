@@ -16,9 +16,11 @@ use pebblec_parse::{AssignKind, UOpKind};
 use std::collections::HashMap;
 use std::ops::Range;
 
+use self::data::Bss;
+
 mod bin;
 pub mod ctx;
-mod data;
+pub mod data;
 
 /// Analyzed Intermediate Representation.
 ///
@@ -620,6 +622,7 @@ pub fn lower_const<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, konst: &Const) -> Vec<A
 
 #[derive(Debug)]
 pub struct ByteCode<'a> {
+    pub bss: Bss,
     pub tys: TyStore,
     pub extern_sigs: HashMap<&'a str, &'a AirSig<'a>>,
     pub funcs: Vec<AirFunc<'a>>,
@@ -650,9 +653,10 @@ pub fn lower<'a, 'ctx>(mut ir: Ir<'ctx>) -> ByteCode<'a> {
         })
         .collect();
     let tys = std::mem::take(&mut air_ctx.tys);
-    let storage = air_ctx.into_inner();
+    let (storage, bss) = air_ctx.into_inner();
 
     ByteCode {
+        bss,
         tys,
         extern_sigs,
         funcs,
@@ -672,6 +676,9 @@ pub fn lower_func<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> Air
 
         if func.sig.ty.is_unit() {
             air_block(ctx, &func.block);
+            if ctx.expect_ident(func.sig.ident) == "main" {
+                ctx.ins(Air::MovIConst(Reg::A, ConstData::Bits(Bits::from_u64(0))));
+            }
             ctx.ins(Air::Ret);
         } else {
             let dst = OffsetVar::zero(ctx.anon_var(func.sig.ty));

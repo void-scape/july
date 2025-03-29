@@ -66,14 +66,14 @@ fn entry(ctx: &mut SemCtx) -> Result<(), Diag> {
         .find(|f| ctx.expect_ident(f.sig.ident) == "main")
     {
         if func.sig.params.len() > 0 {
-            Err(ctx.report_error(func.sig.span, "`main` cannot have any parameters"))
-        } else if func.sig.ty != Ty::I32 {
-            Err(ctx.report_error(func.sig.span, "`main` must return `i32`"))
+            Err(ctx.report_error(func.sig.span, "`main` cannot have any parameters (sorry)"))
+        } else if func.sig.ty != Ty::I32 && !func.sig.ty.is_unit() {
+            Err(ctx.report_error(func.sig.span, "`main` must return `i32` or `()`"))
         } else {
             Ok(())
         }
     } else {
-        let help = "consider adding `main: () -> i32 { 0 }`";
+        let help = "consider adding `main: () {}`";
         let error = "could not find entry point `main`";
 
         let buf = ctx.source_map.buffers().next().unwrap();

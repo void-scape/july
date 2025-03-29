@@ -8,11 +8,15 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub log: bool,
+    pub no_capture: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { log: false }
+        Self {
+            log: false,
+            no_capture: false,
+        }
     }
 }
 
@@ -21,17 +25,22 @@ impl Config {
         self.log = log;
         self
     }
+
+    pub fn no_capture(mut self, no_capture: bool) -> Self {
+        self.no_capture = no_capture;
+        self
+    }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct CompUnit {
-    _config: Config,
+    config: Config,
 }
 
 impl CompUnit {
     pub fn new(config: impl Into<Config>) -> Self {
         Self {
-            _config: config.into(),
+            config: config.into(),
         }
     }
 
@@ -39,8 +48,9 @@ impl CompUnit {
         &mut self,
         path: P,
     ) -> Result<ByteCode<'a>, CompErr> {
+        let capture = !self.config.no_capture;
         let mut unit = AssertUnwindSafe(self);
-        ice::reported_panic(move || unit.panicking_compile(path)).ok_or(CompErr::Panic)?
+        ice::reported_panic(capture, move || unit.panicking_compile(path)).ok_or(CompErr::Panic)?
     }
 
     pub fn compile_string<'a, Origin: AsRef<OsStr> + UnwindSafe>(
@@ -48,8 +58,9 @@ impl CompUnit {
         origin: Origin,
         src: String,
     ) -> Result<ByteCode<'a>, CompErr> {
+        let capture = !self.config.no_capture;
         let mut unit = AssertUnwindSafe(self);
-        ice::reported_panic(move || unit.panicking_compile_string(origin, src))
+        ice::reported_panic(capture, move || unit.panicking_compile_string(origin, src))
             .ok_or(CompErr::Panic)?
     }
 
@@ -130,7 +141,7 @@ impl CompUnit {
     }
 
     fn report_time(&self, title: &'static str, time: f32) {
-        println!("{:>5} ... {:.4}s", title, time);
+        println!("  {:.4}s ... {}", time, title);
     }
 }
 

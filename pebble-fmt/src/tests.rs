@@ -1,5 +1,5 @@
 use super::*;
-use pebblec::comp::CompUnit;
+use pebblec::comp::{CompUnit, Config};
 use pebblec::interp::InterpInstance;
 
 const INVADERS: &str = "res/invaders_unformatted.peb";
@@ -33,13 +33,18 @@ fn codegen() {
 fn language_tests() {
     assert_eq!(
         0,
-        InterpInstance::new(&CompUnit::default().panicking_compile(TESTS).unwrap()).run(false)
+        InterpInstance::new(
+            &CompUnit::new(Config::default().no_capture(true))
+                .compile(TESTS)
+                .unwrap()
+        )
+        .run(false)
     );
     assert_eq!(
         0,
         InterpInstance::new(
-            &CompUnit::default()
-                .panicking_compile_string("fmt-tests", fmt::fmt(TESTS).unwrap().unwrap())
+            &CompUnit::new(Config::default().no_capture(true))
+                .compile_string("fmt-tests", fmt::fmt(TESTS).unwrap().unwrap())
                 .unwrap()
         )
         .run(false)
@@ -47,9 +52,11 @@ fn language_tests() {
 }
 
 fn codegen_with(path: &str) {
-    let unfmt = CompUnit::default().panicking_compile(path).unwrap();
-    let fmt = CompUnit::default()
-        .panicking_compile_string("fmt-tests", fmt::fmt(path).unwrap().unwrap())
+    let unfmt = CompUnit::new(Config::default().no_capture(true))
+        .compile(path)
+        .unwrap();
+    let fmt = CompUnit::new(Config::default().no_capture(true))
+        .compile_string("fmt-tests", fmt::fmt(path).unwrap().unwrap())
         .unwrap();
 
     // TyStore stores span information

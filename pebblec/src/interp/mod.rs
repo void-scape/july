@@ -59,7 +59,7 @@ fn entry(
     libs: &HashMap<&str, libloading::Library>,
     log: bool,
 ) -> i32 {
-    let mut ctx = InterpCtx::new(&bytecode.tys);
+    let mut ctx = InterpCtx::new(&bytecode.tys, &bytecode.bss);
     ctx.consts(&bytecode.consts);
     loop {
         match execute(&mut ctx, &bytecode.funcs, libs, log) {
@@ -257,7 +257,25 @@ fn execute<'a>(
                                                 TyKind::Bool => {
                                                     print!("{}", ctx.stack.read_var::<u8>(var) == 1)
                                                 }
-                                                TyKind::Ref(TyKind::Str) => todo!(),
+                                                TyKind::Ref(TyKind::Str) => {
+                                                    let len = ctx
+                                                        .stack
+                                                        .read_some_bits(var, Width::SIZE)
+                                                        .to_u64();
+                                                    let ptr = ctx
+                                                        .stack
+                                                        .read_some_bits(
+                                                            var.add(Width::SIZE),
+                                                            Width::SIZE,
+                                                        )
+                                                        .to_u64();
+                                                    print!("{}", unsafe {
+                                                        str::from_raw_parts(
+                                                            ptr as *const u8,
+                                                            len as usize,
+                                                        )
+                                                    })
+                                                }
                                                 TyKind::Ref(_) => {
                                                     print!("{:#x}", ctx.stack.read_var::<u64>(var))
                                                 }

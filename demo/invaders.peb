@@ -1,8 +1,6 @@
 use core::basic;
 use core::intrinsics;
 
-use import;
-
 #[link("demo/SDL3")]
 extern("C") {
     SDL_Init: (init_code: u32) -> bool;
@@ -159,8 +157,6 @@ GameState: struct {
 }
 
 main: () -> i32 {
-    printf("imported: %\n", imported_func());
-    
     if !SDL_Init(SDL_INIT_VIDEO) {
         report_error("failed to init SDL\n");
         return 1;
