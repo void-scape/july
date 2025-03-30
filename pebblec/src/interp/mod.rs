@@ -191,7 +191,7 @@ fn execute<'a>(
                         .unwrap_or_else(|| panic!("invalid func"));
                     ctx.start_func(func);
 
-                    if sig.ident == "printf" {
+                    if sig.ident == "print" || sig.ident == "println" {
                         let (ty, fmt) = args.vars.first().unwrap();
                         assert_eq!(*ty, Ty::STR_LIT);
                         let fmt = OffsetVar::zero(*fmt);
@@ -279,10 +279,10 @@ fn execute<'a>(
                                                 TyKind::Ref(_) => {
                                                     print!("{:#x}", ctx.stack.read_var::<u64>(var))
                                                 }
-                                                ty => unimplemented!("printf arg: {ty:?}"),
+                                                ty => unimplemented!("print arg: {ty:?}"),
                                             }
                                         }
-                                        None => panic!("expected more args in printf"),
+                                        None => panic!("expected more args in print"),
                                     }
                                 }
                             }
@@ -295,6 +295,9 @@ fn execute<'a>(
                         }
 
                         print!("{}", buf);
+                        if sig.ident == "println" {
+                            println!();
+                        }
                         buf.clear();
                     }
 

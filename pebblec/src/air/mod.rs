@@ -694,7 +694,8 @@ pub fn lower_intrinsic<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -
         init_params(ctx, func);
         match ctx.expect_ident(func.sig.ident) {
             "exit" => exit(ctx, func),
-            "printf" => printf(ctx, func),
+            "print" => print(ctx, func),
+            "println" => println(ctx, func),
             "cs" => c_str(ctx, func),
             "print_cs" => print_c_str(ctx, func),
             "sqrt_f32" => sqrt_f32(ctx, func),
@@ -746,7 +747,14 @@ pub fn print_c_str<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> Ai
     ctx.finish_func()
 }
 
-pub fn printf<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
+pub fn print<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
+    assert_eq!(func.sig.params.len(), 1);
+    ctx.start_func(func);
+    ctx.ins_set([Air::Ret]);
+    ctx.finish_func()
+}
+
+pub fn println<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
     assert_eq!(func.sig.params.len(), 1);
     ctx.start_func(func);
     ctx.ins_set([Air::Ret]);
@@ -1658,8 +1666,9 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
 }
 
 fn generate_args(ctx: &mut AirCtx, call: &Call) -> Args {
-    if ctx.expect_ident(call.sig.ident) == "printf" {
-        return printf_generate_args(ctx, call);
+    let ident = ctx.expect_ident(call.sig.ident);
+    if ident == "print" || ident == "println" {
+        return print_generate_args(ctx, call);
     }
 
     assert_eq!(call.args.len(), call.sig.params.len());
@@ -1687,7 +1696,7 @@ fn generate_args(ctx: &mut AirCtx, call: &Call) -> Args {
     args
 }
 
-fn printf_generate_args(ctx: &mut AirCtx, call: &Call) -> Args {
+fn print_generate_args(ctx: &mut AirCtx, call: &Call) -> Args {
     assert!(!call.args.is_empty());
 
     let mut args = Args {

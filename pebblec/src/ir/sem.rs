@@ -84,7 +84,9 @@ fn entry(ctx: &mut SemCtx) -> Result<(), Diag> {
             ))
         } else {
             let span = ctx.span(buf.last().unwrap());
-            Err(ctx.report_error(span, error).msg(Msg::help(span, help)))
+            Err(ctx
+                .report_error(span, error)
+                .msg(Msg::help(&ctx.source_map, span, help)))
         }
     }
 }
@@ -96,7 +98,11 @@ fn end_is_return(ctx: &SemCtx, func: &Func) -> Result<(), Diag> {
                 func.block.end.as_ref().unwrap().span(),
                 "invalid return type: expected `()`",
             )
-            .msg(Msg::help(func.sig.span, "function has no return type")))
+            .msg(Msg::help(
+                &ctx.source_map,
+                func.sig.span,
+                "function has no return type",
+            )))
     } else if func.sig.ty != Ty::UNIT && func.block.end.is_none() {
         if let Some(stmt) = func.block.stmts.last() {
             match stmt {
@@ -117,7 +123,11 @@ fn end_is_return(ctx: &SemCtx, func: &Func) -> Result<(), Diag> {
                         func.sig.ty.to_string(ctx)
                     ),
                 )
-                .msg(Msg::help(func.sig.span, "inferred from signature")))
+                .msg(Msg::help(
+                    &ctx.source_map,
+                    func.sig.span,
+                    "inferred from signature",
+                )))
         } else {
             Err(ctx.report_error(
                 func.block.span,

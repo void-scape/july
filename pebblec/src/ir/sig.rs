@@ -31,11 +31,7 @@ pub enum Linkage<'a> {
 pub enum Param {
     Slf(Ident),
     SlfRef(Ident),
-    Named {
-        span: Span,
-        ident: Ident,
-        ty: Ty,
-    },
+    Named { span: Span, ident: Ident, ty: Ty },
 }
 
 impl Param {

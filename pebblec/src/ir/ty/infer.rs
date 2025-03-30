@@ -295,7 +295,7 @@ impl InferCtx {
                             //    abs.unwrap().1,
                             //    format!("but this is of type `{}`", ty_str),
                             //))
-                            .msg(Msg::info(c.src, c.loc.to_string())));
+                            .msg(Msg::info(&ctx.source_map, c.src, c.loc.to_string())));
                     }
 
                     if abs.is_none() {
@@ -317,6 +317,7 @@ impl InferCtx {
                 {
                     return Err(ctx.mismatch(self.var_span(var), "an integer", abs).msg(
                         Msg::note(
+                            &ctx.source_map,
                             span,
                             format!("because `{}` is used here", self.var_ident(ctx, var)),
                         ),

@@ -29,7 +29,7 @@ pub struct Ctx<'a> {
     /// `source_map` is wrapped in an Arc to rid annoying lifetime management in the creation and
     /// passing of `Ctx`. In the current implementation, this is the only reference to the source
     /// map.
-    pub source_map: Arc<SourceMap<'a>>,
+    pub source_map: Arc<SourceMap>,
 
     pub arena: BlobArena,
     pub idents: IdentStore<'a>,
@@ -56,7 +56,7 @@ impl PartialEq for Ctx<'_> {
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(source_map: SourceMap<'a>) -> Self {
+    pub fn new(source_map: SourceMap) -> Self {
         Self {
             tys: TyStore::default(),
             const_map: HashMap::default(),
@@ -84,24 +84,15 @@ impl<'a> Ctx<'a> {
         let mut errors = Vec::new();
         for sig in sigs.into_iter() {
             if let Some(other) = self.sigs.insert(sig.ident, self.intern(sig)) {
-                if other.span.source == sig.span.source {
-                    errors.push(
-                        self.report_error(
-                            sig.span,
-                            format!("`{}` is already defined", sig.ident.to_string(self)),
-                        )
-                        .msg(Msg::help(other.span, "previously defined here")),
-                    );
-                } else {
-                    let ident = sig.ident.to_string(self);
-                    errors.push(
-                        self.report_error(sig.span, format!("`{}` is already defined", ident))
-                            .join(self.report_error(
-                                other.span,
-                                format!("`{}` is already defined", ident),
-                            )),
-                    );
-                }
+                let ident = sig.ident.to_string(self);
+                errors.push(
+                    self.report_error(sig.span, format!("`{}` is already defined", ident))
+                        .msg(Msg::error(
+                            &self.source_map,
+                            other.span,
+                            "previously defined",
+                        )),
+                );
             }
         }
 

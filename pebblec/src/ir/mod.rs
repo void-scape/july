@@ -46,7 +46,7 @@ pub struct Ir<'ctx> {
     pub const_eval_order: Vec<IdentId>,
 }
 
-pub fn lower<'a>(mut source_map: SourceMap<'a>) -> Result<Ir<'a>, CompErr> {
+pub fn lower<'a>(mut source_map: SourceMap) -> Result<Ir<'a>, CompErr> {
     let items = source_map.parse()?;
     let ctx = Ctx::new(source_map);
     match lower_items(ctx, items) {
@@ -296,8 +296,8 @@ fn report_struct_cycle<'a, 'ctx>(
             })
             .id == next.id
         }) {
-            msgs.push(Msg::error_span(ctx.span(curr.strukt.name)));
-            msgs.push(Msg::note_span(field.span));
+            msgs.push(Msg::error_span(&ctx.source_map, ctx.span(curr.strukt.name)));
+            msgs.push(Msg::note_span(&ctx.source_map, field.span));
         }
     }
 
@@ -435,8 +435,8 @@ fn report_const_cycle<'a, 'ctx>(
         match curr.konst.expr {
             rules::Expr::Ident(ident) => {
                 if ctx.store_ident(ident).id == next.id {
-                    msgs.push(Msg::error_span(ctx.span(curr.konst.name)));
-                    msgs.push(Msg::note_span(ctx.span(ident)));
+                    msgs.push(Msg::error_span(&ctx.source_map, ctx.span(curr.konst.name)));
+                    msgs.push(Msg::note_span(&ctx.source_map, ctx.span(ident)));
                 }
             }
             rules::Expr::Lit(_) => {}
@@ -532,6 +532,7 @@ fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag>
             return Err(ctx
                 .report_error(ctx.span(field.name), "failed to parse struct")
                 .msg(Msg::note(
+                    &ctx.source_map,
                     ctx.span(strukt.name),
                     format!("while parsing `{}`", ctx.as_str(strukt.name)),
                 )));
@@ -1397,6 +1398,7 @@ fn method_call<'a>(
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct Call<'a> {
     pub span: Span,
+    pub ident_span: Span,
     pub sig: &'a Sig<'a>,
     pub args: &'a [Expr<'a>],
 }
@@ -1421,6 +1423,7 @@ fn call<'a>(
         sig: ctx
             .get_sig(id)
             .ok_or_else(|| ctx.report_error(name, "function is not defined"))?,
+        ident_span: ctx.span(name),
         args,
         span,
     })

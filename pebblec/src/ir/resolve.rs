@@ -69,11 +69,7 @@ impl Expr<'_> {
     /// Fails when:
     ///     aquiring field access type Fails
     ///     ident is undefined
-    pub fn resolve_infer<'a>(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &InferCtx,
-    ) -> Result<InferTy, Diag> {
+    pub fn resolve_infer<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<InferTy, Diag> {
         Ok(match self {
             Self::Lit(lit) => match lit.kind {
                 LitKind::Int(_) => InferTy::Int,
@@ -246,23 +242,27 @@ impl Expr<'_> {
         match self.resolve_infer(ctx, infer)? {
             InferTy::Int => {
                 if !ty.is_int() {
-                    return Err(ctx
-                        .mismatch(span, ty, "{int}")
-                        .msg(Msg::help(source, "from this binding")));
+                    return Err(ctx.mismatch(span, ty, "{int}").msg(Msg::help(
+                        &ctx.source_map,
+                        source,
+                        "from this binding",
+                    )));
                 }
             }
             InferTy::Float => {
                 if !ty.is_int() {
-                    return Err(ctx
-                        .mismatch(span, ty, "{float}")
-                        .msg(Msg::help(source, "from this binding")));
+                    return Err(ctx.mismatch(span, ty, "{float}").msg(Msg::help(
+                        &ctx.source_map,
+                        source,
+                        "from this binding",
+                    )));
                 }
             }
             InferTy::Ty(infer_ty) => {
                 if !infer_ty.equiv(*ty.0) {
                     return Err(ctx
                         .mismatch(span, ty, infer_ty.to_string(ctx))
-                        .msg(Msg::help(source, "from this binding")));
+                        .msg(Msg::help(&ctx.source_map, source, "from this binding")));
                 }
             }
         }
@@ -491,17 +491,11 @@ impl Expr<'_> {
 }
 
 pub trait Constrain<'a>: Debug {
-    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig)
-    -> Result<(), Diag>;
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag>;
 }
 
 impl<'a> Constrain<'a> for Stmt<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self {
             Self::Semi(semi) => semi.constrain(ctx, infer, sig),
             Self::Open(open) => open.constrain(ctx, infer, sig),
@@ -510,12 +504,7 @@ impl<'a> Constrain<'a> for Stmt<'a> {
 }
 
 impl<'a> Constrain<'a> for SemiStmt<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self {
             SemiStmt::Let(let_) => match let_.lhs {
                 LetTarget::Ident(ident) => {
@@ -548,9 +537,11 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
                     expr.constrain(ctx, infer, sig)?;
                     expr.infer_equality(ctx, infer, sig.ty, sig.span)?;
                 } else if !sig.ty.is_unit() {
-                    return Err(ctx
-                        .mismatch(r.span, sig.ty, Ty::UNIT)
-                        .msg(Msg::help(sig.span, "from fn signature")));
+                    return Err(ctx.mismatch(r.span, sig.ty, Ty::UNIT).msg(Msg::help(
+                        &ctx.source_map,
+                        sig.span,
+                        "from fn signature",
+                    )));
                 }
             }
             SemiStmt::Assign(assign) => {
@@ -605,12 +596,7 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
 }
 
 impl<'a> Constrain<'a> for Expr<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self {
             Self::Lit(_) | Self::Str(_) | Self::Bool(_) => Ok(()),
             Self::Ident(ident) => ident.constrain(ctx, infer, sig),
@@ -634,12 +620,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
 }
 
 impl<'a> Constrain<'a> for BinOp<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         if !self.kind.output_is_input() {
             self.lhs.constrain(ctx, infer, sig)?;
             self.rhs.constrain(ctx, infer, sig)?;
@@ -687,12 +668,7 @@ impl<'a> Constrain<'a> for Access<'a> {
 }
 
 impl<'a> Constrain<'a> for StructDef<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         let mut errors = Vec::new();
 
         for field_def in self.fields.iter() {
@@ -724,10 +700,10 @@ impl<'a> Constrain<'a> for StructDef<'a> {
             }
             let mut diag = ctx.report_error(self.span, msg);
             for field in missing_fields.iter() {
-                diag = diag.msg(Msg::note_span(field.span));
+                diag = diag.msg(Msg::note_span(&ctx.source_map, field.span));
             }
 
-            errors.push(diag.msg(Msg::note(strukt.span, "defined here")));
+            errors.push(diag.msg(Msg::note(&ctx.source_map, strukt.span, "defined here")));
         }
 
         if !errors.is_empty() {
@@ -739,23 +715,13 @@ impl<'a> Constrain<'a> for StructDef<'a> {
 }
 
 impl<'a> Constrain<'a> for EnumDef {
-    fn constrain(
-        &self,
-        _ctx: &mut Ctx<'a>,
-        _infer: &mut InferCtx,
-        _sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, _ctx: &mut Ctx<'a>, _infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
         todo!();
     }
 }
 
 impl<'a> Constrain<'a> for ArrDef<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self {
             ArrDef::Elems { exprs, .. } => {
                 for expr in exprs.iter() {
@@ -777,24 +743,26 @@ impl<'a> Constrain<'a> for ArrDef<'a> {
 }
 
 impl<'a> Constrain<'a> for Call<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         let mut errors = Vec::new();
         let params = self.sig.params.len();
         let args = self.args.len();
 
         let name = ctx.expect_ident(self.sig.ident);
-        if params != args && (name != "printf" || (name == "printf" && args == 0)) {
+        if params != args
+            && (name != "print" && name != "println"
+                || ((name == "print" || name == "println") && args == 0))
+        {
             return Err(ctx
                 .report_error(
-                    self.span,
+                    self.ident_span,
                     format!("expected `{}` arguments, got `{}`", params, args),
                 )
-                .msg(Msg::help(self.sig.span, "function defined here")));
+                .msg(Msg::help(
+                    &ctx.source_map,
+                    self.sig.span,
+                    "function defined here",
+                )));
         }
 
         if name == "printf" {
@@ -870,23 +838,13 @@ impl<'a> Block<'a> {
 }
 
 impl<'a> Constrain<'a> for Block<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         infer.in_scope(ctx, |ctx, infer| self.block_constrain(ctx, infer, sig))
     }
 }
 
 impl<'a> Constrain<'a> for If<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         self.condition.constrain(ctx, infer, sig)?;
         self.condition
             .infer_equality(ctx, infer, Ty::BOOL, self.span)?;
@@ -904,12 +862,7 @@ impl<'a> Constrain<'a> for If<'a> {
 }
 
 impl<'a> Constrain<'a> for Loop<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         validate_loop_block(ctx, sig, &self.block)?;
         self.block.constrain(ctx, infer, sig)?;
         Expr::Block(self.block).infer_equality(ctx, infer, Ty::UNIT, self.span)
@@ -917,12 +870,7 @@ impl<'a> Constrain<'a> for Loop<'a> {
 }
 
 impl<'a> Constrain<'a> for ForLoop<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         infer.in_scope(ctx, |ctx, infer| {
             self.iterable.constrain(ctx, infer, sig)?;
 
@@ -1015,12 +963,7 @@ fn validate_loop_block<'a>(ctx: &Ctx<'a>, sig: &Sig, block: &Block) -> Result<()
 }
 
 impl<'a> Constrain<'a> for Cast<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         self.lhs.constrain(ctx, infer, sig)?;
         let target = self.ty;
         match self.lhs.resolve_infer(ctx, infer)? {
@@ -1126,12 +1069,7 @@ impl<'a> Constrain<'a> for Cast<'a> {
 }
 
 impl<'a> Constrain<'a> for Unary<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self.kind {
             UOpKind::Ref => Ref {
                 span: self.span,
@@ -1164,12 +1102,7 @@ pub struct Ref<'a> {
 }
 
 impl<'a> Constrain<'a> for Ref<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         self.inner.constrain(ctx, infer, sig)
     }
 }
@@ -1181,12 +1114,7 @@ pub struct Deref<'a> {
 }
 
 impl<'a> Constrain<'a> for Deref<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         self.inner.constrain(ctx, infer, sig)?;
         match self.inner.resolve_infer(ctx, infer)? {
             InferTy::Ty(ty) => match ty.0 {
@@ -1217,12 +1145,7 @@ pub struct Not<'a> {
 }
 
 impl<'a> Constrain<'a> for Not<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         self.inner.constrain(ctx, infer, sig)
     }
 }
@@ -1234,12 +1157,7 @@ pub struct Neg<'a> {
 }
 
 impl<'a> Constrain<'a> for Neg<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self.inner.resolve_infer(ctx, infer)? {
             InferTy::Int | InferTy::Float => {}
             InferTy::Ty(ty) => match ty.0 {
@@ -1265,12 +1183,7 @@ impl<'a> Constrain<'a> for Neg<'a> {
 }
 
 impl<'a> Constrain<'a> for IndexOf<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         self.array.constrain(ctx, infer, sig)?;
         self.index.constrain(ctx, infer, sig)?;
         match self.index {
@@ -1311,12 +1224,7 @@ impl<'a> Constrain<'a> for IndexOf<'a> {
 }
 
 impl<'a> Constrain<'a> for Range<'a> {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         if let Some(start) = self.start {
             start.constrain(ctx, infer, sig)?;
             match start.resolve_infer(ctx, infer)? {
@@ -1354,12 +1262,7 @@ impl<'a> Constrain<'a> for Range<'a> {
 }
 
 impl<'a> Constrain<'a> for Ident {
-    fn constrain(
-        &self,
-        ctx: &mut Ctx<'a>,
-        infer: &mut InferCtx,
-        _sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
         if infer.var(self.id).is_none() {
             Err(ctx.undeclared(self))
         } else {
@@ -1369,34 +1272,19 @@ impl<'a> Constrain<'a> for Ident {
 }
 
 impl<'a> Constrain<'a> for Lit<'a> {
-    fn constrain(
-        &self,
-        _ctx: &mut Ctx<'a>,
-        _infer: &mut InferCtx,
-        _sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, _ctx: &mut Ctx<'a>, _infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
         Ok(())
     }
 }
 
 impl<'a> Constrain<'a> for BoolLit {
-    fn constrain(
-        &self,
-        _ctx: &mut Ctx<'a>,
-        _infer: &mut InferCtx,
-        _sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, _ctx: &mut Ctx<'a>, _infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
         Ok(())
     }
 }
 
 impl<'a> Constrain<'a> for StrLit<'a> {
-    fn constrain(
-        &self,
-        _ctx: &mut Ctx<'a>,
-        _infer: &mut InferCtx,
-        _sig: &Sig,
-    ) -> Result<(), Diag> {
+    fn constrain(&self, _ctx: &mut Ctx<'a>, _infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
         Ok(())
     }
 }
