@@ -1,0 +1,5 @@
+#[intrinsic]
+print: (fmt: &str) {}
+
+#[intrinsic]
+println: (fmt: &str) {}

@@ -497,6 +497,7 @@ dependencies = [
  "libloading",
  "pebblec-arena",
  "pebblec-parse",
+ "walkdir",
 ]
 
 [[package]]
@@ -517,6 +518,7 @@ name = "pebblec-parse"
 version = "0.1.0"
 dependencies = [
  "annotate-snippets",
+ "indexmap 2.8.0",
  "pebblec-macros",
  "thiserror",
  "variadics_please",

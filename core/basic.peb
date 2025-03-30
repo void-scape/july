@@ -1,8 +1,11 @@
+use core::intrinsics;
+use core::io;
+
 NULL: const u64 = 0;
 
 assert: (condition: bool) {
     if !condition {
-        printf("failed assert\n");
+        println("failed assert");
         exit(1);
     }
 }

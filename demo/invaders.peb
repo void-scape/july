@@ -1,4 +1,5 @@
 use core::basic;
+use core::io;
 use core::intrinsics;
 
 #[link("demo/SDL3")]
@@ -181,7 +182,7 @@ main: () -> i32 {
         render(renderer, &state);
     }
     
-    printf("exiting invaders\n");
+    println("exiting invaders");
     0
 }
 
@@ -329,6 +330,6 @@ load_bmp_texture: (path: CStr, renderer: &Renderer) -> &Texture {
 }
 
 report_error: (msg: &str) {
-    printf(msg);
+    println(msg);
     print_cs(SDL_GetError());
 }

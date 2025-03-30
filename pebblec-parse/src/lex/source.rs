@@ -22,6 +22,8 @@ pub fn core_parent_path() -> PathBuf {
 
 #[derive(Error, Debug)]
 pub enum SourceError {
+    #[error("expected `.peb` file, got `{0}`")]
+    InvalidExtension(String),
     #[error("could not open `{file}`: {io}")]
     Io { file: String, io: std::io::Error },
     #[error("encountered unparsable symbol in `{0}`")]
@@ -31,11 +33,11 @@ pub enum SourceError {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct SourceMap<'a> {
-    tokens: HashMap<usize, TokenBuffer<'a>>,
+pub struct SourceMap {
+    tokens: HashMap<usize, TokenBuffer>,
 }
 
-impl<'a> SourceMap<'a> {
+impl SourceMap {
     #[track_caller]
     pub fn origin(&self) -> &OsStr {
         &self.tokens.values().next().unwrap().source_ref().origin
@@ -43,6 +45,12 @@ impl<'a> SourceMap<'a> {
 
     /// Create a `SourceMap` from a file path.
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, SourceError> {
+        if !path.as_ref().to_string_lossy().ends_with(".peb") {
+            return Err(SourceError::InvalidExtension(
+                path.as_ref().to_string_lossy().to_string(),
+            ));
+        }
+
         let mut tokens = HashMap::new();
         let src = Source::new(path.as_ref()).map_err(|io| SourceError::Io {
             file: path.as_ref().to_string_lossy().to_string(),
@@ -68,6 +76,12 @@ impl<'a> SourceMap<'a> {
         origin: Origin,
         src: String,
     ) -> Result<Self, SourceError> {
+        if !origin.as_ref().to_string_lossy().ends_with(".peb") {
+            return Err(SourceError::InvalidExtension(
+                origin.as_ref().to_string_lossy().to_string(),
+            ));
+        }
+
         let mut tokens = HashMap::new();
         let src = Source::from_string(origin, src);
         let origin = src.origin.to_string_lossy().to_string();
@@ -83,16 +97,16 @@ impl<'a> SourceMap<'a> {
         Ok(Self { tokens })
     }
 
-    pub fn insert(&mut self, buffer: TokenBuffer<'a>) {
+    pub fn insert(&mut self, buffer: TokenBuffer) {
         self.tokens.insert(buffer.source_id(), buffer);
     }
 
-    pub fn buffers(&self) -> impl Iterator<Item = &TokenBuffer<'a>> {
+    pub fn buffers(&self) -> impl Iterator<Item = &TokenBuffer> {
         self.tokens.values()
     }
 
     #[track_caller]
-    pub fn buffer(&self, id: usize) -> &TokenBuffer<'a> {
+    pub fn buffer(&self, id: usize) -> &TokenBuffer {
         self.tokens.get(&id).unwrap()
     }
 
@@ -105,6 +119,35 @@ impl<'a> SourceMap<'a> {
     pub fn parse(&mut self) -> Result<Vec<Item>, SourceError> {
         let origin = self.origin().to_owned();
         let mut visited = HashSet::new();
+
+        let path = PathBuf::from(origin.clone());
+        // HACK: need some proper way to define what the root of a project is.
+        //
+        // If you try to compile a core file, and it recursively imports the origin core file, then
+        // it won't skip it because the origin core won't be properly defined in the visited set.
+        if path
+            .components()
+            .any(|c| c.as_os_str().to_str().is_some_and(|str| str == "core"))
+        {
+            visited.insert(vec![
+                String::from("core"),
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .strip_suffix(".peb")
+                    .unwrap()
+                    .to_string(),
+            ]);
+        } else {
+            visited.insert(vec![
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .strip_suffix(".peb")
+                    .unwrap()
+                    .to_string(),
+            ]);
+        }
 
         let mut err = false;
         let mut items = self

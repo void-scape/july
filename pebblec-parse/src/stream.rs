@@ -6,8 +6,8 @@ use crate::lex::kind::TokenKind;
 use annotate_snippets::Level;
 use std::borrow::Cow;
 
-impl<'s> TokenBuffer<'s> {
-    pub fn stream<'a>(&'a self) -> TokenStream<'a> {
+impl TokenBuffer {
+    pub fn stream(&self) -> TokenStream {
         TokenStream::new(self)
     }
 }
@@ -15,7 +15,7 @@ impl<'s> TokenBuffer<'s> {
 // TODO: makes many assumptions
 #[derive(Debug, Clone, Copy)]
 pub struct TokenStream<'a> {
-    buffer: &'a TokenBuffer<'a>,
+    buffer: &'a TokenBuffer,
     start: usize,
     end: usize,
     index: usize,
@@ -30,13 +30,13 @@ impl<'a, 's> Iterator for TokenStream<'a> {
 }
 
 impl<'a> Buffer<'a> for TokenStream<'a> {
-    fn token_buffer(&self) -> &TokenBuffer<'a> {
+    fn token_buffer(&self) -> &TokenBuffer {
         self.buffer
     }
 }
 
 impl<'a, 's> TokenStream<'a> {
-    fn new(buffer: &'a TokenBuffer<'s>) -> Self {
+    fn new(buffer: &'a TokenBuffer) -> Self {
         Self {
             start: 0,
             end: buffer.len(),

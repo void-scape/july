@@ -24,7 +24,7 @@ impl Lexer {
         Self { source }
     }
 
-    pub fn lex<'a>(self) -> ModalResult<TokenBuffer<'a>> {
+    pub fn lex<'a>(self) -> ModalResult<TokenBuffer> {
         let mut tokens = Vec::new();
         let mut input = LocatingSlice::new(self.source.source.as_str());
 

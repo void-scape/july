@@ -190,7 +190,7 @@ simple_float: () -> f32 {
 // ------------ Loops ------------
 
 simple_for: () {
-    // printf("hard coded:\n");
+    // println("hard coded:");
     
     let start = 0;
     let end = 10;
@@ -203,29 +203,29 @@ simple_for: () {
         
         // for block
         // {
-        // printf("%\n", i);
+        // println("%", i);
         // }
         
         // post op
         _it += 1;
     }
     
-    // printf("builtin:\n");
+    // println("builtin:");
     
     let x = [true, false, false, true, false, true, true];
     let y = &x;
     let val = x[0];
     
-    for b in x{}
+    for b in x {}
     
     let ints = [12, 24, 48];
     
-    // printf("\n");
-    for int in ints{}
+    // println("");
+    for int in ints {}
     
-    for val in 0..7{}
+    for val in 0..7 {}
     
-    for it in 2..10{}
+    for it in 2..10 {}
 }
 
 // ------------ Scope ------------
@@ -258,32 +258,32 @@ arr_ref_deref: () -> bool {
     let ref_arr = [&arr[0], &arr[1], &arr[2]];
     let deref_arr = [arr[0], arr[1], arr[2]];
     
-    for i in 0..3{
+    for i in 0..3 {
         if arr[i] != deref_arr[i] {
-            printf("invalid deref_arr\n");
+            println("invalid deref_arr");
             result = false;
         }
         
         if arr[i] != ref_arr[i]* {
-            printf("invalid ref_arr deref\n");
+            println("invalid ref_arr deref");
             result = false;
         }
     }
     
     let slice: &[u8] = &arr;
     // let cannot_return: [u8; 3] = slice*;
-    for i in 0..3{
+    for i in 0..3 {
         if slice[i] != arr[i] {
-            printf("invalid slice indexing\n");
+            println("invalid slice indexing");
             result = false;
         }
         slice[i] += 5;
     }
     
     let i = 0;
-    for val in slice{
+    for val in slice {
         if val* != arr[i] {
-            printf("invalid slice iteration\n");
+            println("invalid slice iteration");
             result = false;
         }
         i += 1;
@@ -300,9 +300,9 @@ arr_ref_deref: () -> bool {
     
     let arr = [&arr[0], &arr[1], &arr[2]];
     let i = 0;
-    for a in arr{
+    for a in arr {
         if deref_arr[i] + 5 != a** {
-            printf("invalid double deref\n");
+            println("invalid double deref");
             result = false;
         }
         i += 1;
@@ -336,7 +336,7 @@ bitwise_ops: () -> bool {
         0b1100 >> 2 == 0b0011,
     ];
     
-    for op in ops{
+    for op in ops {
         if !op* { return false; }
     }
     
@@ -348,8 +348,8 @@ bitwise_ops: () -> bool {
 I: const u32 = 0;
 
 test: (condition: bool) {
-    printf("Test % .................... ", I);
-    if condition { printf("Ok\n"); } else { printf("Fail\n"); }
+    print("Test % .................... ", I);
+    if condition { println("Ok"); } else { println("Fail"); }
     
     I += 1;
 }

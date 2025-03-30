@@ -1,3 +1,7 @@
+use core::basic;
+use core::io;
+use core::intrinsics;
+
 main: () -> i32 {
     test(double(2) == 4);
     test(double(4) == 8);
@@ -215,7 +219,7 @@ simple_float: () -> f32 {
 // ------------ Loops ------------
 
 simple_for: ()  {
-    // printf("hard coded:\n");
+    // println("hard coded:");
 
     let start = 0;
     let end = 10;
@@ -230,36 +234,36 @@ simple_for: ()  {
 
         // for block
         // {
-            // printf("%\n", i);
+            // println("%", i);
         // }
 
         // post op
         _it += 1;
     }
 
-    // printf("builtin:\n");
+    // println("builtin:");
 
     let x = [true, false, false, true, false, true, true];
     let y = &x;
     let val = x[0];
 
     for b in x {
-        // printf("% => %\n", b, b*);
+        // println("% => %", b, b*);
     }
 
     let ints = [12, 24, 48];
 
-    // printf("\n");
+    // println("");
     for int in ints {
-        // printf("%\n", int);
+        // println("%", int);
     }
 
     for val in 0..7 {
-        // printf("%\n", x[val]);
+        // println("%", x[val]);
     }
 
     for it in 2..10 {
-        // printf("%\n", it);
+        // println("%", it);
     }
 }
 
@@ -298,12 +302,12 @@ arr_ref_deref: () -> bool {
 
     for i in 0..3 {
         if arr[i] != deref_arr[i] {
-            printf("invalid deref_arr\n");
+            println("invalid deref_arr");
             result = false;
         }
 
         if arr[i] != ref_arr[i]* {
-            printf("invalid ref_arr deref\n");
+            println("invalid ref_arr deref");
             result = false;
         }
     }
@@ -312,7 +316,7 @@ arr_ref_deref: () -> bool {
     // let cannot_return: [u8; 3] = slice*;
     for i in 0..3 {
         if slice[i] != arr[i] {
-            printf("invalid slice indexing\n");
+            println("invalid slice indexing");
             result = false;
         }
         slice[i] += 5;
@@ -321,7 +325,7 @@ arr_ref_deref: () -> bool {
     let i = 0;
     for val in slice {
         if val* != arr[i] {
-            printf("invalid slice iteration\n");
+            println("invalid slice iteration");
             result = false;
         }
         i += 1;
@@ -340,7 +344,7 @@ arr_ref_deref: () -> bool {
     let i = 0;
     for a in arr {
         if deref_arr[i] + 5 != a** {
-            printf("invalid double deref\n");
+            println("invalid double deref");
             result = false;
         }
         i += 1;
@@ -388,25 +392,12 @@ bitwise_ops: () -> bool {
 I: const u32 = 0;
 
 test: (condition: bool) {
-    printf("Test % .................... ", I);
+    print("Test % .................... ", I);
     if condition {
-        printf("Ok\n");
+        println("Ok");
     } else {
-        printf("Fail\n");
+        println("Fail");
     }
 
     I += 1;
 }
-
-assert: (condition: bool) {
-    if !condition {
-        printf("failed assert\n");
-        exit(1);
-    }
-}
-
-#[intrinsic]
-exit: (code: i32) {}
-
-#[intrinsic]
-printf: (fmt: &str) {}

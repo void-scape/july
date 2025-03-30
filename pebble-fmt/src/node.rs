@@ -36,7 +36,7 @@ impl<'a> Node<'a> {
         Self::Text("\n")
     }
 
-    pub fn token<T: Borrow<TokenId>>(buf: &'a TokenBuffer<'a>, token: T) -> Self {
+    pub fn token<T: Borrow<TokenId>>(buf: &'a TokenBuffer, token: T) -> Self {
         let t = *token.borrow();
         if buf.kind(t) == TokenKind::Str {
             Self::Text(String::leak(format!("\"{}\"", buf.as_str(t))))
@@ -82,12 +82,12 @@ impl<'a> Node<'a> {
     }
 
     pub fn delimited_with<T: Deref<Target = R>, R: ?Sized, D: DelimPair>(
-        buf: &'a TokenBuffer<'a>,
+        buf: &'a TokenBuffer,
         arena: &BlobArena,
         _delims: D,
         inner: &T,
         condition: BreakCond,
-        nodify: impl FnOnce(&'a TokenBuffer<'a>, &BlobArena, &R) -> Option<Node<'a>>,
+        nodify: impl FnOnce(&'a TokenBuffer, &BlobArena, &R) -> Option<Node<'a>>,
     ) -> Self {
         match condition {
             BreakCond::Width => {
@@ -154,12 +154,12 @@ impl<'a> Node<'a> {
     }
 
     pub fn indent_delimited_with<T: Deref<Target = R>, R: ?Sized>(
-        buf: &'a TokenBuffer<'a>,
+        buf: &'a TokenBuffer,
         arena: &BlobArena,
         delims: impl DelimPair,
         inner: &T,
         condition: BreakCond,
-        nodify: impl FnOnce(&'a TokenBuffer<'a>, &BlobArena, &R) -> Option<Node<'a>>,
+        nodify: impl FnOnce(&'a TokenBuffer, &BlobArena, &R) -> Option<Node<'a>>,
     ) -> Self {
         Node::delimited_with(buf, arena, delims, inner, condition, |buf, arena, inner| {
             nodify(buf, arena, inner).map(|n| Node::Indent(arena.alloc(n), INDENT))
@@ -178,7 +178,7 @@ impl<'a> Node<'a> {
     }
 }
 
-fn check_whitespace_span<'a>(buf: &'a TokenBuffer<'a>, span: Span, collection: &mut Vec<Node<'a>>) {
+fn check_whitespace_span<'a>(buf: &'a TokenBuffer, span: Span, collection: &mut Vec<Node<'a>>) {
     let token = buf.token_with_start(span.start as usize).unwrap();
     check_whitespace(buf, token, collection);
 }
@@ -190,7 +190,7 @@ fn check_whitespace_slice<'a>(slice: &str, collection: &mut Vec<Node<'a>>) {
 }
 
 pub fn check_whitespace<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     token: TokenId,
     collection: &mut Vec<Node<'a>>,
 ) {
@@ -223,7 +223,7 @@ pub fn check_whitespace<'a>(
     }
 }
 
-pub fn nodify_func<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, func: &Func) -> Node<'a> {
+pub fn nodify_func<'a>(buf: &'a TokenBuffer, arena: &BlobArena, func: &Func) -> Node<'a> {
     let mut nodes = vec![
         Node::Text(buf.as_str(func.name)),
         Node::Text(buf.as_str(func.colon)),
@@ -247,7 +247,7 @@ pub fn nodify_func<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, func: &Func)
 }
 
 fn nodify_params<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     params: &[Param],
 ) -> Option<Node<'a>> {
@@ -277,7 +277,7 @@ fn nodify_params<'a>(
     }))
 }
 
-fn nodify_ty<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, ty: &PType) -> Node<'a> {
+fn nodify_ty<'a>(buf: &'a TokenBuffer, arena: &BlobArena, ty: &PType) -> Node<'a> {
     match ty {
         PType::Simple(_, t) => Node::Text(buf.as_str(*t)),
         PType::Ref { inner, .. } => {
@@ -306,7 +306,7 @@ fn nodify_ty<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, ty: &PType) -> Nod
 }
 
 fn nodify_block<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     block: &Block,
     mut condition: BreakCond,
@@ -323,7 +323,7 @@ fn nodify_block<'a>(
 }
 
 fn nodify_stmts<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     stmts: &[Stmt],
 ) -> Option<Node<'a>> {
@@ -371,7 +371,7 @@ fn nodify_stmts<'a>(
     Some(Node::Group(arena.alloc_slice(&nodes)))
 }
 
-fn nodify_expr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, expr: &Expr) -> Node<'a> {
+fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node<'a> {
     match expr {
         Expr::Break(t)
         | Expr::Continue(t)
@@ -584,7 +584,7 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, expr: &Expr) -> 
 }
 
 fn nodify_struct_fields<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     fields: &[Field],
 ) -> Option<Node<'a>> {
@@ -609,7 +609,7 @@ fn nodify_struct_fields<'a>(
 }
 
 fn nodify_struct_field_defs<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     fields: &[FieldDef],
 ) -> Option<Node<'a>> {
@@ -634,7 +634,7 @@ fn nodify_struct_field_defs<'a>(
 }
 
 fn nodify_expr_set<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     exprs: &[Expr],
 ) -> Option<Node<'a>> {
@@ -649,7 +649,7 @@ fn nodify_expr_set<'a>(
     }
 }
 
-fn nodify_args<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, args: &[Expr]) -> Option<Node<'a>> {
+fn nodify_args<'a>(buf: &'a TokenBuffer, arena: &BlobArena, args: &[Expr]) -> Option<Node<'a>> {
     if args.is_empty() {
         None
     } else {
@@ -661,7 +661,7 @@ fn nodify_args<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, args: &[Expr]) -
     }
 }
 
-pub fn nodify_struct<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, strukt: &Struct) -> Node<'a> {
+pub fn nodify_struct<'a>(buf: &'a TokenBuffer, arena: &BlobArena, strukt: &Struct) -> Node<'a> {
     Node::group(
         arena,
         &[
@@ -679,7 +679,7 @@ pub fn nodify_struct<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, strukt: &S
     )
 }
 
-pub fn nodify_const<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, konst: &Const) -> Node<'a> {
+pub fn nodify_const<'a>(buf: &'a TokenBuffer, arena: &BlobArena, konst: &Const) -> Node<'a> {
     Node::group(
         arena,
         &[
@@ -694,7 +694,7 @@ pub fn nodify_const<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, konst: &Con
     )
 }
 
-pub fn nodify_attr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, attr: &Attribute) -> Node<'a> {
+pub fn nodify_attr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, attr: &Attribute) -> Node<'a> {
     let mut nodes = vec![Node::Text("#[")];
     nodes.extend(attr.tokens.iter().map(|t| Node::token(buf, *t)));
     nodes.push(Node::Text("]"));
@@ -702,7 +702,7 @@ pub fn nodify_attr<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, attr: &Attri
 }
 
 pub fn nodify_extern<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     exturn: &ExternBlock,
 ) -> Node<'a> {
@@ -725,7 +725,7 @@ pub fn nodify_extern<'a>(
 }
 
 fn nodify_extern_funcs<'a>(
-    buf: &'a TokenBuffer<'a>,
+    buf: &'a TokenBuffer,
     arena: &BlobArena,
     funcs: &[ExternFunc],
 ) -> Option<Node<'a>> {
@@ -762,7 +762,7 @@ fn nodify_extern_funcs<'a>(
     Some(Node::group(arena, &nodes))
 }
 
-pub fn nodify_use<'a>(buf: &'a TokenBuffer<'a>, arena: &BlobArena, uze: &Use) -> Node<'a> {
+pub fn nodify_use<'a>(buf: &'a TokenBuffer, arena: &BlobArena, uze: &Use) -> Node<'a> {
     let mut path = vec![Node::Text("use ")];
     path.extend(
         uze.path

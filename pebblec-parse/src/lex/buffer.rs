@@ -1,12 +1,11 @@
 use super::source::Source;
 use crate::lex::kind::*;
 use std::borrow::Borrow;
-use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 
 pub trait Buffer<'a> {
-    fn token_buffer(&self) -> &TokenBuffer<'a>;
+    fn token_buffer(&self) -> &TokenBuffer;
 }
 
 /// Query about a specific token with a [`TokenId`].
@@ -68,14 +67,12 @@ impl TokenId {
 
 /// Storage for the tokens of a source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenBuffer<'a> {
+pub struct TokenBuffer {
     tokens: Vec<Token>,
     source: Arc<Source>,
-    /// Reference to the source file
-    _phantom: PhantomData<&'a str>,
 }
 
-impl<'a> TokenBuffer<'a> {
+impl TokenBuffer {
     pub fn new(mut tokens: Vec<Token>, source: Source) -> Self {
         for token in tokens.iter_mut() {
             token.span.source = source.id as u32;
@@ -84,7 +81,6 @@ impl<'a> TokenBuffer<'a> {
         Self {
             tokens,
             source: Arc::new(source),
-            _phantom: PhantomData,
         }
     }
 
@@ -138,7 +134,7 @@ impl<'a> TokenBuffer<'a> {
     }
 }
 
-impl<'a> TokenQuery<'a> for TokenBuffer<'a> {
+impl<'a> TokenQuery<'a> for TokenBuffer {
     #[track_caller]
     fn kind(&self, token: impl Borrow<TokenId>) -> TokenKind {
         self.token(*token.borrow())

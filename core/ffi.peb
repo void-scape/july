@@ -7,3 +7,6 @@ CStr: struct {
 empty_cs: () -> CStr {
     CStr { str: NULL as &u8 }
 }
+
+#[intrinsic]
+print_cs: (str: CStr) {}

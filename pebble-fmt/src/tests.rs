@@ -44,7 +44,7 @@ fn language_tests() {
         0,
         InterpInstance::new(
             &CompUnit::new(Config::default().no_capture(true))
-                .compile_string("fmt-tests", fmt::fmt(TESTS).unwrap().unwrap())
+                .compile_string(TESTS, fmt::fmt(TESTS).unwrap().unwrap())
                 .unwrap()
         )
         .run(false)
@@ -56,7 +56,7 @@ fn codegen_with(path: &str) {
         .compile(path)
         .unwrap();
     let fmt = CompUnit::new(Config::default().no_capture(true))
-        .compile_string("fmt-tests", fmt::fmt(path).unwrap().unwrap())
+        .compile_string(TESTS, fmt::fmt(path).unwrap().unwrap())
         .unwrap();
 
     // TyStore stores span information

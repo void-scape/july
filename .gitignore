@@ -2,3 +2,4 @@
 out
 out.o
 **/ICE-*
+/pebble-bindgen

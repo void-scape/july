@@ -30,7 +30,7 @@ pub struct Variant {
 //    type Output = Enum;
 //
 //    fn parse(
-//        buffer: &'a TokenBuffer<'a>,
+//        buffer: &'a TokenBuffer,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
 //    ) -> RResult<Self::Output> {
@@ -54,7 +54,7 @@ pub struct Variant {
 //    type Output = (Span, Vec<Variant>);
 //
 //    fn parse(
-//        buffer: &'a TokenBuffer<'a>,
+//        buffer: &'a TokenBuffer,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
 //    ) -> RResult<Self::Output> {
@@ -89,7 +89,7 @@ pub struct Variant {
 //    type Output = Vec<Variant>;
 //
 //    fn parse(
-//        buffer: &'a TokenBuffer<'a>,
+//        buffer: &'a TokenBuffer,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
 //    ) -> RResult<Self::Output> {
@@ -132,7 +132,7 @@ pub struct Variant {
 //    type Output = EnumDef;
 //
 //    fn parse(
-//        buffer: &'a TokenBuffer<'a>,
+//        buffer: &'a TokenBuffer,
 //        stream: &mut TokenStream<'a>,
 //        stack: &mut Vec<TokenId>,
 //    ) -> RResult<Self::Output> {

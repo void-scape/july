@@ -8,11 +8,11 @@
 > At the moment, there is no compiler backend. Everything is interpreted _at compile time_. This means the compiler does not produce a binary. I deem basic language functionality more important than binaries at the moment. See below...
 
 ```rust
-use core::intrinsics;
+use core::io;
 
 main: () {
-    printf("Hello, World!\n");
-    printf("This % the number %!\n", "is", 42);
+    println("Hello, World!");
+    println("This % the number %!", "is", 42);
 }
 ```
 > NOTE

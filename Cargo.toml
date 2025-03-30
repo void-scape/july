@@ -1,3 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["pebblec-parse", "pebblec", "pebble-fmt", "pebblec-arena", "pebblec-macros"]
+members = [
+    "pebblec-parse",
+    "pebblec",
+    "pebble-fmt",
+    "pebblec-arena",
+    "pebblec-macros",
+]

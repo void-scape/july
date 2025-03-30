@@ -2,8 +2,9 @@
 use crate::lex::buffer::Span;
 use crate::lex::source::{Source, SourceMap};
 use annotate_snippets::{Level, Renderer, Snippet};
+use indexmap::IndexMap;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::panic::Location;
@@ -120,63 +121,94 @@ impl Diag {
 #[derive(Debug)]
 pub struct Msg {
     level: Level,
-    // TODO: this is dangerous, it may have a different source than the diag
+    source: Arc<Source>,
     span: Span,
     msg: Cow<'static, str>,
 }
 
 #[allow(unused)]
 impl Msg {
-    pub fn new(level: Level, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+    pub fn new(
+        level: Level,
+        source: Arc<Source>,
+        span: Span,
+        msg: impl Into<Cow<'static, str>>,
+    ) -> Self {
         Self {
             level,
+            source,
             span,
             msg: msg.into(),
         }
     }
 
-    pub fn spanned(level: Level, span: Span) -> Self {
-        Self::new(level, span, "")
+    pub fn spanned(level: Level, source_map: &SourceMap, span: Span) -> Self {
+        Self::new(level, source_map.source(span.source as usize), span, "")
     }
 
-    pub fn error(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(Level::Error, span, msg)
+    pub fn error(source_map: &SourceMap, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            Level::Error,
+            source_map.source(span.source as usize),
+            span,
+            msg,
+        )
     }
 
-    pub fn warning(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(Level::Warning, span, msg)
+    pub fn warning(source_map: &SourceMap, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            Level::Warning,
+            source_map.source(span.source as usize),
+            span,
+            msg,
+        )
     }
 
-    pub fn info(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(Level::Info, span, msg)
+    pub fn info(source_map: &SourceMap, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            Level::Info,
+            source_map.source(span.source as usize),
+            span,
+            msg,
+        )
     }
 
-    pub fn note(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(Level::Note, span, msg)
+    pub fn note(source_map: &SourceMap, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            Level::Note,
+            source_map.source(span.source as usize),
+            span,
+            msg,
+        )
     }
 
-    pub fn help(span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
-        Self::new(Level::Help, span, msg)
+    pub fn help(source_map: &SourceMap, span: Span, msg: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(
+            Level::Help,
+            source_map.source(span.source as usize),
+            span,
+            msg,
+        )
     }
 
-    pub fn error_span(span: Span) -> Self {
-        Self::spanned(Level::Error, span)
+    pub fn error_span(source_map: &SourceMap, span: Span) -> Self {
+        Self::spanned(Level::Error, source_map, span)
     }
 
-    pub fn warning_span(span: Span) -> Self {
-        Self::spanned(Level::Warning, span)
+    pub fn warning_span(source_map: &SourceMap, span: Span) -> Self {
+        Self::spanned(Level::Warning, source_map, span)
     }
 
-    pub fn info_span(span: Span) -> Self {
-        Self::spanned(Level::Info, span)
+    pub fn info_span(source_map: &SourceMap, span: Span) -> Self {
+        Self::spanned(Level::Info, source_map, span)
     }
 
-    pub fn note_span(span: Span) -> Self {
-        Self::spanned(Level::Note, span)
+    pub fn note_span(source_map: &SourceMap, span: Span) -> Self {
+        Self::spanned(Level::Note, source_map, span)
     }
 
-    pub fn help_span(span: Span) -> Self {
-        Self::spanned(Level::Help, span)
+    pub fn help_span(source_map: &SourceMap, span: Span) -> Self {
+        Self::spanned(Level::Help, source_map, span)
     }
 }
 
@@ -193,30 +225,41 @@ pub struct RawDiag {
 impl RawDiag {
     #[track_caller]
     pub fn report(mut self) {
-        assert!(
-            self.msgs
-                .iter()
-                .all(|msg| msg.span.source == self.source.id as u32),
-            "source: {}\n{:#?}",
-            self.source.id,
-            self.msgs
-        );
-
         let origin = self.source.origin.to_string_lossy();
-        self.msgs.push(Msg::error_span(self.span));
-        let message = self.level.title(&self.title).snippet(
-            Snippet::source(&self.source.source)
-                .origin(&origin)
-                .fold(true)
-                .annotations(
-                    self.msgs
-                        .iter()
-                        .map(|msg| msg.level.span(msg.span.range()).label(&msg.msg)),
-                ),
-        );
 
-        let renderer = Renderer::styled();
-        println!("{}", renderer.render(message));
-        println!("generated: {}", self.loc);
+        let mut common_msgs: IndexMap<u32, Vec<Msg>> = IndexMap::new();
+        common_msgs
+            .entry(self.span.source)
+            .or_default()
+            .push(Msg::new(
+                Level::Error,
+                self.source.clone(),
+                self.span,
+                self.title,
+            ));
+        for msg in self.msgs.drain(..) {
+            common_msgs.entry(msg.span.source).or_default().push(msg);
+        }
+
+        for (_, msgs) in common_msgs.into_iter() {
+            let first = msgs.first().unwrap();
+
+            let message = first.level.title(&first.msg).snippet(
+                Snippet::source(&first.source.source)
+                    .origin(&origin)
+                    .fold(true)
+                    .annotations(msgs.iter().enumerate().map(|(i, msg)| {
+                        if i == 0 {
+                            msg.level.span(msg.span.range())
+                        } else {
+                            msg.level.span(msg.span.range()).label(&msg.msg)
+                        }
+                    })),
+            );
+
+            let renderer = Renderer::styled();
+            println!("{}", renderer.render(message));
+            println!("generated: {}", self.loc);
+        }
     }
 }
