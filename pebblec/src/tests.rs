@@ -1,9 +1,6 @@
-use std::env;
-
-use pebblec_parse::lex::io;
-
 use crate::comp::{CompUnit, Config};
 use crate::interp::InterpInstance;
+use pebblec_parse::lex::io;
 
 const TESTS: &str = "../demo/tests.peb";
 

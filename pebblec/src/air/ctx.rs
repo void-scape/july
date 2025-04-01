@@ -4,6 +4,7 @@ use crate::air::Args;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
 use crate::ir::sig::{Param, Sig};
+use crate::ir::strukt::StructId;
 use crate::ir::ty::infer::SymbolTable;
 use crate::ir::ty::store::TyStore;
 use crate::ir::ty::{Ty, TyKind, TypeKey, Width};
@@ -18,7 +19,8 @@ pub struct AirCtx<'a, 'ctx> {
     pub tys: TyStore,
     pub key: TypeKey,
     pub tables: Vec<SymbolTable<Var>>,
-    pub air_sigs: HashMap<IdentId, &'a AirSig<'a>>,
+    pub air_sigs: IndexMap<IdentId, &'a AirSig<'a>>,
+    pub impl_air_sigs: IndexMap<(StructId, IdentId), &'a AirSig<'a>>,
     pub storage: BlobArena,
 
     ctx: &'ctx Ctx<'ctx>,
@@ -44,40 +46,88 @@ impl PartialEq for AirCtx<'_, '_> {
     }
 }
 
+fn sig_to_air_sig<'a>(ctx: &Ctx, storage: &BlobArena, sig: &Sig) -> &'a AirSig<'a> {
+    &*storage.alloc(AirSig {
+        ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
+        ty: sig.ty,
+        params: if sig.params.is_empty() {
+            &[]
+        } else {
+            storage.alloc_slice(
+                &sig.params
+                    .iter()
+                    .map(|p| param_to_air_param(p))
+                    .collect::<Vec<_>>(),
+            )
+        },
+        // TODO: make this prettier
+        linkage: match sig.linkage {
+            sig::Linkage::Local => AirLinkage::Local,
+            sig::Linkage::External { link } => AirLinkage::External {
+                link: storage.alloc_str(link),
+            },
+        },
+    })
+}
+
+fn param_to_air_param(param: &Param) -> Ty {
+    match param {
+        Param::Named { ty, .. } => *ty,
+        _ => unreachable!(),
+    }
+}
+
+fn method_sig_to_air_sig<'a>(
+    ctx: &Ctx,
+    storage: &BlobArena,
+    strukt: Ty,
+    sig: &Sig,
+) -> &'a AirSig<'a> {
+    &*storage.alloc(AirSig {
+        ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
+        ty: sig.ty,
+        params: if sig.params.is_empty() {
+            &[]
+        } else {
+            storage.alloc_slice(
+                &sig.params
+                    .iter()
+                    .map(|p| method_param_to_air_param(strukt, p))
+                    .collect::<Vec<_>>(),
+            )
+        },
+        // TODO: make this prettier
+        linkage: match sig.linkage {
+            sig::Linkage::Local => AirLinkage::Local,
+            sig::Linkage::External { link } => AirLinkage::External {
+                link: storage.alloc_str(link),
+            },
+        },
+    })
+}
+
+fn method_param_to_air_param(strukt: Ty, param: &Param) -> Ty {
+    match param {
+        Param::Named { ty, .. } => *ty,
+        Param::Slf(_) => strukt,
+    }
+}
+
 impl<'a, 'ctx> AirCtx<'a, 'ctx> {
-    pub fn new(ctx: &'ctx Ctx<'ctx>, key: TypeKey, tys: TyStore) -> Self {
+    pub fn new(ctx: &'ctx Ctx<'ctx>, key: TypeKey, mut tys: TyStore) -> Self {
         let storage = BlobArena::default();
         let air_sigs = ctx
             .sigs
             .iter()
-            .map(|(ident, sig)| {
-                (
-                    *ident,
-                    &*storage.alloc(AirSig {
-                        ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
-                        ty: sig.ty,
-                        params: if sig.params.is_empty() {
-                            &[]
-                        } else {
-                            storage.alloc_slice(
-                                &sig.params
-                                    .iter()
-                                    .map(|p| match p {
-                                        Param::Named { ty, .. } => *ty,
-                                        _ => todo!(),
-                                    })
-                                    .collect::<Vec<_>>(),
-                            )
-                        },
-                        // TODO: make this prettier
-                        linkage: match sig.linkage {
-                            sig::Linkage::Local => AirLinkage::Local,
-                            sig::Linkage::External { link } => AirLinkage::External {
-                                link: storage.alloc_str(link),
-                            },
-                        },
-                    }),
-                )
+            .map(|(ident, sig)| (*ident, sig_to_air_sig(ctx, &storage, sig)))
+            .collect();
+        let impl_air_sigs = ctx
+            .impl_sigs
+            .iter()
+            .map(|(ids, sig)| {
+                let strukt = tys.intern_kind(TyKind::Struct(ids.0)).0;
+                let struct_ref = tys.intern_kind(TyKind::Ref(strukt));
+                (*ids, method_sig_to_air_sig(ctx, &storage, struct_ref, sig))
             })
             .collect();
 
@@ -86,6 +136,7 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
             key,
             tys,
             air_sigs,
+            impl_air_sigs,
             var_index: 0,
             tables: Vec::new(),
             func_args: IndexMap::default(),
@@ -125,7 +176,7 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
     #[track_caller]
     pub fn finish_func(&mut self) -> AirFunc<'a> {
         match &mut self.instr_builder {
-            InstrBuilder::Func(b) => b.build(&self.air_sigs),
+            InstrBuilder::Func(b) => b.build(&self.air_sigs, &self.impl_air_sigs),
             InstrBuilder::Const(_) => panic!("called `finish_func` with const builder"),
         }
     }
@@ -290,7 +341,6 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
     #[track_caller]
     pub fn expect_var(&self, ident: IdentId) -> Var {
         let builder = self.expect_func_builder();
-        let ident_str = self.expect_ident(ident);
         self.var(ident)
             .or_else(|| {
                 builder.func.sig.params.iter().find_map(|p| match &p {
@@ -301,13 +351,7 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
                             None
                         }
                     }
-                    Param::Slf(ident) | Param::SlfRef(ident) => {
-                        if ident_str == "self" {
-                            self.func_args.get(ident).copied()
-                        } else {
-                            None
-                        }
-                    }
+                    Param::Slf(ident) => self.func_args.get(ident).copied(),
                 })
             })
             .expect("invalid var ident")
@@ -380,9 +424,13 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
         }
     }
 
-    pub fn call(&mut self, call: &Call, args: Args) {
-        let sig = call.sig;
+    pub fn call(&mut self, sig: &Sig, args: Args) {
         let air_sig = self.air_sigs.get(&sig.ident).unwrap();
+        self.ins(Air::Call(air_sig, args));
+    }
+
+    pub fn method_call(&mut self, sig: &Sig, strukt: StructId, args: Args) {
+        let air_sig = self.impl_air_sigs.get(&(strukt, sig.ident)).unwrap();
         self.ins(Air::Call(air_sig, args));
     }
 

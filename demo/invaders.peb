@@ -116,15 +116,26 @@ Vec2: struct {
     y: f32,
 }
 
-// impl Vec2 {
-//     length_squared: (self) -> f32 {
-//         (self.x * self.x) + (self.y * self.y)
-//     }
-//
-//     length: (self) -> f32 {
-//         sqrt_f32(self.length_squared())
-//     }
-// }
+impl Vec2 {
+    length_squared: (self) -> f32 {
+        (self*.x * self*.x) + (self*.y * self*.y)
+    }
+
+    length: (self) -> f32 {
+        sqrt_f32(self*.length_squared())
+    }
+}
+
+Vec3: struct {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+Xform: struct {
+    t: Vec3,
+    s: Vec2,
+}
 
 DOWN: const u64 = 0;
 UP: const u64 = 1;
@@ -257,18 +268,17 @@ SPEED: const f32 = 12.;
 BULLET_SPEED: const f32 = 17.;
 
 update: (state: &GameState) {
-    let mov_vec = Vec2 { x: 0., y: 0. };
-    if state*.move_dir[DOWN] { mov_vec.y += 1.; }
-    if state*.move_dir[UP] { mov_vec.y -= 1.; }
-    if state*.move_dir[RIGHT] { mov_vec.x += 1.; }
-    if state*.move_dir[LEFT] { mov_vec.x -= 1.; }
+    let movdir = Vec2 { x: 0., y: 0. };
+    if state*.move_dir[DOWN] { movdir.y += 1.; }
+    if state*.move_dir[UP] { movdir.y -= 1.; }
+    if state*.move_dir[RIGHT] { movdir.x += 1.; }
+    if state*.move_dir[LEFT] { movdir.x -= 1.; }
     
-    // let length = pos.length();
-    let length = sqrt_f32(mov_vec.x * mov_vec.x + mov_vec.y * mov_vec.y);
-    if length != 0. {
-        let norm = SPEED / length;
-        state*.player_pos.x += mov_vec.x * norm;
-        state*.player_pos.y += mov_vec.y * norm;
+    let len = movdir.length();
+    if len != 0. {
+        let norm = SPEED / len;
+        state*.player_pos.x += movdir.x * norm;
+        state*.player_pos.y += movdir.y * norm;
     }
     
     for bullet in state*.bullets {

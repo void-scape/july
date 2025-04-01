@@ -187,7 +187,7 @@ fn execute<'a>(
                 AirLinkage::Local => {
                     let func = air_funcs
                         .iter()
-                        .find(|f| f.sig.ident == sig.ident)
+                        .find(|f| f.sig == *sig)
                         .unwrap_or_else(|| panic!("invalid func"));
                     ctx.start_func(func);
 

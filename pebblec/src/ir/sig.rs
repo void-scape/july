@@ -10,6 +10,7 @@ pub struct Sig<'a> {
     pub ident: IdentId,
     pub ty: Ty,
     pub params: &'a [Param],
+    pub method_self: Option<Ty>,
     pub linkage: Linkage<'a>,
 }
 
@@ -29,16 +30,19 @@ pub enum Linkage<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Param {
+    /// Reference to Self
     Slf(Ident),
-    SlfRef(Ident),
-    Named { span: Span, ident: Ident, ty: Ty },
+    Named {
+        span: Span,
+        ident: Ident,
+        ty: Ty,
+    },
 }
 
 impl Param {
     pub fn span(&self) -> Span {
         match self {
             Self::Slf(ident) => ident.span,
-            Self::SlfRef(ident) => ident.span,
             Self::Named { span, .. } => *span,
         }
     }

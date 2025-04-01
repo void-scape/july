@@ -104,9 +104,41 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
                 ItemKind::Func(func) => Some(func),
                 _ => None,
             })
-            .map(|f| func_sig(&mut ctx, f)),
+            .map(|f| func_sig(&mut ctx, None, f)),
     )?;
     ctx.store_sigs(sigs)?;
+
+    let method_sigs = lower_set(
+        items
+            .iter()
+            .filter_map(|i| match &i.kind {
+                ItemKind::Impl(impul) => Some(impul),
+                _ => None,
+            })
+            .map(|impul| {
+                let id = ctx.store_ident(impul.ident).id;
+                match ctx.tys.struct_id(id) {
+                    Some(strukt) => {
+                        let inner = ctx.tys.intern_kind(TyKind::Struct(strukt));
+                        let method_self = ctx.tys.intern_kind(TyKind::Ref(inner.0));
+
+                        impul
+                            .funcs
+                            .iter()
+                            .map(|f| func_sig(&mut ctx, Some(method_self), f))
+                            .collect::<Result<Vec<_>, _>>()
+                            .map(|sigs| (strukt, sigs))
+                    }
+                    None => Err(ctx.report_error(
+                        impul.ident,
+                        format!("`{}` is not a valid struct", ctx.expect_ident(id)),
+                    )),
+                }
+            }),
+    )?;
+    for (strukt, sigs) in method_sigs.into_iter() {
+        ctx.store_impl_sigs(strukt, sigs)?;
+    }
 
     let extern_sigs = lower_set(
         items
@@ -115,14 +147,14 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
                 ItemKind::Extern(func) => Some(func),
                 _ => None,
             })
-            .flat_map(|f| {
+            .map(|f| {
                 f.funcs
                     .iter()
                     .map(|f| extern_sig(&mut ctx, f))
-                    .collect::<Vec<_>>()
+                    .collect::<Result<Vec<_>, _>>()
             }),
     )?;
-    ctx.store_sigs(extern_sigs)?;
+    ctx.store_sigs(extern_sigs.into_iter().flatten())?;
 
     let consts = items
         .iter()
@@ -134,6 +166,29 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
         .collect();
     let const_eval_order = add_consts(&mut ctx, &consts)?;
 
+    let methods = lower_set(
+        items
+            .iter()
+            .filter_map(|i| match &i.kind {
+                ItemKind::Impl(impul) => Some(impul),
+                _ => None,
+            })
+            .map(|impul| {
+                let id = ctx.store_ident(impul.ident).id;
+                // early return in method sigs
+                let strukt = ctx.tys.struct_id(id).unwrap();
+                let inner = ctx.tys.intern_kind(TyKind::Struct(strukt));
+                let method_self = ctx.tys.intern_kind(TyKind::Ref(inner.0));
+
+                impul
+                    .funcs
+                    .iter()
+                    .map(|f| func(&mut ctx, Some(method_self), f))
+                    .collect::<Result<Vec<_>, _>>()
+            }),
+    )?;
+    ctx.store_funcs(methods.into_iter().flatten());
+
     let funcs = lower_set(
         items
             .iter()
@@ -141,7 +196,7 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
                 ItemKind::Func(func) => Some(func),
                 _ => None,
             })
-            .map(|f| func(&mut ctx, f)),
+            .map(|f| func(&mut ctx, None, f)),
     )?;
     ctx.store_funcs(funcs);
 
@@ -584,13 +639,18 @@ impl Func<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FuncHash(pub u64);
 
-fn func_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Sig<'a>, Diag> {
+fn func_sig<'a>(
+    ctx: &mut Ctx<'a>,
+    method_self: Option<Ty>,
+    func: &rules::Func,
+) -> Result<Sig<'a>, Diag> {
     let params = params(ctx, &func.params)?;
 
     Ok(Sig {
         span: func.span,
         ident: ctx.store_ident(func.name).id,
         params: ctx.intern_slice(&params),
+        method_self,
         ty: func
             .ty
             .as_ref()
@@ -628,6 +688,7 @@ fn extern_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::ExternFunc) -> Result<Sig<'a>
         span: func.span,
         ident: ctx.store_ident(func.name).id,
         params: ctx.intern_slice(&params),
+        method_self: None,
         ty: func
             .ty
             .as_ref()
@@ -699,15 +760,18 @@ fn params<'a>(ctx: &mut Ctx<'a>, fparams: &[rules::Param]) -> Result<Vec<Param>,
                 });
             }
             rules::Param::Slf(t) => params.push(Param::Slf(ctx.store_ident(*t))),
-            rules::Param::SlfRef(t) => params.push(Param::SlfRef(ctx.store_ident(*t))),
         }
     }
 
     Ok(params)
 }
 
-fn func<'a>(ctx: &mut Ctx<'a>, func: &rules::Func) -> Result<Func<'a>, Diag> {
-    let sig = func_sig(ctx, func)?;
+fn func<'a>(
+    ctx: &mut Ctx<'a>,
+    method_self: Option<Ty>,
+    func: &rules::Func,
+) -> Result<Func<'a>, Diag> {
+    let sig = func_sig(ctx, method_self, func)?;
 
     Ok(Func {
         name_span: ctx.span(func.name),
@@ -842,7 +906,7 @@ pub enum Expr<'a> {
     Struct(StructDef<'a>),
     Enum(EnumDef),
     Call(Call<'a>),
-    //MethodCall(MethodCall<'a>),
+    MethodCall(MethodCall<'a>),
     Block(Block<'a>),
     If(If<'a>),
     Loop(Loop<'a>),
@@ -862,7 +926,7 @@ impl Expr<'_> {
             Self::Ident(ident) => ident.span,
             Self::Lit(lit) => lit.span,
             Self::Call(call) => call.span,
-            //Self::MethodCall(call) => call.span,
+            Self::MethodCall(call) => call.span,
             Self::Bin(bin) => bin.span,
             Self::Struct(def) => def.span,
             Self::Enum(enom) => enom.span,
@@ -880,39 +944,6 @@ impl Expr<'_> {
             Self::IndexOf(index) => index.span,
             Self::Range(range) => range.span,
             Self::Cast(cast) => cast.span,
-        }
-    }
-
-    pub fn is_unit(&self, ctx: &Ctx) -> bool {
-        match self {
-            Self::Ident(_)
-            | Self::Unary(_)
-            | Self::Array(_)
-            | Self::Str(_)
-            | Self::Struct(_)
-            | Self::Enum(_)
-            | Self::Access(_)
-            | Self::Bin(_)
-            | Self::Lit(_)
-            | Self::Range(_)
-            | Self::IndexOf(_)
-            | Self::Cast(_)
-            | Self::Bool(_) => false,
-            Self::Call(call) => call.sig.ty.is_unit(),
-            //Self::MethodCall(call) => ctx.tys.is_unit(call.sig.ty),
-            Self::If(if_) => {
-                let block = if_.block.is_unit(ctx);
-                let otherwise = if_.otherwise.map(|o| o.is_unit(ctx));
-                match (block, otherwise) {
-                    (c1, Some(c2)) => c1 && c2,
-                    (c, None) => c,
-                }
-            }
-            Self::Break(_) | Self::Continue(_) | Self::Loop(_) | Self::For(_) => true,
-            Self::Block(block) => match block.end {
-                Some(end) => end.is_unit(ctx),
-                None => true,
-            },
         }
     }
 }
@@ -1252,6 +1283,12 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag> {
                 ty: ptype(ctx, ty)?.1,
             })
         }
+        rules::Expr::MethodCall {
+            span,
+            lhs,
+            method,
+            args,
+        } => Expr::MethodCall(method_call(ctx, *span, lhs, *method, args)?),
         expr => panic!("expected expression: {expr:#?}"),
     })
 }
@@ -1367,8 +1404,8 @@ pub struct Return<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct MethodCall<'a> {
     pub span: Span,
-    pub sig: &'a Sig<'a>,
     pub lhs: &'a Expr<'a>,
+    pub call: Ident,
     pub args: &'a [Expr<'a>],
 }
 
@@ -1377,22 +1414,16 @@ fn method_call<'a>(
     ctx: &mut Ctx<'a>,
     span: Span,
     lhs: &rules::Expr,
-    name: TokenId,
+    call: TokenId,
     call_args: &[rules::Expr],
 ) -> Result<MethodCall<'a>, Diag> {
-    todo!()
-    //let name = ctx.store_ident(name);
-    //let strukt = ctx.tys.expect_struct_id(strukt);
-    //let lhs = pexpr(ctx, lhs)?;
-
-    //Ok(MethodCall {
-    //    sig: ctx
-    //        .get_method_sig(strukt, name.id)
-    //        .ok_or_else(|| ctx.report_error(name, "function is not defined"))?,
-    //    lhs: ctx.intern(lhs),
-    //    args: args(ctx, call_args)?,
-    //    span,
-    //})
+    let lhs = pexpr(ctx, lhs)?;
+    Ok(MethodCall {
+        span,
+        lhs: ctx.intern(lhs),
+        call: ctx.store_ident(call),
+        args: args(ctx, call_args)?,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]

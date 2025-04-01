@@ -135,11 +135,11 @@ pub struct Item {
     pub source: usize,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemKind {
     Func(Func),
     Struct(Struct),
-    #[allow(unused)]
     Enum(Enum),
     Const(Const),
     Use(Use),
@@ -228,14 +228,13 @@ pub fn parse<'a>(buffer: &'a TokenBuffer) -> Result<Vec<Item>, Diag> {
                     }
                     Ok(e) => {
                         for func in e.funcs.iter() {
-                            if let Some(_self) = func.params.iter().find(|p| {
-                                matches!(p, Param::Slf(_)) || matches!(p, Param::SlfRef(_))
-                            }) {
+                            if let Some(_self) =
+                                func.params.iter().find(|p| matches!(p, Param::Slf(_)))
+                            {
                                 diags.push(PErr::Fail(stream.report_error(
-                                    "extern function cannot contain `self`",
+                                    "free function cannot contain `self`",
                                     match _self {
                                         Param::Slf(t) => stream.span(*t),
-                                        Param::SlfRef(t) => stream.span(*t),
                                         _ => unreachable!(),
                                     },
                                 )));

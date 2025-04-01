@@ -72,7 +72,7 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    pub fn store_funcs(&mut self, funcs: Vec<Func<'a>>) {
+    pub fn store_funcs(&mut self, funcs: impl IntoIterator<Item = Func<'a>>) {
         self.funcs.extend(funcs.into_iter());
     }
 
@@ -80,7 +80,7 @@ impl<'a> Ctx<'a> {
         self.tys.build_layouts();
     }
 
-    pub fn store_sigs(&mut self, sigs: Vec<Sig<'a>>) -> Result<(), Diag> {
+    pub fn store_sigs(&mut self, sigs: impl IntoIterator<Item = Sig<'a>>) -> Result<(), Diag> {
         let mut errors = Vec::new();
         for sig in sigs.into_iter() {
             if let Some(other) = self.sigs.insert(sig.ident, self.intern(sig)) {
@@ -103,32 +103,32 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    //pub fn store_impl_sigs(
-    //    &mut self,
-    //    strukt: StructId,
-    //    sigs: Vec<Sig<'a>>,
-    //) -> Result<(), Diag> {
-    //    for sig in sigs.into_iter() {
-    //        if let Some(other) = self.impl_sigs.insert((strukt, sig.ident), self.intern(sig)) {
-    //            return Err(self
-    //                .report_error(
-    //                    sig.span,
-    //                    format!("`{}` is already defined", sig.ident.to_string(self)),
-    //                )
-    //                .msg(Msg::help(other.span, "previously defined here")));
-    //        }
-    //    }
-    //
-    //    Ok(())
-    //}
+    pub fn store_impl_sigs(&mut self, strukt: StructId, sigs: Vec<Sig<'a>>) -> Result<(), Diag> {
+        for sig in sigs.into_iter() {
+            if let Some(other) = self.impl_sigs.insert((strukt, sig.ident), self.intern(sig)) {
+                return Err(self
+                    .report_error(
+                        sig.span,
+                        format!("`{}` is already defined", sig.ident.to_string(self)),
+                    )
+                    .msg(Msg::help(
+                        &self.source_map,
+                        other.span,
+                        "previously defined here",
+                    )));
+            }
+        }
+
+        Ok(())
+    }
 
     pub fn get_sig(&self, ident: IdentId) -> Option<&'a Sig<'a>> {
         self.sigs.get(&ident).copied()
     }
 
-    //pub fn get_method_sig(&self, strukt: StructId, ident: IdentId) -> Option<&'a Sig<'a>> {
-    //    self.impl_sigs.get(&(strukt, ident)).copied()
-    //}
+    pub fn get_method_sig(&self, strukt: StructId, ident: IdentId) -> Option<&'a Sig<'a>> {
+        self.impl_sigs.get(&(strukt, ident)).copied()
+    }
 
     #[track_caller]
     pub fn store_ident(&mut self, ident: TokenId) -> Ident {

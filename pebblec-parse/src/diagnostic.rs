@@ -232,7 +232,7 @@ impl RawDiag {
             .entry(self.span.source)
             .or_default()
             .push(Msg::new(
-                Level::Error,
+                self.level,
                 self.source.clone(),
                 self.span,
                 self.title,

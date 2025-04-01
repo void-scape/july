@@ -175,6 +175,8 @@ impl TyKind {
     pub fn equiv(self, other: Self) -> bool {
         match (self, other) {
             (TyKind::Ref(TyKind::Array(_, lhs)), TyKind::Ref(TyKind::Slice(rhs))) => lhs == rhs,
+            (TyKind::Ref(_), TyKind::Int(IntTy::PTR)) => true,
+            (TyKind::Int(IntTy::PTR), TyKind::Ref(_)) => true,
             _ => self == other,
         }
     }

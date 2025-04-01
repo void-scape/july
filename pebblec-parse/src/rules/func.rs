@@ -95,7 +95,6 @@ pub struct ExternFunc {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Param {
     Slf(TokenId),
-    SlfRef(TokenId),
     Named {
         span: Span,
         name: TokenId,
@@ -253,16 +252,6 @@ impl<'a, 's> ParserRule<'a> for ParamsRule {
                 }
 
                 match slice.peek_kind() {
-                    Some(TokenKind::Ampersand) => {
-                        let _ref = slice.expect();
-                        if slice.match_peek::<Slf>() {
-                            let _self = slice.expect();
-                            let comma = Opt::<Next<Comma>>::parse(&mut slice)?;
-                            params.push((comma, Param::SlfRef(_self)));
-                        } else {
-                            return Err(slice.fail("expected `self` or `{identifier}`"));
-                        }
-                    }
                     Some(TokenKind::Slf) => {
                         let _self = slice.expect();
                         let comma = Opt::<Next<Comma>>::parse(&mut slice)?;

@@ -5,7 +5,7 @@ pub fn sem_analysis_pre_typing<'a>(ctx: &Ctx<'a>) -> Result<(), Diag> {
     let mut ctx = SemCtx::new(ctx);
 
     ctx.sem_try(entry);
-    ctx.sem_func(end_is_return);
+    //ctx.sem_func(end_is_return);
 
     if ctx.diags.is_empty() {
         Ok(())
@@ -15,6 +15,7 @@ pub fn sem_analysis_pre_typing<'a>(ctx: &Ctx<'a>) -> Result<(), Diag> {
 }
 
 pub fn sem_analysis(_ctx: &Ctx, _key: &TypeKey) -> Result<(), Diag> {
+    // TODO: end_is_return with full type resolution (method calls)
     Ok(())
 }
 
@@ -92,52 +93,53 @@ fn entry(ctx: &mut SemCtx) -> Result<(), Diag> {
 }
 
 fn end_is_return(ctx: &SemCtx, func: &Func) -> Result<(), Diag> {
-    if func.sig.ty == Ty::UNIT && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
-        Err(ctx
-            .report_error(
-                func.block.end.as_ref().unwrap().span(),
-                "invalid return type: expected `()`",
-            )
-            .msg(Msg::help(
-                &ctx.source_map,
-                func.sig.span,
-                "function has no return type",
-            )))
-    } else if func.sig.ty != Ty::UNIT && func.block.end.is_none() {
-        if let Some(stmt) = func.block.stmts.last() {
-            match stmt {
-                Stmt::Semi(semi) => match semi {
-                    SemiStmt::Ret(_) => {
-                        return Ok(());
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-
-            Err(ctx
-                .report_error(
-                    stmt.span(),
-                    format!(
-                        "invalid return type: expected `{}`, got `()`",
-                        func.sig.ty.to_string(ctx)
-                    ),
-                )
-                .msg(Msg::help(
-                    &ctx.source_map,
-                    func.sig.span,
-                    "inferred from signature",
-                )))
-        } else {
-            Err(ctx.report_error(
-                func.block.span,
-                format!(
-                    "invalid return type: expected `{}`",
-                    func.sig.ty.to_string(ctx)
-                ),
-            ))
-        }
-    } else {
-        Ok(())
-    }
+    todo!()
+    //if func.sig.ty == Ty::UNIT && func.block.end.is_some_and(|b| !b.is_unit(ctx)) {
+    //    Err(ctx
+    //        .report_error(
+    //            func.block.end.as_ref().unwrap().span(),
+    //            "invalid return type: expected `()`",
+    //        )
+    //        .msg(Msg::help(
+    //            &ctx.source_map,
+    //            func.sig.span,
+    //            "function has no return type",
+    //        )))
+    //} else if func.sig.ty != Ty::UNIT && func.block.end.is_none() {
+    //    if let Some(stmt) = func.block.stmts.last() {
+    //        match stmt {
+    //            Stmt::Semi(semi) => match semi {
+    //                SemiStmt::Ret(_) => {
+    //                    return Ok(());
+    //                }
+    //                _ => {}
+    //            },
+    //            _ => {}
+    //        }
+    //
+    //        Err(ctx
+    //            .report_error(
+    //                stmt.span(),
+    //                format!(
+    //                    "invalid return type: expected `{}`, got `()`",
+    //                    func.sig.ty.to_string(ctx)
+    //                ),
+    //            )
+    //            .msg(Msg::help(
+    //                &ctx.source_map,
+    //                func.sig.span,
+    //                "inferred from signature",
+    //            )))
+    //    } else {
+    //        Err(ctx.report_error(
+    //            func.block.span,
+    //            format!(
+    //                "invalid return type: expected `{}`",
+    //                func.sig.ty.to_string(ctx)
+    //            ),
+    //        ))
+    //    }
+    //} else {
+    //    Ok(())
+    //}
 }

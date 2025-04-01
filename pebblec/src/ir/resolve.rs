@@ -1,4 +1,5 @@
 use super::Stmt;
+use super::strukt::StructId;
 use super::ty::infer::Integral;
 use super::*;
 use crate::ir::ctx::{Ctx, CtxFmt};
@@ -60,7 +61,10 @@ fn init_params(infer: &mut InferCtx, func: &Func) {
                 let var = infer.new_var(*ident);
                 infer.eq(var, *ty, *span);
             }
-            _ => todo!(),
+            Param::Slf(ident) => {
+                let var = infer.new_var(*ident);
+                infer.eq(var, func.sig.method_self.unwrap(), ident.span);
+            }
         }
     }
 }
@@ -69,6 +73,7 @@ impl Expr<'_> {
     /// Fails when:
     ///     aquiring field access type Fails
     ///     ident is undefined
+    ///     could not get sig for method
     pub fn resolve_infer<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<InferTy, Diag> {
         Ok(match self {
             Self::Lit(lit) => match lit.kind {
@@ -99,6 +104,7 @@ impl Expr<'_> {
             }
             Self::Access(access) => InferTy::Ty(aquire_access_ty(ctx, infer, access)?.1),
             Self::Call(call) => InferTy::Ty(call.sig.ty),
+            Self::MethodCall(call) => InferTy::Ty(call.get_sig(ctx, infer)?.ty),
             Self::Str(_) => InferTy::Ty(Ty::STR_LIT),
             Self::Bin(bin) => {
                 let lhs = bin.lhs.resolve_infer(ctx, infer)?;
@@ -226,7 +232,7 @@ impl Expr<'_> {
                 }),
             },
             Self::Cast(cast) => InferTy::Ty(cast.ty),
-            ty => todo!("{ty:?}"),
+            _ => todo!(),
         })
     }
 
@@ -488,6 +494,39 @@ impl Expr<'_> {
             _ => None,
         }
     }
+
+    pub fn is_unit(&self, ctx: &Ctx, infer: &InferCtx) -> bool {
+        match self {
+            Self::Ident(_)
+            | Self::Unary(_)
+            | Self::Array(_)
+            | Self::Str(_)
+            | Self::Struct(_)
+            | Self::Enum(_)
+            | Self::Access(_)
+            | Self::Bin(_)
+            | Self::Lit(_)
+            | Self::Range(_)
+            | Self::IndexOf(_)
+            | Self::Cast(_)
+            | Self::Bool(_) => false,
+            Self::Call(call) => call.sig.ty.is_unit(),
+            Self::MethodCall(call) => todo!(),
+            Self::If(if_) => {
+                let block = if_.block.is_unit(ctx, infer);
+                let otherwise = if_.otherwise.map(|o| o.is_unit(ctx, infer));
+                match (block, otherwise) {
+                    (c1, Some(c2)) => c1 && c2,
+                    (c, None) => c,
+                }
+            }
+            Self::Break(_) | Self::Continue(_) | Self::Loop(_) | Self::For(_) => true,
+            Self::Block(block) => match block.end {
+                Some(end) => end.is_unit(ctx, infer),
+                None => true,
+            },
+        }
+    }
 }
 
 pub trait Constrain<'a>: Debug {
@@ -571,7 +610,7 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
                     }
                 }
 
-                if assign.rhs.is_unit(ctx) {
+                if assign.rhs.is_unit(ctx, infer) {
                     return Err(ctx.report_error(
                         assign.rhs.span(),
                         "cannot assign value to an expression of type `()`",
@@ -605,6 +644,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Struct(def) => def.constrain(ctx, infer, sig),
             Self::Enum(def) => def.constrain(ctx, infer, sig),
             Self::Call(call) => call.constrain(ctx, infer, sig),
+            Self::MethodCall(call) => call.constrain(ctx, infer, sig),
             Self::Block(block) => block.constrain(ctx, infer, sig),
             Self::If(if_) => if_.constrain(ctx, infer, sig),
             Self::Loop(loop_) => loop_.constrain(ctx, infer, sig),
@@ -672,9 +712,26 @@ impl<'a> Constrain<'a> for StructDef<'a> {
         let mut errors = Vec::new();
 
         for field_def in self.fields.iter() {
-            let field_map = ctx.tys.fields(self.id);
-            let field_ty = field_map.field_ty(field_def.name.id).unwrap();
             field_def.expr.constrain(ctx, infer, sig)?;
+
+            let field_map = ctx.tys.fields(self.id);
+            let field_ty = match field_map.field_ty(field_def.name.id) {
+                Some(ty) => ty,
+                None => {
+                    let strukt = ctx.tys.strukt(self.id);
+                    return Err(ctx
+                        .report_error(
+                            field_def.name,
+                            format!(
+                                "`{}` has no field `{}`",
+                                ctx.expect_ident(ctx.tys.strukt(self.id).name.id),
+                                ctx.expect_ident(field_def.name.id),
+                            ),
+                        )
+                        .join(ctx.report_help(strukt.span, "Struct defined here")));
+                }
+            };
+
             if let Err(diag) =
                 field_def
                     .expr
@@ -808,6 +865,118 @@ impl<'a> Constrain<'a> for Call<'a> {
     }
 }
 
+impl MethodCall<'_> {
+    pub fn get_struct(&self, ctx: &mut Ctx, infer: &InferCtx) -> Result<StructId, Diag> {
+        let infer_ty = self.lhs.resolve_infer(ctx, infer)?;
+        match infer_ty {
+            InferTy::Int | InferTy::Float => {
+                return Err(ctx.report_error(
+                    self.lhs.span(),
+                    format!("`{}` has no methods", infer_ty.to_string(ctx)),
+                ));
+            }
+            InferTy::Ty(ty) => match ty.0 {
+                TyKind::Struct(strukt) => Ok(*strukt),
+                _ => {
+                    return Err(ctx.report_error(
+                        self.lhs.span(),
+                        format!("`{}` has no methods", ty.to_string(ctx)),
+                    ));
+                }
+            },
+        }
+    }
+
+    pub fn get_sig<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<&'a Sig<'a>, Diag> {
+        let strukt = self.get_struct(ctx, infer)?;
+        ctx.get_method_sig(strukt, self.call.id).ok_or_else(|| {
+            ctx.report_error(
+                self.call,
+                format!(
+                    "`{}` has no method `{}`",
+                    ctx.expect_ident(ctx.tys.strukt(strukt).name.id),
+                    ctx.expect_ident(self.call.id),
+                ),
+            )
+        })
+    }
+}
+
+impl<'a> Constrain<'a> for MethodCall<'a> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
+        for expr in self.args.iter() {
+            expr.constrain(ctx, infer, sig)?;
+        }
+
+        let method_sig = self.get_sig(ctx, infer)?;
+        for (i, param) in method_sig.params.iter().enumerate() {
+            match param {
+                Param::Slf(_) => {
+                    if i != 0 {
+                        return Err(
+                            ctx.report_error(param.span(), "`self` must be the first parameter")
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut errors = Vec::new();
+        let params = method_sig.params.len().saturating_sub(1);
+        let args = self.args.len();
+
+        if params != args {
+            return Err(ctx
+                .report_error(
+                    self.call,
+                    format!("expected `{}` arguments, got `{}`", params, args),
+                )
+                .msg(Msg::help(
+                    &ctx.source_map,
+                    self.call.span,
+                    "function defined here",
+                )));
+        }
+
+        let strukt = self.get_struct(ctx, infer)?;
+        for (i, (expr, param)) in self.args.iter().zip(method_sig.params.iter()).enumerate() {
+            let (span, ty) = match param {
+                Param::Slf(ident) => {
+                    let inner = ctx.tys.intern_kind(TyKind::Struct(strukt)).0;
+                    (ident.span, ctx.tys.intern_kind(TyKind::Ref(inner)))
+                }
+                Param::Named { span, ty, .. } => (*span, *ty),
+            };
+
+            let expr = if i == 0 { &self.lhs } else { expr };
+            match expr {
+                Expr::Ident(ident) => match infer.var(ident.id) {
+                    Some(var) => {
+                        if ctx.expect_ident(ident.id) != "NULL" {
+                            infer.eq(var, ty, span);
+                        }
+                    }
+                    None => {
+                        errors.push(ctx.undeclared(ident));
+                    }
+                },
+                _ => {
+                    if let Err(diag) = expr.infer_equality(ctx, infer, ty, span) {
+                        errors.push(diag);
+                    }
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            Err(Diag::bundle(errors))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl<'a> Block<'a> {
     fn block_constrain(
         &self,
@@ -863,7 +1032,7 @@ impl<'a> Constrain<'a> for If<'a> {
 
 impl<'a> Constrain<'a> for Loop<'a> {
     fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
-        validate_loop_block(ctx, sig, &self.block)?;
+        validate_loop_block(ctx, infer, sig, &self.block)?;
         self.block.constrain(ctx, infer, sig)?;
         Expr::Block(self.block).infer_equality(ctx, infer, Ty::UNIT, self.span)
     }
@@ -925,7 +1094,7 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
             self.iter.constrain(ctx, infer, sig)?;
             self.block.constrain(ctx, infer, sig)?;
 
-            validate_loop_block(ctx, sig, &self.block)?;
+            validate_loop_block(ctx, infer, sig, &self.block)?;
             Expr::Block(self.block).infer_equality(ctx, infer, Ty::UNIT, self.span)
         })
     }
@@ -934,9 +1103,14 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
 // TODO: this sort of thing should be automated.
 //
 // Have a function like `verify_all_returns`, and `verify_openness`
-fn validate_loop_block<'a>(ctx: &Ctx<'a>, sig: &Sig, block: &Block) -> Result<(), Diag> {
+fn validate_loop_block<'a>(
+    ctx: &Ctx<'a>,
+    infer: &InferCtx,
+    sig: &Sig,
+    block: &Block,
+) -> Result<(), Diag> {
     if let Some(end) = block.end {
-        if !end.is_unit(ctx) {
+        if !end.is_unit(ctx, infer) {
             return Err(ctx.report_error(end.span(), "mismatched types: expected `()`"));
         }
     }

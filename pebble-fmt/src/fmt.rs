@@ -47,7 +47,7 @@ pub fn fmt_string(str: String) -> Option<String> {
                 check_whitespace(&buf, uze.uze, &mut nodes);
                 nodes.extend([nodify_use(&buf, &arena, uze), Node::nl()]);
             }
-            _ => {} //_ => todo!(),
+            _ => todo!(),
         }
     }
 
