@@ -83,10 +83,28 @@ impl<'a, 's> ParserRule<'a> for AssignRule {
     type Output = Expr;
 
     fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
-        let mut slice = stream.slice(stream.find_offset::<Any<(Equals, Plus, Hyphen)>>());
-        let expr = ExprRule::parse(&mut slice)?;
-        stream.eat_until::<Any<(Equals, Plus, Hyphen)>>();
+        let offset = stream.find_offset::<Equals>();
+        let mut slice = stream.slice(offset);
+        stream.eat_n(offset);
 
+        while Any::<(
+            Hyphen,
+            Plus,
+            Asterisk,
+            Slash,
+            Percent,
+            Caret,
+            Ampersand,
+            Pipe,
+            CloseAngle,
+            OpenAngle,
+        )>::matches(Some(stream.kind(stream.prev())))
+        {
+            stream.back();
+            slice.shrink();
+        }
+
+        let expr = ExprRule::parse(&mut slice)?;
         match stream.peek_kind() {
             Some(TokenKind::Equals) => {
                 _ = stream.expect();
@@ -106,11 +124,74 @@ impl<'a, 's> ParserRule<'a> for AssignRule {
                     }))
                 }
             }
-            Some(TokenKind::Plus) => {
-                let _plus = stream.expect();
+            Some(TokenKind::Hyphen)
+            | Some(TokenKind::Plus)
+            | Some(TokenKind::Asterisk)
+            | Some(TokenKind::Slash)
+            | Some(TokenKind::Percent)
+            | Some(TokenKind::Caret)
+            | Some(TokenKind::Ampersand)
+            | Some(TokenKind::Pipe)
+            | Some(TokenKind::CloseAngle)
+            | Some(TokenKind::OpenAngle) => {
+                let first = stream.expect();
                 let next = stream.next();
-                match next.map(|next| stream.kind(next)) {
-                    Some(TokenKind::Equals) => Ok({
+                Ok(match next.map(|next| stream.kind(next)) {
+                    Some(TokenKind::Equals) => {
+                        let lhs = Box::new(expr);
+                        let rhs = Box::new(ExprRule::parse(stream).map_err(PErr::fail)?);
+
+                        let kind = match stream.kind(first) {
+                            TokenKind::Hyphen => AssignKind::Sub,
+                            TokenKind::Plus => AssignKind::Add,
+                            TokenKind::Asterisk => AssignKind::Mul,
+                            TokenKind::Slash => AssignKind::Div,
+                            TokenKind::Percent => AssignKind::Rem,
+                            TokenKind::Caret => AssignKind::Xor,
+                            TokenKind::Ampersand => AssignKind::And,
+                            TokenKind::Pipe => AssignKind::Or,
+                            TokenKind::OpenAngle => {
+                                return Err(PErr::Fail(stream.report_error(
+                                    "expected assignment `=` or shift left assignment `<<=`",
+                                    Span::from_spans(
+                                        stream.span(first),
+                                        stream.span(next.unwrap()),
+                                    ),
+                                )));
+                            }
+                            TokenKind::CloseAngle => {
+                                return Err(PErr::Fail(stream.report_error(
+                                    "expected assignment `=` or shift right assignment `>>=`",
+                                    Span::from_spans(
+                                        stream.span(first),
+                                        stream.span(next.unwrap()),
+                                    ),
+                                )));
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        Expr::Assign(Assign {
+                            span: Span::from_spans(
+                                lhs.span(stream.token_buffer()),
+                                rhs.span(stream.token_buffer()),
+                            ),
+                            kind,
+                            lhs,
+                            rhs,
+                        })
+                    }
+                    Some(TokenKind::OpenAngle) => {
+                        if stream.match_peek::<Equals>()
+                            && stream.kind(first) != TokenKind::OpenAngle
+                        {
+                            return Err(PErr::Fail(stream.report_error(
+                                "expected assignment `=` or shift left assignment `<<=`",
+                                Span::from_spans(stream.span(first), stream.span(next.unwrap())),
+                            )));
+                        }
+
+                        stream.eat();
                         let lhs = Box::new(expr);
                         let rhs = Box::new(ExprRule::parse(stream).map_err(PErr::fail)?);
 
@@ -119,19 +200,22 @@ impl<'a, 's> ParserRule<'a> for AssignRule {
                                 lhs.span(stream.token_buffer()),
                                 rhs.span(stream.token_buffer()),
                             ),
-                            kind: AssignKind::Add,
+                            kind: AssignKind::Shl,
                             lhs,
                             rhs,
                         })
-                    }),
-                    _ => Err(stream.recover("expected `+`")),
-                }
-            }
-            Some(TokenKind::Hyphen) => {
-                let _plus = stream.expect();
-                let next = stream.next();
-                match next.map(|next| stream.kind(next)) {
-                    Some(TokenKind::Equals) => Ok({
+                    }
+                    Some(TokenKind::CloseAngle) => {
+                        if stream.match_peek::<Equals>()
+                            && stream.kind(first) != TokenKind::CloseAngle
+                        {
+                            return Err(PErr::Fail(stream.report_error(
+                                "expected assignment `=` or shift right assignment `>>=`",
+                                Span::from_spans(stream.span(first), stream.span(next.unwrap())),
+                            )));
+                        }
+
+                        stream.eat();
                         let lhs = Box::new(expr);
                         let rhs = Box::new(ExprRule::parse(stream).map_err(PErr::fail)?);
 
@@ -140,13 +224,13 @@ impl<'a, 's> ParserRule<'a> for AssignRule {
                                 lhs.span(stream.token_buffer()),
                                 rhs.span(stream.token_buffer()),
                             ),
-                            kind: AssignKind::Sub,
+                            kind: AssignKind::Shr,
                             lhs,
                             rhs,
                         })
-                    }),
-                    _ => Err(stream.recover("expected `-`")),
-                }
+                    }
+                    _ => return Err(stream.recover("expected assignment")),
+                })
             }
             _ => Err(stream.recover("expected assignment")),
         }

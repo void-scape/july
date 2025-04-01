@@ -43,6 +43,10 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag> {
         }) {
             errors.push(diag);
         }
+
+        if let Err(diag) = verify_end_is_return(ctx, &infer, func) {
+            errors.push(diag);
+        }
     }
 
     ctx.funcs = funcs;
@@ -51,6 +55,62 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag> {
         Err(Diag::bundle(errors))
     } else {
         infer.unify_top_scope(ctx).map(|_| infer.into_key())
+    }
+}
+
+fn verify_end_is_return(ctx: &mut Ctx, infer: &InferCtx, func: &Func) -> Result<(), Diag> {
+    if func.sig.ty == Ty::UNIT
+        && func
+            .block
+            .end
+            .is_some_and(|b| b.is_unit(ctx, infer).is_ok_and(|u| !u))
+    {
+        Err(ctx
+            .report_error(
+                func.block.end.as_ref().unwrap().span(),
+                "invalid return type: expected `()`",
+            )
+            .msg(Msg::help(
+                &ctx.source_map,
+                func.sig.span,
+                "function has no return type",
+            )))
+    } else if func.sig.ty != Ty::UNIT && func.block.end.is_none() {
+        if let Some(stmt) = func.block.stmts.last() {
+            match stmt {
+                Stmt::Semi(semi) => match semi {
+                    SemiStmt::Ret(_) => {
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+
+            Err(ctx
+                .report_error(
+                    stmt.span(),
+                    format!(
+                        "invalid return type: expected `{}`, got `()`",
+                        func.sig.ty.to_string(ctx)
+                    ),
+                )
+                .msg(Msg::help(
+                    &ctx.source_map,
+                    func.sig.span,
+                    "inferred from signature",
+                )))
+        } else {
+            Err(ctx.report_error(
+                func.block.span,
+                format!(
+                    "invalid return type: expected `{}`",
+                    func.sig.ty.to_string(ctx)
+                ),
+            ))
+        }
+    } else {
+        Ok(())
     }
 }
 
@@ -232,7 +292,8 @@ impl Expr<'_> {
                 }),
             },
             Self::Cast(cast) => InferTy::Ty(cast.ty),
-            _ => todo!(),
+            Self::Range(_) => InferTy::Int,
+            expr => todo!("{expr:#?}"),
         })
     }
 
@@ -315,7 +376,7 @@ impl Expr<'_> {
                 infer.eq(var, ty, source);
             }
             InferTy::Float => {
-                if !ty.is_int() {
+                if !ty.is_float() {
                     return Err(ctx.mismatch(span, ty, "{float}"));
                 }
                 infer.eq(var, ty, source);
@@ -412,14 +473,30 @@ impl Expr<'_> {
             },
             Expr::Bin(bin) => {
                 if !bin.kind.output_is_input() {
-                    assert!(!bin.kind.output_is_input());
                     if ty != Ty::BOOL {
                         Err(ctx.mismatch(bin.span, ty, Ty::BOOL))
                     } else {
-                        bin.constrain(ctx, infer, sig)
+                        if bin.kind.logical() {
+                            bin.lhs.infer_equality(ctx, infer, Ty::BOOL, bin.span)?;
+                            bin.rhs.infer_equality(ctx, infer, Ty::BOOL, bin.span)
+                        } else {
+                            let lhs = bin.lhs.resolve_infer(ctx, infer)?;
+                            let rhs = bin.rhs.resolve_infer(ctx, infer)?;
+                            if !lhs.equiv(rhs) {
+                                Err(ctx.report_error(
+                                    bin.span,
+                                    format!(
+                                        "lhs and rhs are of different types: `{}` and `{}`",
+                                        lhs.to_string(ctx),
+                                        rhs.to_string(ctx)
+                                    ),
+                                ))
+                            } else {
+                                Ok(())
+                            }
+                        }
                     }
                 } else {
-                    assert!(bin.kind.output_is_input());
                     bin.lhs.constrain_with(ctx, infer, sig, ty, source)?;
                     bin.rhs.constrain_with(ctx, infer, sig, ty, source)
                 }
@@ -483,10 +560,7 @@ impl Expr<'_> {
                 let lhs = bin.lhs.find_ty_var(ctx, infer);
                 let rhs = bin.rhs.find_ty_var(ctx, infer);
                 match (lhs, rhs) {
-                    (Some(lhs), Some(rhs)) => {
-                        infer.var_eq(ctx, lhs, rhs);
-                        Some(lhs)
-                    }
+                    (Some(lhs), Some(_rhs)) => Some(lhs),
                     (Some(var), _) | (_, Some(var)) => Some(var),
                     _ => None,
                 }
@@ -495,8 +569,9 @@ impl Expr<'_> {
         }
     }
 
-    pub fn is_unit(&self, ctx: &Ctx, infer: &InferCtx) -> bool {
-        match self {
+    /// Fails if a method call cannot retrieve a signature
+    pub fn is_unit(&self, ctx: &mut Ctx, infer: &InferCtx) -> Result<bool, Diag> {
+        Ok(match self {
             Self::Ident(_)
             | Self::Unary(_)
             | Self::Array(_)
@@ -511,21 +586,21 @@ impl Expr<'_> {
             | Self::Cast(_)
             | Self::Bool(_) => false,
             Self::Call(call) => call.sig.ty.is_unit(),
-            Self::MethodCall(call) => todo!(),
+            Self::MethodCall(call) => call.get_sig(ctx, infer)?.ty.is_unit(),
             Self::If(if_) => {
-                let block = if_.block.is_unit(ctx, infer);
+                let block = if_.block.is_unit(ctx, infer)?;
                 let otherwise = if_.otherwise.map(|o| o.is_unit(ctx, infer));
                 match (block, otherwise) {
-                    (c1, Some(c2)) => c1 && c2,
+                    (c1, Some(c2)) => c1 && c2?,
                     (c, None) => c,
                 }
             }
             Self::Break(_) | Self::Continue(_) | Self::Loop(_) | Self::For(_) => true,
             Self::Block(block) => match block.end {
-                Some(end) => end.is_unit(ctx, infer),
+                Some(end) => end.is_unit(ctx, infer)?,
                 None => true,
             },
-        }
+        })
     }
 }
 
@@ -610,7 +685,7 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
                     }
                 }
 
-                if assign.rhs.is_unit(ctx, infer) {
+                if assign.rhs.is_unit(ctx, infer)? {
                     return Err(ctx.report_error(
                         assign.rhs.span(),
                         "cannot assign value to an expression of type `()`",
@@ -1061,30 +1136,30 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
                     Ok(())
                 }
                 _ => match self.iterable.resolve_infer(ctx, infer)? {
-                    InferTy::Ty(ty) => {
-                        match ty.0 {
-                            TyKind::Array(_, inner) => {
-                                let var = infer.new_var(self.iter);
-                                infer.eq(
-                                    var,
-                                    ctx.tys.intern_kind(TyKind::Ref(inner)),
-                                    self.iterable.span(),
-                                );
-                                Ok(())
-                            }
-                            TyKind::Ref(TyKind::Slice(inner)) => {
-                                let var = infer.new_var(self.iter);
-                                infer.eq(
-                                    var,
-                                    ctx.tys.intern_kind(TyKind::Ref(inner)),
-                                    self.iterable.span(),
-                                );
-                                Ok(())
-                            }
-                            _ => Err(ctx
-                                .report_error(self.iterable.span(), "expression is not iterable")),
+                    InferTy::Ty(ty) => match ty.0 {
+                        TyKind::Array(_, inner) => {
+                            let var = infer.new_var(self.iter);
+                            infer.eq(
+                                var,
+                                ctx.tys.intern_kind(TyKind::Ref(inner)),
+                                self.iterable.span(),
+                            );
+                            Ok(())
                         }
-                    }
+                        TyKind::Ref(TyKind::Slice(inner)) => {
+                            let var = infer.new_var(self.iter);
+                            infer.eq(
+                                var,
+                                ctx.tys.intern_kind(TyKind::Ref(inner)),
+                                self.iterable.span(),
+                            );
+                            Ok(())
+                        }
+                        ty => Err(ctx.report_error(
+                            self.iterable.span(),
+                            format!("expression of type `{}` is not iterable", ty.to_string(ctx)),
+                        )),
+                    },
                     InferTy::Int | InferTy::Float => {
                         Err(ctx.report_error(self.iterable.span(), "expression is not iterable"))
                     }
@@ -1104,13 +1179,13 @@ impl<'a> Constrain<'a> for ForLoop<'a> {
 //
 // Have a function like `verify_all_returns`, and `verify_openness`
 fn validate_loop_block<'a>(
-    ctx: &Ctx<'a>,
+    ctx: &mut Ctx<'a>,
     infer: &InferCtx,
     sig: &Sig,
     block: &Block,
 ) -> Result<(), Diag> {
     if let Some(end) = block.end {
-        if !end.is_unit(ctx, infer) {
+        if !end.is_unit(ctx, infer)? {
             return Err(ctx.report_error(end.span(), "mismatched types: expected `()`"));
         }
     }

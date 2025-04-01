@@ -93,13 +93,16 @@ pub enum Air<'a> {
     /// Binary operations use [`Reg::A`] and [`Reg::B`], then store result in [`Reg::A`].
     ///
     /// TODO: need sign and overflow settings
-    AddAB(Width, Sign),
-    SubAB(Width, Sign),
     MulAB(Width, Sign),
     DivAB(Width, Sign),
+    RemAB(Width, Sign),
 
-    ShlAB(Width),
-    ShrAB(Width),
+    AddAB(Width, Sign),
+    SubAB(Width, Sign),
+
+    ShlAB(Width, Sign),
+    ShrAB(Width, Sign),
+
     BandAB(Width),
     XorAB(Width),
     BorAB(Width),
@@ -111,10 +114,12 @@ pub enum Air<'a> {
     LeAB(Width, Sign),
     GeAB(Width, Sign),
 
-    FAddAB(Width),
-    FSubAB(Width),
     FMulAB(Width),
     FDivAB(Width),
+    FRemAB(Width),
+
+    FAddAB(Width),
+    FSubAB(Width),
 
     FEqAB(Width),
     NFEqAB(Width),
@@ -124,9 +129,8 @@ pub enum Air<'a> {
     FGeAB(Width),
 
     CastA {
-        from: Prim,
-        to: Prim,
-        width: Width,
+        from: (Prim, Width),
+        to: (Prim, Width),
     },
 
     FSqrt(FloatTy),
@@ -911,6 +915,7 @@ fn load_addr_index_of(ctx: &mut AirCtx, index: &IndexOf, dst: Reg) -> Ty {
     Ty(ty)
 }
 
+#[track_caller]
 fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
     match &expr {
         Expr::IndexOf(index) => {
@@ -1018,7 +1023,12 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
         }
         Expr::Ident(ident) => {
             let other = OffsetVar::zero(ctx.expect_var(ident.id));
-            assert!(ctx.expect_var_ty(other.var).equiv(*ty.0));
+            assert!(
+                ctx.expect_var_ty(other.var).equiv(*ty.0),
+                "`{:?}` != `{:?}`",
+                ctx.expect_var_ty(other.var),
+                ty.0,
+            );
             assign_var_other(ctx, dst, other, ty);
         }
         Expr::Access(access) => {
@@ -1070,7 +1080,10 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
 
             ctx.ins_set([
                 Air::MovIVar(Reg::A, var, width),
-                Air::CastA { from, to, width },
+                Air::CastA {
+                    from: (from, width),
+                    to: (to, to_width),
+                },
                 Air::PushIReg {
                     dst,
                     width: to_width,
@@ -1588,6 +1601,18 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
 
                             let continue_ = OffsetVar::zero(ctx.anon_var(Ty::BOOL));
 
+                            // TODO: this is pretty unecessary.
+                            //
+                            // The issue is that continue will jump to loop_block and skip adding
+                            // to the anon_it if it is in post_condition, but you can't add 1 to
+                            // anon_it before the first iteration, so... loop_block needs more
+                            // context?
+                            let add_factor = OffsetVar::zero(ctx.anon_var(ty));
+                            ctx.ins(Air::PushIConst(
+                                add_factor,
+                                ConstData::Bits(Bits::from_u64(0)),
+                            ));
+
                             let exit = ctx.new_block();
                             let loop_block = ctx.in_loop(exit, |ctx, loop_block| {
                                 let post_condition = ctx.in_scope(|ctx, _| {
@@ -1597,13 +1622,18 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
                                     // perform user code
                                     air_block(ctx, &for_.block);
 
-                                    // add assign anon_it
-                                    add!(ctx, width, sign, anon_it, anon_it, 1);
                                     ctx.ins(Air::Jmp(loop_block));
                                 });
 
+                                // add assign anon_it
+                                add!(ctx, width, sign, anon_it, anon_it, add_factor);
+                                ctx.ins(Air::PushIConst(
+                                    add_factor,
+                                    ConstData::Bits(Bits::from_u64(1)),
+                                ));
+
                                 // break if end is met
-                                eq!(ctx, width, sign, continue_, anon_it, end);
+                                ge!(ctx, width, sign, continue_, anon_it, end);
                                 ctx.ins(Air::IfElse {
                                     condition: Reg::A,
                                     then: exit,
@@ -1675,7 +1705,20 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
                                 it_count,
                                 ConstData::Bits(Bits::from_u64(0)),
                             ));
+
                             let continue_ = OffsetVar::zero(ctx.anon_var(Ty::BOOL));
+
+                            // TODO: these are both unnecessary, see above
+                            let add_factor = OffsetVar::zero(ctx.anon_var(iter_ty));
+                            ctx.ins(Air::PushIConst(
+                                add_factor,
+                                ConstData::Bits(Bits::from_u64(0)),
+                            ));
+                            let elem_offset = OffsetVar::zero(ctx.anon_var(Ty::PTR));
+                            ctx.ins(Air::PushIConst(
+                                elem_offset,
+                                ConstData::Bits(Bits::from_u64(0)),
+                            ));
 
                             let exit = ctx.new_block();
                             let loop_block = ctx.in_loop(exit, |ctx, loop_block| {
@@ -1684,20 +1727,22 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
 
                                     air_block(ctx, &for_.block);
 
-                                    add!(ctx, Width::SIZE, Sign::U, it_count, it_count, 1);
-                                    add!(
-                                        ctx,
-                                        Width::SIZE,
-                                        Sign::U,
-                                        arr_ptr,
-                                        arr_ptr,
-                                        elem_size as u64
-                                    );
                                     ctx.ins(Air::Jmp(loop_block));
                                 });
 
+                                add!(ctx, Width::SIZE, Sign::U, it_count, it_count, add_factor);
+                                ctx.ins(Air::PushIConst(
+                                    add_factor,
+                                    ConstData::Bits(Bits::from_u64(1)),
+                                ));
+                                add!(ctx, Width::SIZE, Sign::U, arr_ptr, arr_ptr, elem_offset);
+                                ctx.ins(Air::PushIConst(
+                                    elem_offset,
+                                    ConstData::Bits(Bits::from_u64(elem_size as u64)),
+                                ));
+
                                 // break if end is met
-                                eq!(ctx, Width::SIZE, Sign::U, continue_, it_count, len);
+                                ge!(ctx, Width::SIZE, Sign::U, continue_, it_count, len);
                                 ctx.ins(Air::IfElse {
                                     condition: Reg::A,
                                     then: exit,
@@ -1846,7 +1891,7 @@ fn assign_stmt_with_var_and_ty(ctx: &mut AirCtx, stmt: &Assign, var: OffsetVar, 
         AssignKind::Equals => {
             assign_expr(ctx, var, ty, &stmt.rhs);
         }
-        AssignKind::Add | AssignKind::Sub => {
+        _ => {
             let other = OffsetVar::zero(ctx.anon_var(ty));
             assign_expr(ctx, other, ty, &stmt.rhs);
             match ty.0 {
@@ -1854,12 +1899,40 @@ fn assign_stmt_with_var_and_ty(ctx: &mut AirCtx, stmt: &Assign, var: OffsetVar, 
                     let width = int_ty.width();
                     let sign = int_ty.sign();
                     match stmt.kind {
+                        AssignKind::Mul => {
+                            mul!(ctx, width, sign, var, var, other);
+                        }
+                        AssignKind::Div => {
+                            div!(ctx, width, sign, var, var, other);
+                        }
+                        AssignKind::Rem => {
+                            rem!(ctx, width, sign, var, var, other);
+                        }
+
                         AssignKind::Add => {
                             add!(ctx, width, sign, var, var, other);
                         }
                         AssignKind::Sub => {
                             sub!(ctx, width, sign, var, var, other);
                         }
+
+                        AssignKind::Xor => {
+                            xor!(ctx, width, var, var, other);
+                        }
+                        AssignKind::And => {
+                            and!(ctx, width, var, var, other);
+                        }
+                        AssignKind::Or => {
+                            or!(ctx, width, var, var, other);
+                        }
+
+                        AssignKind::Shl => {
+                            shl!(ctx, width, sign, var, var, other);
+                        }
+                        AssignKind::Shr => {
+                            shr!(ctx, width, sign, var, var, other);
+                        }
+
                         AssignKind::Equals => unreachable!(),
                     }
                 }
@@ -1872,7 +1945,16 @@ fn assign_stmt_with_var_and_ty(ctx: &mut AirCtx, stmt: &Assign, var: OffsetVar, 
                         AssignKind::Sub => {
                             fsub!(ctx, width, var, var, other);
                         }
-                        AssignKind::Equals => unreachable!(),
+                        AssignKind::Mul => {
+                            fmul!(ctx, width, var, var, other);
+                        }
+                        AssignKind::Div => {
+                            fdiv!(ctx, width, var, var, other);
+                        }
+                        AssignKind::Rem => {
+                            frem!(ctx, width, var, var, other);
+                        }
+                        _ => unreachable!(),
                     }
                 }
                 _ => unreachable!(),

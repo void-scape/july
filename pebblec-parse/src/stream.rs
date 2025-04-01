@@ -64,6 +64,16 @@ impl<'a, 's> TokenStream<'a> {
         }
     }
 
+    #[allow(unused)]
+    pub fn print_kind(&self, max: usize) {
+        let mut slf = *self;
+        for _ in 0..max {
+            if let Some(t) = slf.next() {
+                println!("{:?}", self.kind(t));
+            }
+        }
+    }
+
     pub fn find_matched_delim_offset<T: DelimPair>(&self) -> usize {
         let index = self.index;
         let mut other = self.clone();
@@ -180,6 +190,14 @@ impl<'a, 's> TokenStream<'a> {
 
     pub fn eat(&mut self) {
         self.index += 1;
+    }
+
+    pub fn back(&mut self) {
+        self.index = self.index.saturating_sub(1);
+    }
+
+    pub fn shrink(&mut self) {
+        self.end = self.end.saturating_sub(1);
     }
 
     pub fn eat_n(&mut self, n: usize) {

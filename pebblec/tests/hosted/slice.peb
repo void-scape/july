@@ -1,0 +1,69 @@
+use core::io;
+
+slices: () -> bool {
+    let result = true;
+    
+    let arr: [u8; 3] = [0, 1, 2];
+    let ref_arr = [&arr[0], &arr[1], &arr[2]];
+    let deref_arr = [arr[0], arr[1], arr[2]];
+    
+    for i in 0..3 {
+        if arr[i] != deref_arr[i] {
+            println("invalid deref_arr");
+            result = false;
+        }
+        
+        if arr[i] != ref_arr[i]* {
+            println("invalid ref_arr deref");
+            result = false;
+        }
+    }
+    
+    let slice: &[u8] = &arr;
+    // let cannot_return: [u8; 3] = slice*;
+    for i in 0..3 {
+        if slice[i] != arr[i] {
+            println("invalid slice indexing");
+            result = false;
+        }
+        slice[i] += 5;
+    }
+    
+    let i = 0;
+    for val in slice {
+        if val* != arr[i] {
+            println("invalid slice iteration");
+            result = false;
+        }
+        i += 1;
+    }
+    
+    // shadow `arr`, but refer to previous `arr` in assignment
+    //
+    // let var = 10;
+    // let var = returns_different_type(var) + 2;
+    //     ^^^                          ^^^
+    //      |                           make sure this type isn't grabbed from here
+    //      |                                                                   |
+    //      |-------------------------------------------------------------------|
+    
+    let arr = [&arr[0], &arr[1], &arr[2]];
+    let i = 0;
+    for a in arr {
+        if deref_arr[i] + 5 != a** {
+            println("invalid double deref");
+            result = false;
+        }
+        i += 1;
+    }
+    
+    result
+}
+
+main: () -> i32 {
+    if !slices() {
+        1
+    } else {
+        0 
+    }
+}

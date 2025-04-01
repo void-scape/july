@@ -84,6 +84,10 @@ impl TyKind {
         matches!(self, Self::Int(_))
     }
 
+    pub fn is_bool(&self) -> bool {
+        matches!(self, Self::Bool)
+    }
+
     pub fn is_float(&self) -> bool {
         matches!(self, Self::Float(_))
     }

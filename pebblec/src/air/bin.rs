@@ -1,9 +1,10 @@
 use super::ctx::AirCtx;
 use super::{OffsetVar, eval_expr};
-use crate::air::{Air, Bits, ConstData, Reg, extract_var_from_expr};
+use crate::air::{Air, Bits, ConstData, Reg, assign_expr, extract_var_from_expr};
 use crate::ir::lit::LitKind;
 use crate::ir::ty::{Sign, Ty, TyKind, Width};
 use crate::ir::*;
+use pebblec_parse::BinOpKind;
 
 /// Evaluate `bin` and assign to `dst`.
 ///
@@ -16,13 +17,16 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
             let width = ty.width();
             let sign = ty.sign();
             match bin.kind {
-                BinOpKind::Add => visit(Add::new(width, sign), ctx, out, dst, bin),
-                BinOpKind::Sub => visit(Sub::new(width, sign), ctx, out, dst, bin),
                 BinOpKind::Mul => visit(Mul::new(width, sign), ctx, out, dst, bin),
                 BinOpKind::Div => visit(Div::new(width, sign), ctx, out, dst, bin),
+                BinOpKind::Rem => visit(Rem::new(width, sign), ctx, out, dst, bin),
 
-                BinOpKind::Shl => visit(Shl::new(width), ctx, out, dst, bin),
-                BinOpKind::Shr => visit(Shr::new(width), ctx, out, dst, bin),
+                BinOpKind::Add => visit(Add::new(width, sign), ctx, out, dst, bin),
+                BinOpKind::Sub => visit(Sub::new(width, sign), ctx, out, dst, bin),
+
+                BinOpKind::Shl => visit(Shl::new(width, sign), ctx, out, dst, bin),
+                BinOpKind::Shr => visit(Shr::new(width, sign), ctx, out, dst, bin),
+
                 BinOpKind::Band => visit(Band::new(width), ctx, out, dst, bin),
                 BinOpKind::Xor => visit(Xor::new(width), ctx, out, dst, bin),
                 BinOpKind::Bor => visit(Bor::new(width), ctx, out, dst, bin),
@@ -42,11 +46,14 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
         TyKind::Float(ty) => {
             let width = ty.width();
             let sign = Sign::I;
+
             match bin.kind {
-                BinOpKind::Add => visit(FloatAdd::new(width), ctx, out, dst, bin),
-                BinOpKind::Sub => visit(FloatSub::new(width), ctx, out, dst, bin),
                 BinOpKind::Mul => visit(FloatMul::new(width), ctx, out, dst, bin),
                 BinOpKind::Div => visit(FloatDiv::new(width), ctx, out, dst, bin),
+                BinOpKind::Rem => visit(FloatRem::new(width), ctx, out, dst, bin),
+
+                BinOpKind::Add => visit(FloatAdd::new(width), ctx, out, dst, bin),
+                BinOpKind::Sub => visit(FloatSub::new(width), ctx, out, dst, bin),
 
                 BinOpKind::Eq => visit(Eq::new(width, sign), ctx, out, dst, bin),
                 BinOpKind::Ne => {
@@ -71,6 +78,24 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
             }
         }
         TyKind::Bool => {
+            match bin.kind {
+                BinOpKind::Or => {
+                    assert!(ty.is_bool());
+                    assert_eq!(bin.lhs.infer(ctx), InferTy::Ty(Ty::BOOL));
+                    assert_eq!(bin.rhs.infer(ctx), InferTy::Ty(Ty::BOOL));
+                    assign_logical_or(ctx, bin.lhs, bin.rhs, dst);
+                    return;
+                }
+                BinOpKind::And => {
+                    assert!(ty.is_bool());
+                    assert_eq!(bin.lhs.infer(ctx), InferTy::Ty(Ty::BOOL));
+                    assert_eq!(bin.rhs.infer(ctx), InferTy::Ty(Ty::BOOL));
+                    assign_logical_and(ctx, bin.lhs, bin.rhs, dst);
+                    return;
+                }
+                _ => {}
+            }
+
             let ty = match (bin.lhs.infer(ctx), bin.rhs.infer(ctx)) {
                 (InferTy::Ty(lhs), InferTy::Ty(rhs)) => {
                     assert_eq!(lhs, rhs);
@@ -104,9 +129,10 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
 
             match bin.kind {
                 BinOpKind::Add
-                | BinOpKind::Mul
                 | BinOpKind::Sub
+                | BinOpKind::Mul
                 | BinOpKind::Div
+                | BinOpKind::Rem
                 | BinOpKind::Shl
                 | BinOpKind::Shr
                 | BinOpKind::Band
@@ -132,9 +158,7 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
                 BinOpKind::Le => {
                     Le::new(width, sign).visit_with(ctx, dst, lhs, rhs);
                 }
-                BinOpKind::And | BinOpKind::Or => {
-                    panic!("invalid operations")
-                }
+                _ => unreachable!(),
             }
         }
         ty => panic!("invalid type: {ty:#?}"),
@@ -183,6 +207,96 @@ pub fn aquire_accessor_field(ctx: &mut AirCtx, access: &Access) -> (OffsetVar, T
     unreachable!()
 }
 
+fn assign_logical_and(ctx: &mut AirCtx, lhs: &Expr, rhs: &Expr, dst: OffsetVar) {
+    let mut ordered = Vec::new();
+    flatten_logical_exprs(BinOpKind::And, lhs, rhs, &mut ordered);
+    assert!(ordered.len() >= 2);
+
+    ctx.push_pop_sp(|ctx| {
+        let exit = ctx.new_block();
+        let creg = Reg::A;
+
+        let blocks = (0..ordered.len())
+            .map(|_| ctx.new_block())
+            .collect::<Vec<_>>();
+
+        for (i, (expr, next_block)) in ordered.iter().zip(blocks.into_iter()).enumerate() {
+            if i != ordered.len() - 1 {
+                assign_expr(ctx, dst, Ty::BOOL, expr);
+                ctx.ins_set([
+                    Air::MovIVar(creg, dst, Width::W8),
+                    Air::IfElse {
+                        condition: creg,
+                        then: next_block,
+                        otherwise: exit,
+                    },
+                ]);
+                ctx.set_active_block(next_block);
+            } else {
+                assign_expr(ctx, dst, Ty::BOOL, expr);
+                ctx.ins(Air::Jmp(exit));
+            }
+        }
+
+        ctx.set_active_block(exit);
+    });
+}
+
+fn assign_logical_or(ctx: &mut AirCtx, lhs: &Expr, rhs: &Expr, dst: OffsetVar) {
+    let mut ordered = Vec::new();
+    flatten_logical_exprs(BinOpKind::Or, lhs, rhs, &mut ordered);
+    assert!(ordered.len() >= 2);
+
+    ctx.push_pop_sp(|ctx| {
+        let exit = ctx.new_block();
+        let creg = Reg::A;
+
+        let blocks = (0..ordered.len())
+            .map(|_| ctx.new_block())
+            .collect::<Vec<_>>();
+
+        for (i, (expr, next_block)) in ordered.iter().zip(blocks.into_iter()).enumerate() {
+            if i != ordered.len() - 1 {
+                assign_expr(ctx, dst, Ty::BOOL, expr);
+                ctx.ins_set([
+                    Air::MovIVar(creg, dst, Width::W8),
+                    Air::IfElse {
+                        condition: creg,
+                        then: exit,
+                        otherwise: next_block,
+                    },
+                ]);
+                ctx.set_active_block(next_block);
+            } else {
+                assign_expr(ctx, dst, Ty::BOOL, expr);
+                ctx.ins(Air::Jmp(exit));
+            }
+        }
+
+        ctx.set_active_block(exit);
+    });
+}
+
+fn flatten_logical_exprs<'a>(
+    op: BinOpKind,
+    lhs: &'a Expr<'a>,
+    rhs: &'a Expr<'a>,
+    output: &mut Vec<&'a Expr<'a>>,
+) {
+    match lhs {
+        Expr::Bin(bin) => {
+            if bin.kind == op {
+                flatten_logical_exprs(op, bin.lhs, bin.rhs, output);
+            } else {
+                output.push(lhs);
+            }
+        }
+        _ => output.push(lhs),
+    }
+
+    output.push(rhs);
+}
+
 macro_rules! impl_op {
     (Int, $name:ident, $strukt:ident) => {
         #[macro_export]
@@ -193,6 +307,22 @@ macro_rules! impl_op {
                     input: $width,
                     output: $width,
                     sign: $sign,
+                }
+                .visit_leaf($ctx, $dst, $rhs, $lhs);
+            }};
+        }
+        #[allow(unused)]
+        pub use $name;
+    };
+
+    (Bits, $name:ident, $strukt:ident) => {
+        #[macro_export]
+        macro_rules! $name {
+            ($ctx:ident, $width:expr, $dst:expr, $lhs:expr, $rhs:expr) => {{
+                use crate::air::bin::BinOpLeaf;
+                crate::air::bin::$strukt {
+                    input: $width,
+                    output: $width,
                 }
                 .visit_leaf($ctx, $dst, $rhs, $lhs);
             }};
@@ -218,13 +348,25 @@ macro_rules! impl_op {
     };
 }
 
+impl_op!(Int, mul, Mul);
+impl_op!(Int, div, Div);
+impl_op!(Int, rem, Rem);
+
 impl_op!(Int, add, Add);
 impl_op!(Int, sub, Sub);
-impl_op!(Int, mul, Mul);
+
+impl_op!(Bits, xor, Xor);
+impl_op!(Bits, and, Band);
+impl_op!(Bits, or, Bor);
+
+impl_op!(Int, shl, Shl);
+impl_op!(Int, shr, Shr);
 
 impl_op!(Float, fadd, FloatAdd);
 impl_op!(Float, fsub, FloatSub);
 impl_op!(Float, fmul, FloatMul);
+impl_op!(Float, fdiv, FloatDiv);
+impl_op!(Float, frem, FloatRem);
 
 #[macro_export]
 macro_rules! eq {
@@ -240,7 +382,21 @@ macro_rules! eq {
 }
 #[allow(unused)]
 pub use eq;
-use pebblec_parse::BinOpKind;
+
+#[macro_export]
+macro_rules! ge {
+    ($ctx:ident, $width:expr, $sign:expr, $dst:expr, $lhs:expr, $rhs:expr) => {{
+        use crate::air::bin::BinOpLeaf;
+        crate::air::bin::Ge {
+            output: Width::W8,
+            input: $width,
+            sign: $sign,
+        }
+        .visit_leaf($ctx, $dst, $rhs, $lhs);
+    }};
+}
+#[allow(unused)]
+pub use ge;
 
 macro_rules! int_op {
     ($ty:ident, $instr:ident) => {
@@ -327,16 +483,19 @@ macro_rules! float_op {
     };
 }
 
-int_op!(Add, AddAB);
-int_op!(Sub, SubAB);
 int_op!(Mul, MulAB);
 int_op!(Div, DivAB);
+int_op!(Rem, RemAB);
 
-bit_op!(Shl, ShlAB);
-bit_op!(Shr, ShrAB);
+int_op!(Add, AddAB);
+int_op!(Sub, SubAB);
+
 bit_op!(Band, BandAB);
 bit_op!(Xor, XorAB);
 bit_op!(Bor, BorAB);
+
+int_op!(Shl, ShlAB);
+int_op!(Shr, ShrAB);
 
 cmp_op!(Eq, EqAB, FEqAB);
 cmp_op!(Ne, NEqAB, NFEqAB);
@@ -345,10 +504,12 @@ cmp_op!(Gt, GtAB, FGtAB);
 cmp_op!(Le, LeAB, FLeAB);
 cmp_op!(Ge, GeAB, FGeAB);
 
-float_op!(FloatAdd, FAddAB);
-float_op!(FloatSub, FSubAB);
 float_op!(FloatMul, FMulAB);
 float_op!(FloatDiv, FDivAB);
+float_op!(FloatRem, FRemAB);
+
+float_op!(FloatAdd, FAddAB);
+float_op!(FloatSub, FSubAB);
 
 pub enum BinOpArg {
     Var(OffsetVar),

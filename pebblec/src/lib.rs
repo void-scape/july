@@ -6,5 +6,3 @@ pub mod comp;
 pub mod ice;
 pub mod interp;
 pub mod ir;
-#[cfg(test)]
-mod tests;

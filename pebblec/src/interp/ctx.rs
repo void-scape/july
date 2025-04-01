@@ -320,13 +320,16 @@ impl<'a> InterpCtx<'a> {
                 );
             }
 
-            Air::AddAB(_, _) => debug_op!(self, +),
-            Air::SubAB(_, _) => debug_op!(self, -),
             Air::MulAB(_, _) => debug_op!(self, *),
             Air::DivAB(_, _) => debug_op!(self, /),
+            Air::RemAB(_, _) => debug_op!(self, %),
 
-            Air::ShlAB(_) => debug_op!(self, <<),
-            Air::ShrAB(_) => debug_op!(self, >>),
+            Air::AddAB(_, _) => debug_op!(self, +),
+            Air::SubAB(_, _) => debug_op!(self, -),
+
+            Air::ShlAB(_, _) => debug_op!(self, <<),
+            Air::ShrAB(_, _) => debug_op!(self, >>),
+
             Air::BandAB(_) => debug_op!(self, &),
             Air::XorAB(_) => debug_op!(self, ^),
             Air::BorAB(_) => debug_op!(self, |),
@@ -338,10 +341,12 @@ impl<'a> InterpCtx<'a> {
             Air::LeAB(_, _) => debug_op!(self, <=),
             Air::GeAB(_, _) => debug_op!(self, >=),
 
-            Air::FAddAB(_) => debug_flop!(self, +),
-            Air::FSubAB(_) => debug_flop!(self, -),
             Air::FMulAB(_) => debug_flop!(self, *),
             Air::FDivAB(_) => debug_flop!(self, /),
+            Air::FRemAB(_) => debug_flop!(self, %),
+
+            Air::FAddAB(_) => debug_flop!(self, +),
+            Air::FSubAB(_) => debug_flop!(self, -),
 
             Air::FEqAB(_) => debug_flop!(self, ==),
             Air::NFEqAB(_) => debug_flop!(self, !=),

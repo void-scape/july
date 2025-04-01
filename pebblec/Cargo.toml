@@ -12,19 +12,27 @@ name = "pebblec"
 path = "src/main.rs"
 
 [dependencies]
+pebblec-parse = { path = "../pebblec-parse" }
+pebblec-arena = { path = "../pebblec-arena" }
 clap = { version = "4.5.31", features = ["derive"] }
 libc = "0.2.170"
 libffi = "3.2.0"
 libloading = "0.8.6"
-pebblec-parse = { path = "../pebblec-parse" }
-pebblec-arena = { path = "../pebblec-arena" }
 indexmap = "2.8.0"
 deterministic-hash = "1.0.1"
 
 [dev-dependencies]
+pebblec-macros = { path = "../pebblec-macros" }
 criterion = { version = "0.4", features = ["html_reports"] }
 walkdir = "2.5.0"
 
 [[bench]]
 name = "invaders"
 harness = false
+
+[build-dependencies]
+prettyplease = "0.2.31"
+proc-macro2 = "1.0.94"
+quote = "1.0.40"
+syn = "2.0.100"
+walkdir = "2.5.0"

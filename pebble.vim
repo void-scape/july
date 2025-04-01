@@ -6,12 +6,14 @@ if exists("b:current_syntax")
   finish
 endif
 
-syn keyword pebbleKeyword   struct const extern return if for while loop break continue let
+syn keyword pebbleKeyword   struct const extern return if else for while loop break continue let
 syn keyword pebbleKeyword   use impl as in
 
 syn keyword pebbleBoolean   true false
-syn keyword pebbleType      i32 i64 u8 u16 u32 u64 f32 f64 bool str
+syn keyword pebbleType      i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool str
 
+syn match   pebbleOperator  "\v\^"
+syn match   pebbleOperator  "\v\%"
 syn match   pebbleOperator  "\v\*"
 syn match   pebbleOperator  "\v\+"
 syn match   pebbleOperator  "\v-"

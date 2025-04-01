@@ -1,6 +1,7 @@
 use super::arr::{ArrDef, ArrDefRule};
 use super::block::Block;
 use super::func::ArgsRule;
+use super::stmt::CntrlFlowRule;
 use super::strukt::StructDef;
 use super::types::{PType, TypeRule};
 use super::{ParserRule, RResult};
@@ -127,7 +128,7 @@ trait Precedence {
 impl Precedence for BinOpKind {
     fn precedence(&self) -> usize {
         match self {
-            Self::Mul | Self::Div => 9,
+            Self::Mul | Self::Div | Self::Rem => 9,
             Self::Add | Self::Sub => 8,
             Self::Shl | Self::Shr => 7,
             Self::Band => 6,
@@ -147,10 +148,14 @@ impl<'a, 's> ParserRule<'a> for BinOpKindRule {
 
     fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         match stream.peek_kind() {
-            Some(TokenKind::Plus)
-            | Some(TokenKind::Hyphen)
+            Some(TokenKind::Hyphen)
+            | Some(TokenKind::Plus)
             | Some(TokenKind::Asterisk)
-            | Some(TokenKind::Slash) => {
+            | Some(TokenKind::Slash)
+            | Some(TokenKind::Percent)
+            | Some(TokenKind::Caret)
+            | Some(TokenKind::Ampersand)
+            | Some(TokenKind::Pipe) => {
                 let mut tmp = *stream;
                 let plus = tmp.expect();
                 if tmp.peek_kind() == Some(TokenKind::Equals) {
@@ -188,13 +193,33 @@ impl<'a, 's> ParserRule<'a> for BinOpKindRule {
                     ));
                 }
             }
+
+            Some(TokenKind::Ampersand) => {
+                let _ = stream.expect();
+                if stream.match_peek::<Ampersand>() {
+                    BinOpKind::And
+                } else {
+                    *stream = chk;
+                    BinOpKind::Band
+                }
+            }
+            Some(TokenKind::Pipe) => {
+                let _ = stream.expect();
+                if stream.match_peek::<Pipe>() {
+                    BinOpKind::Or
+                } else {
+                    *stream = chk;
+                    BinOpKind::Bor
+                }
+            }
+
             Some(TokenKind::Plus) => BinOpKind::Add,
             Some(TokenKind::Hyphen) => BinOpKind::Sub,
             Some(TokenKind::Asterisk) => BinOpKind::Mul,
+            Some(TokenKind::Percent) => BinOpKind::Rem,
             Some(TokenKind::Caret) => BinOpKind::Xor,
             Some(TokenKind::Slash) => BinOpKind::Div,
-            Some(TokenKind::Pipe) => BinOpKind::Bor,
-            Some(TokenKind::Ampersand) => BinOpKind::Band,
+
             Some(TokenKind::OpenAngle) => {
                 stream.expect();
                 if stream.match_peek::<Equals>() {
@@ -237,6 +262,7 @@ pub struct TermRule;
 impl<'a, 's> ParserRule<'a> for TermRule {
     type Output = Expr;
 
+    #[track_caller]
     fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         let Some(start_span) = stream.peek().map(|t| stream.span(t)) else {
             return Err(stream.recover("expected expression term"));
@@ -290,6 +316,7 @@ impl<'a, 's> ParserRule<'a> for TermRule {
                 )),
                 _ => Ok(Expr::Ident(stream.expect())),
             },
+            Some(TokenKind::If) => Ok(CntrlFlowRule::parse(stream)?),
             Some(TokenKind::Slf) => Ok(Expr::Ident(stream.expect())),
             Some(TokenKind::Float) | Some(TokenKind::Int) => Ok(Expr::Lit(stream.expect())),
             Some(TokenKind::True) | Some(TokenKind::False) => Ok(Expr::Bool(stream.expect())),
@@ -475,6 +502,7 @@ pub struct ExprRule;
 impl<'a, 's> ParserRule<'a> for ExprRule {
     type Output = Expr;
 
+    #[track_caller]
     fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
         if stream.match_peek::<Ret>() {
             let t = stream.expect();

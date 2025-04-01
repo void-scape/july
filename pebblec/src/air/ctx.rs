@@ -11,7 +11,6 @@ use crate::ir::ty::{Ty, TyKind, TypeKey, Width};
 use crate::ir::{self, *};
 use indexmap::IndexMap;
 use pebblec_arena::BlobArena;
-use std::collections::HashMap;
 use std::ops::Deref;
 
 #[derive(Debug)]

@@ -189,11 +189,7 @@ fn check_whitespace_slice<'a>(slice: &str, collection: &mut Vec<Node<'a>>) {
     }
 }
 
-pub fn check_whitespace<'a>(
-    buf: &'a TokenBuffer,
-    token: TokenId,
-    collection: &mut Vec<Node<'a>>,
-) {
+pub fn check_whitespace<'a>(buf: &'a TokenBuffer, token: TokenId, collection: &mut Vec<Node<'a>>) {
     let next_span = buf.span(token);
     let end = next_span.start as usize;
 
@@ -260,9 +256,6 @@ fn nodify_params<'a>(
             Param::Slf(t) => {
                 vec![Node::token(buf, t)]
             }
-            Param::SlfRef(t) => {
-                vec![Node::Text("&"), Node::token(buf, t)]
-            }
             Param::Named {
                 name, colon, ty, ..
             } => {
@@ -322,11 +315,7 @@ fn nodify_block<'a>(
     Node::indent_delimited_with(buf, arena, Curly, &block.stmts, condition, nodify_stmts)
 }
 
-fn nodify_stmts<'a>(
-    buf: &'a TokenBuffer,
-    arena: &BlobArena,
-    stmts: &[Stmt],
-) -> Option<Node<'a>> {
+fn nodify_stmts<'a>(buf: &'a TokenBuffer, arena: &BlobArena, stmts: &[Stmt]) -> Option<Node<'a>> {
     if stmts.is_empty() {
         return None;
     }

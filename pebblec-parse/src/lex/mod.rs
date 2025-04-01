@@ -83,12 +83,13 @@ fn str_lit<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
 }
 
 const SYMBOL_TABLE: [TokenKind; 256] = symbol_table();
-pub const SYMBOLS: [(char, TokenKind); 13] = [
+pub const SYMBOLS: [(char, TokenKind); 14] = [
     (';', TokenKind::Semi),
     (':', TokenKind::Colon),
     ('=', TokenKind::Equals),
     ('+', TokenKind::Plus),
     ('*', TokenKind::Asterisk),
+    ('%', TokenKind::Percent),
     ('/', TokenKind::Slash),
     ('-', TokenKind::Hyphen),
     (',', TokenKind::Comma),
@@ -179,7 +180,7 @@ fn delim<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
 
 fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
     let other = *input;
-    let (kind, span) = alt((
+    let (mut kind, span) = alt((
         preceded("0x", take_while(1.., AsChar::is_hex_digit)).map(|_| TokenKind::Int),
         preceded("0b", take_while(1.., AsChar::is_hex_digit)).map(|_| TokenKind::Int),
         float.map(|_: f64| TokenKind::Float),
@@ -188,21 +189,25 @@ fn int_lit<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
     .parse_next(input)?;
 
     if matches!(kind, TokenKind::Float) {
-        if other
-            .get(..span.len())
-            .is_some_and(|s| s.parse::<i64>().is_ok())
-        {
-            return Ok(Token::new(TokenKind::Int, Span::from_range(span)));
-        } else if other.get(..span.len()).is_some_and(|s| s.ends_with('.'))
-            && input.peek_token().is_some_and(|(_, t)| t == '.')
-        {
-            *input = other;
-            take_while(1.., AsChar::is_hex_digit).parse_next(input)?;
+        let slice = other.get(..span.len());
 
-            return Ok(Token::new(
-                TokenKind::Int,
-                Span::from_range(span.start..span.end - 1),
-            ));
+        // TODO: get rid of winnow and parse manually, this is annoying
+        if slice == Some("infinity") || slice == Some("nan") {
+            kind = TokenKind::Ident;
+        } else {
+            if slice.is_some_and(|s| s.parse::<i64>().is_ok()) {
+                return Ok(Token::new(TokenKind::Int, Span::from_range(span)));
+            } else if slice.is_some_and(|s| s.ends_with('.'))
+                && input.peek_token().is_some_and(|(_, t)| t == '.')
+            {
+                *input = other;
+                take_while(1.., AsChar::is_hex_digit).parse_next(input)?;
+
+                return Ok(Token::new(
+                    TokenKind::Int,
+                    Span::from_range(span.start..span.end - 1),
+                ));
+            }
         }
     }
 

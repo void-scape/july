@@ -496,7 +496,12 @@ dependencies = [
  "libffi",
  "libloading",
  "pebblec-arena",
+ "pebblec-macros",
  "pebblec-parse",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
  "walkdir",
 ]
 
@@ -511,6 +516,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+ "walkdir",
 ]
 
 [[package]]
@@ -551,6 +557,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
 dependencies = [
  "plotters-backend",
+]
+
+[[package]]
+name = "prettyplease"
+version = "0.2.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5316f57387668042f561aae71480de936257848f9c43ce528e311d89a07cadeb"
+dependencies = [
+ "proc-macro2",
+ "syn",
 ]
 
 [[package]]

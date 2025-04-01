@@ -1,23 +1,9 @@
-use crate::comp::{CompUnit, Config};
-use crate::interp::InterpInstance;
+use pebblec::comp::{CompUnit, Config};
 use pebblec_parse::lex::io;
 
-const TESTS: &str = "../demo/tests.peb";
+mod hosted;
 
-#[test]
-fn language_tests() {
-    for _ in 0..100 {
-        assert_eq!(
-            0,
-            InterpInstance::new(
-                &CompUnit::new(Config::default().no_capture(true))
-                    .compile(TESTS)
-                    .unwrap()
-            )
-            .run(false)
-        );
-    }
-}
+const TESTS: &str = "../demo/tests.peb";
 
 #[test]
 fn deterministic() {

@@ -16,16 +16,40 @@ mod stream;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AssignKind {
     Equals,
+
+    Mul,
+    Div,
+    Rem,
+
     Add,
     Sub,
+
+    Xor,
+    And,
+    Or,
+
+    Shl,
+    Shr,
 }
 
 impl AssignKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Equals => "=",
+
+            Self::Mul => "+=",
+            Self::Div => "/=",
+            Self::Rem => "%=",
+
             Self::Add => "+=",
             Self::Sub => "-=",
+
+            Self::Xor => "^=",
+            Self::And => "&=",
+            Self::Or => "|=",
+
+            Self::Shl => "<<=",
+            Self::Shr => ">>=",
         }
     }
 }
@@ -35,6 +59,7 @@ pub enum BinOpKind {
     //
     Mul,
     Div,
+    Rem,
     //
     Add,
     Sub,
@@ -68,7 +93,7 @@ pub enum BinOpKind {
 impl BinOpKind {
     pub fn output_is_input(&self) -> bool {
         match self {
-            Self::Mul | Self::Div | Self::Add | Self::Sub => true,
+            Self::Mul | Self::Div | Self::Rem | Self::Add | Self::Sub => true,
             Self::Shl | Self::Shr | Self::Band | Self::Xor | Self::Bor => true,
             Self::Eq | Self::Ne => false,
             Self::Gt | Self::Lt | Self::Ge | Self::Le => false,
@@ -76,10 +101,16 @@ impl BinOpKind {
         }
     }
 
+    pub fn logical(&self) -> bool {
+        matches!(self, Self::And) || matches!(self, Self::Or)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Mul => "*",
             Self::Div => "/",
+            Self::Rem => "%",
+
             Self::Add => "+",
             Self::Sub => "-",
 
