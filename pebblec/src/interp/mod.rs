@@ -47,9 +47,15 @@ fn load_libraries<'a>(
         }
     }
 
+    // TODO: how will this be reconciled with static linking?
     links
         .into_iter()
-        .map(|l| (l, unsafe { libloading::Library::new(l).unwrap() }))
+        .map(|l| {
+            (l, unsafe {
+                libloading::Library::new(l)
+                    .unwrap_or_else(|_| panic!("failed to load external library: {l}"))
+            })
+        })
         .collect()
 }
 
