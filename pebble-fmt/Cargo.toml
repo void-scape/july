@@ -3,8 +3,18 @@ name = "pebble-fmt"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "pebble_fmt"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pebble_fmt"
+path = "src/main.rs"
+
 [dependencies]
-pebblec = { path = "../pebblec" }
 pebblec-parse = { path = "../pebblec-parse" }
 pebblec-arena = { path = "../pebblec-arena" }
 clap = { version = "4.5.31", features = ["derive"] }
+
+[dev-dependencies]
+pebblec = { path = "../pebblec" }

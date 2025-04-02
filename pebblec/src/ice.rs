@@ -6,7 +6,11 @@ use std::time::UNIX_EPOCH;
 static BACKTRACE: LazyLock<Arc<Mutex<Option<String>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(None)));
 
-pub fn reported_panic<Out>(capture: bool, f: impl FnOnce() -> Out + UnwindSafe) -> Option<Out> {
+pub fn reported_panic<Out>(
+    capture: bool,
+    note: &str,
+    f: impl FnOnce() -> Out + UnwindSafe,
+) -> Option<Out> {
     std::panic::set_hook(Box::new(panic_hook));
 
     if capture {
@@ -26,7 +30,7 @@ pub fn reported_panic<Out>(capture: bool, f: impl FnOnce() -> Out + UnwindSafe) 
         match result {
             Ok(result) => Some(result),
             Err(_) => {
-                report_panic(&output);
+                report_panic(&output, note);
                 None
             }
         }
@@ -34,7 +38,7 @@ pub fn reported_panic<Out>(capture: bool, f: impl FnOnce() -> Out + UnwindSafe) 
         match std::panic::catch_unwind(move || f()) {
             Ok(result) => Some(result),
             Err(_) => {
-                report_panic("");
+                report_panic("", note);
                 None
             }
         }
@@ -52,7 +56,7 @@ fn retrieve_backtrace() -> String {
     )
 }
 
-fn report_panic(stdout: &str) {
+fn report_panic(stdout: &str, note: &str) {
     let ice_file = format!(
         "ICE-{}",
         std::time::SystemTime::now()
@@ -61,7 +65,7 @@ fn report_panic(stdout: &str) {
             .as_secs()
     );
 
-    let note = "note: compiler encountered unexpected panic, this is a bug";
+    let note = format!("note: {}", note);
     let ice = format!("note: reported in `{ice_file}`");
     let notes = format!("\n{note}\n{ice}");
     println!("{notes}");

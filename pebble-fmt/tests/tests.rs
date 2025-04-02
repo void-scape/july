@@ -1,9 +1,9 @@
-use super::*;
+use pebble_fmt::fmt;
 use pebblec::comp::{CompUnit, Config};
 use pebblec::interp::InterpInstance;
 
-const INVADERS: &str = "res/invaders_unformatted.peb";
-const TESTS: &str = "res/tests_unformatted.peb";
+const INVADERS: &str = "tests/invaders_unformatted.peb";
+const TESTS: &str = "tests/tests_unformatted.peb";
 
 #[test]
 fn deterministic() {

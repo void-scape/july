@@ -47,7 +47,11 @@ pub fn fmt_string(str: String) -> Option<String> {
                 check_whitespace(&buf, uze.uze, &mut nodes);
                 nodes.extend([nodify_use(&buf, &arena, uze), Node::nl()]);
             }
-            _ => todo!(),
+            ItemKind::Impl(impul) => {
+                check_whitespace(&buf, impul.impul, &mut nodes);
+                nodes.extend([nodify_impl(&buf, &arena, impul), Node::nl()]);
+            }
+            ItemKind::Enum(_) => unimplemented!(),
         }
     }
 

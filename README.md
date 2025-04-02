@@ -20,25 +20,26 @@ main: () {
 
 To use **Pebble**, you will need to install the [rust toolchain](https://www.rust-lang.org/tools/install) and compile the latest code.
 
-First, clone the repo:
+Clone the repo:
 
 ```console 
 $ git clone https://github.com/void-scape/pebble.git
 $ cd pebble
 ```
 
-Then build the compiler, `pebblec`:
+Build the compiler:
 
 ```console 
 $ cargo build --release -p pebblec
 ```
 
-The compiler binary will be located in `pebble/target/release/pebblec`. Be aware that pebblec relies on its location to find the `core` library, which is located in `pebble/core/`.
+> NOTE
+> The compiler binary will be stored in `pebble/target/release/pebblec`. Be aware that pebblec relies on its location to find the `core` library, which is located in `pebble/core`.
 
-Finally, run `pebblec` and voila!
+Compile a `.peb` file with `pebblec`:
 
 ```console
-$ target/release/pebblec -f myfile.peb
+$ target/release/pebblec myfile.peb
 ```
 
 # Road Map

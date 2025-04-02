@@ -1,23 +1,18 @@
+#![warn(clippy::pedantic)]
 #![feature(internal_output_capture)]
 
 use clap::Parser;
+use pebble_fmt::fmt;
 use pebblec_parse::lex::io;
 use std::panic;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
-
-mod fmt;
-mod node;
-#[cfg(test)]
-mod tests;
 
 /// Pebble Formatter
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(about, long_about = None)]
 struct Args {
     /// path to a `.peb` file
-    #[arg(short, long)]
     file: String,
 }
 
@@ -35,38 +30,19 @@ fn main() -> ExitCode {
             let captured = Arc::try_unwrap(captured).unwrap();
             let captured = captured.into_inner().unwrap();
             let captured = String::from_utf8(captured).unwrap();
-
-            match io::write(
-                format!(
-                    "ICE-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                ),
-                captured.as_bytes(),
-            ) {
-                Ok(_) => return ExitCode::FAILURE,
-                Err(io_err) => {
-                    println!("failed to report ICE: {io_err}");
-                    println!("ICE: {captured}");
-                    return ExitCode::FAILURE;
-                }
-            }
+            println!("{}", captured);
+            println!("note: unexpected panic, this is a bug");
+            return ExitCode::FAILURE;
         }
     };
 
     match fmt_result {
         Ok(fmted) => match fmted {
-            Some(fmted) => match io::write(&args.file, fmted.as_bytes()) {
-                Ok(_) => {
-                    return ExitCode::SUCCESS;
-                }
-                Err(e) => {
-                    println!("Failed to write output: {e}");
-                    return ExitCode::FAILURE;
-                }
-            },
+            Some(fmted) => {
+                // if it read the file, I assume we can write to it
+                io::write(&args.file, fmted.as_bytes()).unwrap();
+                ExitCode::SUCCESS
+            }
             None => {
                 println!("failed to format `{}`", args.file);
                 return ExitCode::FAILURE;

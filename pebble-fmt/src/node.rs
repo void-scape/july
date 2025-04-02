@@ -4,7 +4,7 @@ use pebblec_parse::lex::kind::TokenKind;
 use pebblec_parse::matc::{Bracket, Curly, DelimPair, Paren};
 use pebblec_parse::rules::prelude::{
     ArrDef, Assign, Attribute, Block, Const, Expr, ExternBlock, ExternFunc, Field, FieldDef, Func,
-    PType, Param, Stmt, Struct, StructDef, Use,
+    Impl, PType, Param, Stmt, Struct, StructDef, Use,
 };
 use std::borrow::Borrow;
 use std::ops::Deref;
@@ -179,6 +179,7 @@ impl<'a> Node<'a> {
 }
 
 fn check_whitespace_span<'a>(buf: &'a TokenBuffer, span: Span, collection: &mut Vec<Node<'a>>) {
+    // the span can only have come from this buffer, so the token must exist
     let token = buf.token_with_start(span.start as usize).unwrap();
     check_whitespace(buf, token, collection);
 }
@@ -240,6 +241,34 @@ pub fn nodify_func<'a>(buf: &'a TokenBuffer, arena: &BlobArena, func: &Func) -> 
     nodes.push(nodify_block(buf, arena, &func.block, BreakCond::Always));
 
     Node::Group(arena.alloc_slice(&nodes))
+}
+
+pub fn nodify_funcs<'a>(
+    buf: &'a TokenBuffer,
+    arena: &BlobArena,
+    funcs: &[Func],
+) -> Option<Node<'a>> {
+    if funcs.is_empty() {
+        None
+    } else {
+        Some(Node::Group(
+            arena.alloc_slice(
+                &funcs
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, f)| {
+                        let mut func = Vec::new();
+                        check_whitespace(buf, f.name, &mut func);
+                        func.push(nodify_func(buf, arena, f));
+                        if i != funcs.len() - 1 {
+                            func.push(Node::nl());
+                        }
+                        func
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        ))
+    }
 }
 
 fn nodify_params<'a>(
@@ -465,6 +494,17 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node
                 Node::indent_delimited_with(buf, arena, Paren, args, BreakCond::Width, nodify_args),
             ],
         ),
+        Expr::MethodCall {
+            lhs, method, args, ..
+        } => Node::group(
+            arena,
+            &[
+                nodify_expr(buf, arena, lhs),
+                Node::Text("."),
+                Node::token(buf, method),
+                Node::indent_delimited_with(buf, arena, Paren, args, BreakCond::Width, nodify_args),
+            ],
+        ),
         Expr::If {
             condition,
             block,
@@ -561,14 +601,6 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node
                 )
             }
         }
-        _ => todo!(),
-        ////EnumDef(EnumDef),
-        //MethodCall {
-        //    span: Span,
-        //    lhs: Box<Expr>,
-        //    method: TokenId,
-        //    args: Vec<Expr>,
-        //},
     }
 }
 
@@ -762,4 +794,23 @@ pub fn nodify_use<'a>(buf: &'a TokenBuffer, arena: &BlobArena, uze: &Use) -> Nod
     path.push(Node::Text(";"));
 
     Node::group(arena, &path)
+}
+
+pub fn nodify_impl<'a>(buf: &'a TokenBuffer, arena: &BlobArena, impul: &Impl) -> Node<'a> {
+    Node::group(
+        arena,
+        &[
+            Node::Text("impl "),
+            Node::token(buf, impul.ident),
+            Node::space(),
+            Node::indent_delimited_with(
+                buf,
+                arena,
+                Curly,
+                &impul.funcs,
+                BreakCond::Always,
+                nodify_funcs,
+            ),
+        ],
+    )
 }

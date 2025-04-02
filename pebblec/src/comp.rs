@@ -5,6 +5,8 @@ use std::ffi::OsStr;
 use std::panic::{AssertUnwindSafe, UnwindSafe};
 use std::path::Path;
 
+pub const COMP_PANIC_NOTE: &str = "compiler encountered unexpected panic, this is a bug";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub log: bool,
@@ -50,7 +52,10 @@ impl CompUnit {
     ) -> Result<ByteCode<'a>, CompErr> {
         let capture = !self.config.no_capture;
         let mut unit = AssertUnwindSafe(self);
-        ice::reported_panic(capture, move || unit.panicking_compile(path)).ok_or(CompErr::Panic)?
+        ice::reported_panic(capture, COMP_PANIC_NOTE, move || {
+            unit.panicking_compile(path)
+        })
+        .ok_or(CompErr::Panic)?
     }
 
     pub fn compile_string<'a, Origin: AsRef<OsStr> + UnwindSafe>(
@@ -60,8 +65,10 @@ impl CompUnit {
     ) -> Result<ByteCode<'a>, CompErr> {
         let capture = !self.config.no_capture;
         let mut unit = AssertUnwindSafe(self);
-        ice::reported_panic(capture, move || unit.panicking_compile_string(origin, src))
-            .ok_or(CompErr::Panic)?
+        ice::reported_panic(capture, COMP_PANIC_NOTE, move || {
+            unit.panicking_compile_string(origin, src)
+        })
+        .ok_or(CompErr::Panic)?
     }
 
     pub fn panicking_compile_string<'a, Origin: AsRef<OsStr>>(

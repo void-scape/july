@@ -5,10 +5,9 @@ use std::process::ExitCode;
 
 /// Pebble Compiler
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(about, long_about = None)]
 struct Args {
     /// path to a `.peb` file
-    #[arg(short, long)]
     file: String,
 
     /// do not capture stdout during compilation

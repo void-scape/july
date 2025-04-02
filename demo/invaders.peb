@@ -120,7 +120,7 @@ impl Vec2 {
     length_squared: (self) -> f32 {
         (self*.x * self*.x) + (self*.y * self*.y)
     }
-
+    
     length: (self) -> f32 {
         sqrt_f32(self*.length_squared())
     }

@@ -1,9 +1,8 @@
-use std::time::Instant;
-
 use criterion::{Criterion, criterion_group, criterion_main};
 use pebblec::ir::ctx::Ctx;
 use pebblec::{air, ir};
 use pebblec_parse::lex::source::SourceMap;
+use std::time::Instant;
 
 const INVADERS: &str = "../demo/invaders.peb";
 
