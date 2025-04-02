@@ -319,8 +319,8 @@ fn execute<'a>(
                         let (ty, fmt) = args.vars.first().unwrap();
                         assert_eq!(*ty, Ty::STR_LIT);
                         let fmt = OffsetVar::zero(*fmt);
-                        let len = ctx.stack.read_var::<u64>(fmt);
-                        let addr = ctx.stack.read_var::<u64>(fmt.add(Width::W64));
+                        let addr = ctx.stack.read_var::<u64>(fmt);
+                        let len = ctx.stack.read_var::<u64>(fmt.add(Width::W64));
                         let str = unsafe { str::from_raw_parts(addr as *const u8, len as usize) };
 
                         enum Entry {

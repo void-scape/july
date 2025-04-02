@@ -18,6 +18,7 @@ impl Ty {
     pub const UNIT: Self = Ty(&TyKind::Unit);
 
     pub const USIZE: Self = Ty(&TyKind::Int(IntTy::USIZE));
+    pub const U8: Self = Ty(&TyKind::Int(IntTy::new_8(Sign::U)));
     pub const ISIZE: Self = Ty(&TyKind::Int(IntTy::ISIZE));
     pub const I32: Self = Ty(&TyKind::Int(IntTy::new_32(Sign::I)));
 
@@ -59,6 +60,7 @@ impl TyKind {
     pub const PTR_SIZE: usize = IntTy::PTR.size();
     pub const FAT_PTR_SIZE: usize = 2 * IntTy::PTR.size();
 
+    #[track_caller]
     pub fn size(&self, tys: &TyStore) -> usize {
         match self {
             Self::Unit => 0,
@@ -106,13 +108,8 @@ impl TyKind {
 
     pub fn is_castable(&self) -> bool {
         match self {
-            Self::Struct(_)
-            | Self::Ref(Self::Str)
-            | Self::Str
-            | Self::Array(_, _)
-            | Self::Slice(_)
-            | Self::Unit => false,
-            Self::Int(_) | Self::Float(_) | Self::Bool | Self::Ref(_) => true,
+            Self::Struct(_) | Self::Str | Self::Array(_, _) | Self::Unit => false,
+            Self::Int(_) | Self::Float(_) | Self::Bool | Self::Ref(_) | Self::Slice(_) => true,
         }
     }
 

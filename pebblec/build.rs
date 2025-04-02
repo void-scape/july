@@ -47,7 +47,7 @@ fn build_hosted_tests() {
                             .compile(#path)
                             .unwrap()
                     )
-                    .run(false)
+                    .run(true)
                 );
             }
         });

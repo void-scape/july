@@ -4,7 +4,7 @@ fn cast() {
         0, pebblec::interp::InterpInstance::new(&
         pebblec::comp::CompUnit::new(pebblec::comp::Config::default().no_capture(true))
         .compile("/Users/nicolasball/dev/pebble/pebblec/tests/hosted/cast.peb").unwrap())
-        .run(false)
+        .run(true)
     );
 }
 #[test]
@@ -13,7 +13,7 @@ fn general() {
         0, pebblec::interp::InterpInstance::new(&
         pebblec::comp::CompUnit::new(pebblec::comp::Config::default().no_capture(true))
         .compile("/Users/nicolasball/dev/pebble/pebblec/tests/hosted/general.peb")
-        .unwrap()).run(false)
+        .unwrap()).run(true)
     );
 }
 #[test]
@@ -22,6 +22,6 @@ fn slice() {
         0, pebblec::interp::InterpInstance::new(&
         pebblec::comp::CompUnit::new(pebblec::comp::Config::default().no_capture(true))
         .compile("/Users/nicolasball/dev/pebble/pebblec/tests/hosted/slice.peb")
-        .unwrap()).run(false)
+        .unwrap()).run(true)
     );
 }

@@ -417,7 +417,7 @@ impl<'a, 's> ParserRule<'a> for TermRule {
                 if stream.match_peek::<OpenParen>() {
                     let (span, args) = ArgsRule::parse(stream).map_err(PErr::fail)?;
                     term_result = Expr::MethodCall {
-                        span,
+                        span: Span::from_spans(stream.span(field), span),
                         method: field,
                         lhs: Box::new(term_result),
                         args,

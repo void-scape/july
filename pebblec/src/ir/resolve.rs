@@ -1,5 +1,4 @@
 use super::Stmt;
-use super::strukt::StructId;
 use super::ty::infer::Integral;
 use super::*;
 use crate::ir::ctx::{Ctx, CtxFmt};
@@ -26,7 +25,7 @@ pub fn resolve_types<'a>(ctx: &mut Ctx<'a>) -> Result<TypeKey, Diag> {
     let funcs = std::mem::take(&mut ctx.funcs);
     for func in funcs.iter().filter(|f| !f.is_intrinsic()) {
         if let Err(diag) = infer.in_scope(ctx, |ctx, infer| {
-            init_params(infer, func);
+            init_params(ctx, infer, func);
             func.block.block_constrain(ctx, infer, func.sig)?;
             if let Some(end) = func.block.end {
                 if let Err(diag) =
@@ -114,7 +113,7 @@ fn verify_end_is_return(ctx: &mut Ctx, infer: &InferCtx, func: &Func) -> Result<
     }
 }
 
-fn init_params(infer: &mut InferCtx, func: &Func) {
+fn init_params(ctx: &mut Ctx, infer: &mut InferCtx, func: &Func) {
     for param in func.sig.params.iter() {
         match &param {
             Param::Named { span, ident, ty } => {
@@ -123,7 +122,12 @@ fn init_params(infer: &mut InferCtx, func: &Func) {
             }
             Param::Slf(ident) => {
                 let var = infer.new_var(*ident);
-                infer.eq(var, func.sig.method_self.unwrap(), ident.span);
+                infer.eq(
+                    var,
+                    ctx.tys
+                        .intern_kind(TyKind::Ref(func.sig.method_self.unwrap().0)),
+                    ident.span,
+                );
             }
         }
     }
@@ -134,6 +138,7 @@ impl Expr<'_> {
     ///     aquiring field access type Fails
     ///     ident is undefined
     ///     could not get sig for method
+    #[track_caller]
     pub fn resolve_infer<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<InferTy, Diag> {
         Ok(match self {
             Self::Lit(lit) => match lit.kind {
@@ -941,7 +946,7 @@ impl<'a> Constrain<'a> for Call<'a> {
 }
 
 impl MethodCall<'_> {
-    pub fn get_struct(&self, ctx: &mut Ctx, infer: &InferCtx) -> Result<StructId, Diag> {
+    pub fn get_ty(&self, ctx: &mut Ctx, infer: &InferCtx) -> Result<Ty, Diag> {
         let infer_ty = self.lhs.resolve_infer(ctx, infer)?;
         match infer_ty {
             InferTy::Int | InferTy::Float => {
@@ -950,26 +955,18 @@ impl MethodCall<'_> {
                     format!("`{}` has no methods", infer_ty.to_string(ctx)),
                 ));
             }
-            InferTy::Ty(ty) => match ty.0 {
-                TyKind::Struct(strukt) => Ok(*strukt),
-                _ => {
-                    return Err(ctx.report_error(
-                        self.lhs.span(),
-                        format!("`{}` has no methods", ty.to_string(ctx)),
-                    ));
-                }
-            },
+            InferTy::Ty(ty) => Ok(ty),
         }
     }
 
     pub fn get_sig<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<&'a Sig<'a>, Diag> {
-        let strukt = self.get_struct(ctx, infer)?;
-        ctx.get_method_sig(strukt, self.call.id).ok_or_else(|| {
+        let ty = self.get_ty(ctx, infer)?;
+        ctx.get_method_sig(ty, self.call.id).ok_or_else(|| {
             ctx.report_error(
                 self.call,
                 format!(
                     "`{}` has no method `{}`",
-                    ctx.expect_ident(ctx.tys.strukt(strukt).name.id),
+                    ty.to_string(ctx),
                     ctx.expect_ident(self.call.id),
                 ),
             )
@@ -1014,13 +1011,10 @@ impl<'a> Constrain<'a> for MethodCall<'a> {
                 )));
         }
 
-        let strukt = self.get_struct(ctx, infer)?;
+        let ty = self.get_ty(ctx, infer)?;
         for (i, (expr, param)) in self.args.iter().zip(method_sig.params.iter()).enumerate() {
             let (span, ty) = match param {
-                Param::Slf(ident) => {
-                    let inner = ctx.tys.intern_kind(TyKind::Struct(strukt)).0;
-                    (ident.span, ctx.tys.intern_kind(TyKind::Ref(inner)))
-                }
+                Param::Slf(ident) => (ident.span, ctx.tys.intern_kind(TyKind::Ref(ty.0))),
                 Param::Named { span, ty, .. } => (*span, *ty),
             };
 
@@ -1291,6 +1285,20 @@ impl<'a> Constrain<'a> for Cast<'a> {
                     // hard coded case for casting ref to int to check for null
                     TyKind::Ref(ty) if **ty != TyKind::Str => {
                         if !matches!(target, Ty::USIZE) {
+                            Err(ctx.report_error(
+                                self.lhs.span(),
+                                format!(
+                                    "a value of type `{}` cannot be cast to `{}`",
+                                    ty.to_string(ctx),
+                                    target.to_string(ctx)
+                                ),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    TyKind::Ref(str) if **str == TyKind::Str => {
+                        if !matches!(target.0, TyKind::Ref(inner) if *inner == Ty::U8.0) {
                             Err(ctx.report_error(
                                 self.lhs.span(),
                                 format!(

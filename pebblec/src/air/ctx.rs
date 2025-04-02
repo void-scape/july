@@ -4,7 +4,6 @@ use crate::air::Args;
 use crate::ir::ctx::Ctx;
 use crate::ir::ident::{Ident, IdentId};
 use crate::ir::sig::{Param, Sig};
-use crate::ir::strukt::StructId;
 use crate::ir::ty::infer::SymbolTable;
 use crate::ir::ty::store::TyStore;
 use crate::ir::ty::{Ty, TyKind, TypeKey, Width};
@@ -19,7 +18,7 @@ pub struct AirCtx<'a, 'ctx> {
     pub key: TypeKey,
     pub tables: Vec<SymbolTable<Var>>,
     pub air_sigs: IndexMap<IdentId, &'a AirSig<'a>>,
-    pub impl_air_sigs: IndexMap<(StructId, IdentId), &'a AirSig<'a>>,
+    pub impl_air_sigs: IndexMap<(Ty, IdentId), &'a AirSig<'a>>,
     pub storage: BlobArena,
 
     ctx: &'ctx Ctx<'ctx>,
@@ -76,12 +75,7 @@ fn param_to_air_param(param: &Param) -> Ty {
     }
 }
 
-fn method_sig_to_air_sig<'a>(
-    ctx: &Ctx,
-    storage: &BlobArena,
-    strukt: Ty,
-    sig: &Sig,
-) -> &'a AirSig<'a> {
+fn method_sig_to_air_sig<'a>(ctx: &Ctx, storage: &BlobArena, ty: Ty, sig: &Sig) -> &'a AirSig<'a> {
     &*storage.alloc(AirSig {
         ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
         ty: sig.ty,
@@ -91,7 +85,7 @@ fn method_sig_to_air_sig<'a>(
             storage.alloc_slice(
                 &sig.params
                     .iter()
-                    .map(|p| method_param_to_air_param(strukt, p))
+                    .map(|p| method_param_to_air_param(ty, p))
                     .collect::<Vec<_>>(),
             )
         },
@@ -124,9 +118,8 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
             .impl_sigs
             .iter()
             .map(|(ids, sig)| {
-                let strukt = tys.intern_kind(TyKind::Struct(ids.0)).0;
-                let struct_ref = tys.intern_kind(TyKind::Ref(strukt));
-                (*ids, method_sig_to_air_sig(ctx, &storage, struct_ref, sig))
+                let ty = tys.intern_kind(TyKind::Ref(ids.0.0));
+                (*ids, method_sig_to_air_sig(ctx, &storage, ty, sig))
             })
             .collect();
 
@@ -428,8 +421,8 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
         self.ins(Air::Call(air_sig, args));
     }
 
-    pub fn method_call(&mut self, sig: &Sig, strukt: StructId, args: Args) {
-        let air_sig = self.impl_air_sigs.get(&(strukt, sig.ident)).unwrap();
+    pub fn method_call(&mut self, sig: &Sig, ty: Ty, args: Args) {
+        let air_sig = self.impl_air_sigs.get(&(ty, sig.ident)).unwrap();
         self.ins(Air::Call(air_sig, args));
     }
 

@@ -1,10 +1,5 @@
-use core::ffi;
-
 #[intrinsic]
 exit: (code: i32) {}
-
-#[intrinsic]
-cs: (str: &str) -> CStr {}
 
 #[intrinsic]
 sqrt_f32: (f: f32) -> f32 {}

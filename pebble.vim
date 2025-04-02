@@ -12,6 +12,8 @@ syn keyword pebbleKeyword   use impl as in
 syn keyword pebbleBoolean   true false
 syn keyword pebbleType      i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 bool str
 
+syn match   pebbleOperator  "self"
+
 syn match   pebbleOperator  "\v\^"
 syn match   pebbleOperator  "\v\%"
 syn match   pebbleOperator  "\v\*"

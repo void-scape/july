@@ -1,7 +1,6 @@
 use super::enom::EnumStore;
 use super::ident::*;
 use super::sig::Sig;
-use super::strukt::StructId;
 use super::ty::{store::TyStore, *};
 use super::{Const, Func};
 use indexmap::IndexMap;
@@ -36,7 +35,7 @@ pub struct Ctx<'a> {
     pub enums: EnumStore,
     pub funcs: Vec<Func<'a>>,
     pub sigs: IndexMap<IdentId, &'a Sig<'a>>,
-    pub impl_sigs: IndexMap<(StructId, IdentId), &'a Sig<'a>>,
+    pub impl_sigs: IndexMap<(Ty, IdentId), &'a Sig<'a>>,
 }
 
 // TODO: move into deterministic test?
@@ -103,9 +102,9 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    pub fn store_impl_sigs(&mut self, strukt: StructId, sigs: Vec<Sig<'a>>) -> Result<(), Diag> {
+    pub fn store_impl_sigs(&mut self, ty: Ty, sigs: Vec<Sig<'a>>) -> Result<(), Diag> {
         for sig in sigs.into_iter() {
-            if let Some(other) = self.impl_sigs.insert((strukt, sig.ident), self.intern(sig)) {
+            if let Some(other) = self.impl_sigs.insert((ty, sig.ident), self.intern(sig)) {
                 return Err(self
                     .report_error(
                         sig.span,
@@ -126,8 +125,8 @@ impl<'a> Ctx<'a> {
         self.sigs.get(&ident).copied()
     }
 
-    pub fn get_method_sig(&self, strukt: StructId, ident: IdentId) -> Option<&'a Sig<'a>> {
-        self.impl_sigs.get(&(strukt, ident)).copied()
+    pub fn get_method_sig(&self, ty: Ty, ident: IdentId) -> Option<&'a Sig<'a>> {
+        self.impl_sigs.get(&(ty, ident)).copied()
     }
 
     #[track_caller]

@@ -1,17 +1,18 @@
 use core::basic;
+use core::string;
 use core::io;
 use core::intrinsics;
 
 #[link("demo/invaders/SDL3")]
 extern("C") {
     SDL_Init: (init_code: u32) -> bool;
-    SDL_CreateWindow: (title: CStr, width: i32, height: i32, flags: u64) -> &Window;
+    SDL_CreateWindow: (title: &u8, width: i32, height: i32, flags: u64) -> &Window;
     
-    SDL_CreateRenderer: (window: &Window, name: CStr) -> &Renderer;
+    SDL_CreateRenderer: (window: &Window, name: &u8) -> &Renderer;
     SDL_RenderClear: (renderer: &Renderer) -> bool;
     SDL_RenderPresent: (renderer: &Renderer) -> bool;
     
-    SDL_LoadBMP: (file: CStr) -> &Surface;
+    SDL_LoadBMP: (file: &u8) -> &Surface;
     SDL_DestroySurface: (surface: &Surface);
     SDL_CreateTextureFromSurface: (renderer: &Renderer, surface: &Surface) -> &Texture;
     SDL_RenderTexture: (
@@ -20,7 +21,7 @@ extern("C") {
     
     SDL_PollEvent: (event: &KeyboardEvent) -> bool;
     SDL_Delay: (ms: u32);
-    SDL_GetError: () -> CStr;
+    SDL_GetError: () -> &u8;
 }
 
 Window: struct {
@@ -174,13 +175,13 @@ main: () -> i32 {
         return 1;
     }
     
-    let window = SDL_CreateWindow(cs("Invaders\0"), WIDTH, HEIGHT, 0);
+    let window = SDL_CreateWindow("Invaders\0"*.as_ptr(), WIDTH, HEIGHT, 0);
     if window as u64 == NULL {
         report_error("failed to create window");
         return 1;
     }
     
-    let renderer = SDL_CreateRenderer(window, empty_cs());
+    let renderer = SDL_CreateRenderer(window, NULL as &u8);
     if renderer as u64 == NULL {
         report_error("failed to create renderer");
         return 1;
@@ -199,9 +200,9 @@ main: () -> i32 {
 
 startup: (renderer: &Renderer) -> GameState {
     let textures = [
-        load_bmp_texture(cs("./demo/invaders/bebop.bmp\0"), renderer),
-        load_bmp_texture(cs("./demo/invaders/guts.bmp\0"), renderer),
-        load_bmp_texture(cs("./demo/invaders/bullet.bmp\0"), renderer),
+        load_bmp_texture("./demo/invaders/bebop.bmp\0", renderer),
+        load_bmp_texture("./demo/invaders/guts.bmp\0", renderer),
+        load_bmp_texture("./demo/invaders/bullet.bmp\0", renderer),
     ];
     
     for texture in textures {
@@ -324,8 +325,8 @@ draw_texture: (renderer: &Renderer, texture: &Texture, dst: &FRect) {
     }
 }
 
-load_bmp_texture: (path: CStr, renderer: &Renderer) -> &Texture {
-    let bmp = SDL_LoadBMP(path);
+load_bmp_texture: (path: &str, renderer: &Renderer) -> &Texture {
+    let bmp = SDL_LoadBMP(path*.as_ptr());
     if bmp as u64 == NULL {
         report_error("failed to load bmp");
         return NULL as &Texture;
@@ -341,5 +342,9 @@ load_bmp_texture: (path: CStr, renderer: &Renderer) -> &Texture {
 
 report_error: (msg: &str) {
     println(msg);
-    print_cs(SDL_GetError());
+    let err = SDL_GetError();
+
+    //while err* != 0 {
+    //    err += 1;
+    //}
 }

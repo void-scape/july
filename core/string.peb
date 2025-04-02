@@ -1,0 +1,5 @@
+impl str {
+    as_ptr: (self) -> &u8 {
+        self as &u8
+    }
+}

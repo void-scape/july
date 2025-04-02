@@ -108,36 +108,26 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
     )?;
     ctx.store_sigs(sigs)?;
 
-    let method_sigs = lower_set(
+    let impls = lower_set(
         items
             .iter()
             .filter_map(|i| match &i.kind {
                 ItemKind::Impl(impul) => Some(impul),
                 _ => None,
             })
-            .map(|impul| {
-                let id = ctx.store_ident(impul.ident).id;
-                match ctx.tys.struct_id(id) {
-                    Some(strukt) => {
-                        let inner = ctx.tys.intern_kind(TyKind::Struct(strukt));
-                        let method_self = ctx.tys.intern_kind(TyKind::Ref(inner.0));
-
-                        impul
-                            .funcs
-                            .iter()
-                            .map(|f| func_sig(&mut ctx, Some(method_self), f))
-                            .collect::<Result<Vec<_>, _>>()
-                            .map(|sigs| (strukt, sigs))
-                    }
-                    None => Err(ctx.report_error(
-                        impul.ident,
-                        format!("`{}` is not a valid struct", ctx.expect_ident(id)),
-                    )),
-                }
-            }),
+            .map(|impul| ptype(&mut ctx, &impul.ty).map(|ty| (impul, ty.1))),
     )?;
-    for (strukt, sigs) in method_sigs.into_iter() {
-        ctx.store_impl_sigs(strukt, sigs)?;
+
+    let method_sigs = lower_set(impls.iter().map(|(impul, ty)| {
+        impul
+            .funcs
+            .iter()
+            .map(|f| func_sig(&mut ctx, Some(*ty), f))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|sigs| (ty, sigs))
+    }))?;
+    for (ty, sigs) in method_sigs.into_iter() {
+        ctx.store_impl_sigs(*ty, sigs)?;
     }
 
     let extern_sigs = lower_set(
@@ -166,27 +156,13 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
         .collect();
     let const_eval_order = add_consts(&mut ctx, &consts)?;
 
-    let methods = lower_set(
-        items
+    let methods = lower_set(impls.iter().map(|(impul, ty)| {
+        impul
+            .funcs
             .iter()
-            .filter_map(|i| match &i.kind {
-                ItemKind::Impl(impul) => Some(impul),
-                _ => None,
-            })
-            .map(|impul| {
-                let id = ctx.store_ident(impul.ident).id;
-                // early return in method sigs
-                let strukt = ctx.tys.struct_id(id).unwrap();
-                let inner = ctx.tys.intern_kind(TyKind::Struct(strukt));
-                let method_self = ctx.tys.intern_kind(TyKind::Ref(inner.0));
-
-                impul
-                    .funcs
-                    .iter()
-                    .map(|f| func(&mut ctx, Some(method_self), f))
-                    .collect::<Result<Vec<_>, _>>()
-            }),
-    )?;
+            .map(|f| func(&mut ctx, Some(*ty), f))
+            .collect::<Result<Vec<_>, _>>()
+    }))?;
     ctx.store_funcs(methods.into_iter().flatten());
 
     let funcs = lower_set(

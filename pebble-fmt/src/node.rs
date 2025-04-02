@@ -801,7 +801,7 @@ pub fn nodify_impl<'a>(buf: &'a TokenBuffer, arena: &BlobArena, impul: &Impl) ->
         arena,
         &[
             Node::Text("impl "),
-            Node::token(buf, impul.ident),
+            nodify_ty(buf, arena, &impul.ty),
             Node::space(),
             Node::indent_delimited_with(
                 buf,
