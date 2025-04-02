@@ -3,15 +3,15 @@ use pebblec_parse::lex::io;
 
 mod hosted;
 
-const TESTS: &str = "../demo/tests.peb";
+const INVADERS: &str = "../demo/invaders/invaders.peb";
 
 #[test]
 fn deterministic() {
     let first = CompUnit::new(Config::default().no_capture(true))
-        .compile(TESTS)
+        .compile(INVADERS)
         .unwrap();
     let second = CompUnit::new(Config::default().no_capture(true))
-        .compile(TESTS)
+        .compile(INVADERS)
         .unwrap();
 
     // TyStore stores span information
