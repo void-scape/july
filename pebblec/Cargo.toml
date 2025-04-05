@@ -22,7 +22,6 @@ indexmap = "2.8.0"
 deterministic-hash = "1.0.1"
 
 [dev-dependencies]
-pebblec-macros = { path = "../pebblec-macros" }
 criterion = { version = "0.4", features = ["html_reports"] }
 walkdir = "2.5.0"
 

@@ -628,8 +628,10 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
             SemiStmt::Let(let_) => match let_.lhs {
                 LetTarget::Ident(ident) => {
                     let mut errors = Vec::new();
+                    let mut rhs_err = false;
 
                     if let Err(diag) = let_.rhs.constrain(ctx, infer, sig) {
+                        rhs_err = true;
                         errors.push(diag);
                     }
 
@@ -641,8 +643,13 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
                                 errors.push(diag);
                             }
                         }
-                        if let Err(diag) = let_.rhs.constrain_var(ctx, infer, var) {
-                            errors.push(diag);
+
+                        // if an error is reported previously when rhs is constrained, then the
+                        // same error could be thrown here
+                        if !rhs_err {
+                            if let Err(diag) = let_.rhs.constrain_var(ctx, infer, var) {
+                                errors.push(diag);
+                            }
                         }
                     });
 
@@ -715,6 +722,7 @@ impl<'a> Constrain<'a> for SemiStmt<'a> {
 }
 
 impl<'a> Constrain<'a> for Expr<'a> {
+    #[track_caller]
     fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         match self {
             Self::Lit(_) | Self::Str(_) | Self::Bool(_) => Ok(()),
@@ -945,13 +953,22 @@ impl<'a> Constrain<'a> for Call<'a> {
     }
 }
 
+impl MethodPath<'_> {
+    pub fn resolve_infer(&self, ctx: &mut Ctx, infer: &InferCtx) -> Result<InferTy, Diag> {
+        match self {
+            Self::Field(expr) => expr.resolve_infer(ctx, infer),
+            Self::Path(_, ty) => Ok(InferTy::Ty(*ty)),
+        }
+    }
+}
+
 impl MethodCall<'_> {
     pub fn get_ty(&self, ctx: &mut Ctx, infer: &InferCtx) -> Result<Ty, Diag> {
-        let infer_ty = self.lhs.resolve_infer(ctx, infer)?;
+        let infer_ty = self.receiver.resolve_infer(ctx, infer)?;
         match infer_ty {
             InferTy::Int | InferTy::Float => {
                 return Err(ctx.report_error(
-                    self.lhs.span(),
+                    self.receiver.span(),
                     format!("`{}` has no methods", infer_ty.to_string(ctx)),
                 ));
             }
@@ -959,22 +976,25 @@ impl MethodCall<'_> {
         }
     }
 
+    #[track_caller]
     pub fn get_sig<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<&'a Sig<'a>, Diag> {
         let ty = self.get_ty(ctx, infer)?;
-        ctx.get_method_sig(ty, self.call.id).ok_or_else(|| {
-            ctx.report_error(
+        match ctx.get_method_sig(ty, self.call.id) {
+            Some(sig) => Ok(sig),
+            None => Err(ctx.report_error(
                 self.call,
                 format!(
                     "`{}` has no method `{}`",
                     ty.to_string(ctx),
                     ctx.expect_ident(self.call.id),
                 ),
-            )
-        })
+            )),
+        }
     }
 }
 
 impl<'a> Constrain<'a> for MethodCall<'a> {
+    #[track_caller]
     fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
         for expr in self.args.iter() {
             expr.constrain(ctx, infer, sig)?;
@@ -1018,21 +1038,54 @@ impl<'a> Constrain<'a> for MethodCall<'a> {
                 Param::Named { span, ty, .. } => (*span, *ty),
             };
 
-            let expr = if i == 0 { &self.lhs } else { expr };
-            match expr {
-                Expr::Ident(ident) => match infer.var(ident.id) {
-                    Some(var) => {
-                        if ctx.expect_ident(ident.id) != "NULL" {
-                            infer.eq(var, ty, span);
+            if i == 0 {
+                match self.receiver {
+                    MethodPath::Path(_, ty) => {
+                        if ctx.get_method_sig(ty, self.call.id).is_none() {
+                            errors.push(ctx.report_error(
+                                self.span,
+                                format!(
+                                    "type `{}` has not method `{}`",
+                                    ty.to_string(ctx),
+                                    ctx.expect_ident(self.call.id)
+                                ),
+                            ));
                         }
                     }
-                    None => {
-                        errors.push(ctx.undeclared(ident));
-                    }
-                },
-                _ => {
-                    if let Err(diag) = expr.infer_equality(ctx, infer, ty, span) {
-                        errors.push(diag);
+                    MethodPath::Field(expr) => match expr {
+                        Expr::Ident(ident) => match infer.var(ident.id) {
+                            Some(var) => {
+                                if ctx.expect_ident(ident.id) != "NULL" {
+                                    infer.eq(var, ty, span);
+                                }
+                            }
+                            None => {
+                                errors.push(ctx.undeclared(ident));
+                            }
+                        },
+                        _ => {
+                            if let Err(diag) = expr.infer_equality(ctx, infer, ty, span) {
+                                errors.push(diag);
+                            }
+                        }
+                    },
+                }
+            } else {
+                match expr {
+                    Expr::Ident(ident) => match infer.var(ident.id) {
+                        Some(var) => {
+                            if ctx.expect_ident(ident.id) != "NULL" {
+                                infer.eq(var, ty, span);
+                            }
+                        }
+                        None => {
+                            errors.push(ctx.undeclared(ident));
+                        }
+                    },
+                    _ => {
+                        if let Err(diag) = expr.infer_equality(ctx, infer, ty, span) {
+                            errors.push(diag);
+                        }
                     }
                 }
             }
@@ -1403,7 +1456,38 @@ pub struct Not<'a> {
 
 impl<'a> Constrain<'a> for Not<'a> {
     fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
-        self.inner.constrain(ctx, infer, sig)
+        let mut errors = Vec::new();
+        if let Err(diag) = self.inner.constrain(ctx, infer, sig) {
+            errors.push(diag);
+        }
+
+        match self.inner.resolve_infer(ctx, infer)? {
+            InferTy::Int => {}
+            InferTy::Float => {
+                errors.push(ctx.report_error(
+                    self.inner.span(),
+                    "cannot apply a bitwise not to a value of type {float}",
+                ));
+            }
+            InferTy::Ty(ty) => match ty.0 {
+                TyKind::Int(_) | TyKind::Bool => {}
+                ty => {
+                    errors.push(ctx.report_error(
+                        self.span,
+                        format!(
+                            "cannot apply a bitwise not to a value of type `{}`",
+                            ty.to_string(ctx)
+                        ),
+                    ));
+                }
+            },
+        }
+
+        if !errors.is_empty() {
+            Err(Diag::bundle(errors))
+        } else {
+            Ok(())
+        }
     }
 }
 

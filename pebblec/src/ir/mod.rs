@@ -404,27 +404,73 @@ fn add_consts_recur<'a, 'ctx>(
         konst: rules_const,
     });
 
-    match rules_const.expr {
-        rules::Expr::Lit(_) => {
-            evaluation_order.push(name);
-        }
-        rules::Expr::Ident(other) => {
-            let ident = ctx.store_ident(other);
-            if let Some(other) = consts.get(&ident.id) {
-                add_consts_recur(ctx, consts, defined, processing, other, evaluation_order)?;
-                evaluation_order.push(name);
-            } else {
-                return Err(ctx.undeclared(ident));
-            }
-        }
-        _ => unimplemented!(),
-    }
+    process_expr(
+        ctx,
+        consts,
+        defined,
+        processing,
+        rules_const,
+        evaluation_order,
+        name,
+        &rules_const.expr,
+    )?;
 
     processing.pop();
     defined.insert(name);
 
     let konst = konst(ctx, rules_const)?;
     ctx.store_const(konst);
+    Ok(())
+}
+
+fn process_expr<'a, 'ctx>(
+    ctx: &mut Ctx<'ctx>,
+    consts: &IndexMap<IdentId, &'a rules::Const>,
+    defined: &mut HashSet<IdentId>,
+    processing: &mut Vec<ConstInfo<'a>>,
+    rules_const: &'a rules::Const,
+    evaluation_order: &mut Vec<IdentId>,
+    name_of_const: IdentId,
+    expr: &rules::Expr,
+) -> Result<(), Diag> {
+    match expr {
+        rules::Expr::Lit(_) => {
+            evaluation_order.push(name_of_const);
+        }
+        rules::Expr::Ident(other) => {
+            let ident = ctx.store_ident(*other);
+            if let Some(other) = consts.get(&ident.id) {
+                add_consts_recur(ctx, consts, defined, processing, other, evaluation_order)?;
+                evaluation_order.push(name_of_const);
+            } else {
+                return Err(ctx.undeclared(ident));
+            }
+        }
+        rules::Expr::Bin(_, _, lhs, rhs) => {
+            process_expr(
+                ctx,
+                consts,
+                defined,
+                processing,
+                rules_const,
+                evaluation_order,
+                name_of_const,
+                lhs,
+            )?;
+            process_expr(
+                ctx,
+                consts,
+                defined,
+                processing,
+                rules_const,
+                evaluation_order,
+                name_of_const,
+                rhs,
+            )?;
+        }
+        _ => unimplemented!(),
+    }
+
     Ok(())
 }
 
@@ -622,17 +668,42 @@ fn func_sig<'a>(
 ) -> Result<Sig<'a>, Diag> {
     let params = params(ctx, &func.params)?;
 
+    let ty = func
+        .ty
+        .as_ref()
+        .map(|t| ptype(ctx, &t).map(|t| t.1))
+        .transpose()?
+        .unwrap_or(Ty::UNIT);
+
+    // TODO: cascading `Self`?
+    //// check for `Self` type
+    //let ty = if func
+    //    .ty.as_ref()
+    //    .is_some_and(|t| matches!(t, PType::Simple(_, t) if ctx.as_str(t) == "Self"))
+    //{
+    //    match method_self {
+    //        Some(ty) => ty,
+    //        None => {
+    //            return Err(ctx.report_error(
+    //                func.ty.as_ref().unwrap().span(),
+    //                "`Self` cannot resolve to a type",
+    //            ));
+    //        }
+    //    }
+    //} else {
+    //    func.ty
+    //        .as_ref()
+    //        .map(|t| ptype(ctx, &t).map(|t| t.1))
+    //        .transpose()?
+    //        .unwrap_or(Ty::UNIT)
+    //};
+
     Ok(Sig {
         span: func.span,
         ident: ctx.store_ident(func.name).id,
         params: ctx.intern_slice(&params),
         method_self,
-        ty: func
-            .ty
-            .as_ref()
-            .map(|t| ptype(ctx, &t).map(|t| t.1))
-            .transpose()?
-            .unwrap_or(Ty::UNIT),
+        ty,
         linkage: Linkage::Local,
     })
 }
@@ -828,9 +899,13 @@ impl SemiStmt<'_> {
 fn stmt<'a>(ctx: &mut Ctx<'a>, stmt: &rules::Stmt) -> Result<Stmt<'a>, Diag> {
     Ok(match stmt {
         rules::Stmt::Let {
-            name, ty, assign, ..
+            span,
+            name,
+            ty,
+            assign,
+            ..
         } => Stmt::Semi(SemiStmt::Let(Let {
-            span: ctx.span(*name),
+            span: *span,
             lhs: let_target(ctx, &rules::Expr::Ident(*name)),
             rhs: pexpr(ctx, assign)?,
             ty: ty.as_ref().map(|t| ptype(ctx, &t)).transpose()?,
@@ -1089,19 +1164,23 @@ fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
 //}
 
 fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef<'a>, Diag> {
-    let id = ctx.store_ident(def.name).id;
+    let ident = ctx.store_ident(def.name).id;
     let fields = def
         .fields
         .iter()
         .map(|f| field_def(ctx, f))
         .collect::<Result<Vec<_>, _>>()?;
 
+    let id = ctx
+        .tys
+        .struct_id(ident)
+        .ok_or_else(|| ctx.report_error(def.name, "undefined type"))?;
+    let ty = ctx.tys.intern_kind(TyKind::Struct(id));
+
     Ok(StructDef {
         span: def.span,
-        id: ctx
-            .tys
-            .struct_id(id)
-            .ok_or_else(|| ctx.report_error(def.name, "undefined type"))?,
+        ty,
+        id,
         fields: ctx.intern_slice(&fields),
     })
 }
@@ -1261,10 +1340,10 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag> {
         }
         rules::Expr::MethodCall {
             span,
-            lhs,
+            receiver,
             method,
             args,
-        } => Expr::MethodCall(method_call(ctx, *span, lhs, *method, args)?),
+        } => Expr::MethodCall(method_call(ctx, *span, receiver, *method, args)?),
         expr => panic!("expected expression: {expr:#?}"),
     })
 }
@@ -1380,23 +1459,49 @@ pub struct Return<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct MethodCall<'a> {
     pub span: Span,
-    pub lhs: &'a Expr<'a>,
+    pub receiver: MethodPath<'a>,
     pub call: Ident,
     pub args: &'a [Expr<'a>],
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub enum MethodPath<'a> {
+    Field(&'a Expr<'a>),
+    Path(Span, Ty),
+}
+
+impl MethodPath<'_> {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Field(expr) => expr.span(),
+            Self::Path(span, _) => *span,
+        }
+    }
+}
+
 fn method_call<'a>(
     ctx: &mut Ctx<'a>,
     span: Span,
-    lhs: &rules::Expr,
+    receiver: &rules::MethodPath,
     call: TokenId,
     call_args: &[rules::Expr],
 ) -> Result<MethodCall<'a>, Diag> {
-    let lhs = pexpr(ctx, lhs)?;
+    let receiver = match receiver {
+        rules::MethodPath::Field(field) => MethodPath::Field({
+            let expr = pexpr(ctx, field)?;
+            ctx.intern(expr)
+        }),
+        rules::MethodPath::Path(path) => {
+            assert_eq!(path.segments.len(), 1);
+            let token = path.segments[0];
+            let ty = ptype(ctx, &PType::Simple(ctx.span(token), token))?.1;
+            MethodPath::Path(path.span, ty)
+        }
+    };
+
     Ok(MethodCall {
         span,
-        lhs: ctx.intern(lhs),
+        receiver,
         call: ctx.store_ident(call),
         args: args(ctx, call_args)?,
     })

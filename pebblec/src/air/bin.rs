@@ -1,5 +1,5 @@
+use super::OffsetVar;
 use super::ctx::AirCtx;
-use super::{OffsetVar, eval_expr};
 use crate::air::{Air, Bits, ConstData, Reg, assign_expr, extract_var_from_expr};
 use crate::ir::lit::LitKind;
 use crate::ir::ty::{Sign, Ty, TyKind, Width};
@@ -163,12 +163,6 @@ pub fn assign_bin_op(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, bin: &BinOp) {
         }
         ty => panic!("invalid type: {ty:#?}"),
     }
-}
-
-/// Evaluate `bin` for its side effects then throw away.
-pub fn eval_bin_op(ctx: &mut AirCtx, bin: &BinOp) {
-    eval_expr(ctx, &bin.lhs);
-    eval_expr(ctx, &bin.rhs);
 }
 
 pub fn aquire_accessor_field(ctx: &mut AirCtx, access: &Access) -> (OffsetVar, Ty) {

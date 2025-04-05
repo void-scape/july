@@ -4,12 +4,20 @@ use pebblec_parse::lex::kind::TokenKind;
 use pebblec_parse::matc::{Bracket, Curly, DelimPair, Paren};
 use pebblec_parse::rules::prelude::{
     ArrDef, Assign, Attribute, Block, Const, Expr, ExternBlock, ExternFunc, Field, FieldDef, Func,
-    Impl, PType, Param, Stmt, Struct, StructDef, Use,
+    Impl, MethodPath, PType, Param, Path, Stmt, Struct, StructDef, Use,
 };
 use std::borrow::Borrow;
 use std::ops::Deref;
 
 const INDENT: usize = 4;
+
+pub fn indent_str<'a>(arena: &BlobArena, str: &str) -> &'a str {
+    arena.alloc_str(&format!(
+        "{}{}",
+        String::from_utf8([' ' as u8; INDENT].to_vec()).unwrap(),
+        str
+    ))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BreakCond {
@@ -357,6 +365,7 @@ fn nodify_stmts<'a>(buf: &'a TokenBuffer, arena: &BlobArena, stmts: &[Stmt]) -> 
                 name,
                 ty,
                 assign,
+                ..
             } => {
                 check_whitespace(buf, *let_, &mut nodes);
                 nodes.extend([Node::Text("let "), Node::token(buf, name)]);
@@ -401,7 +410,9 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node
             arena,
             &[
                 nodify_expr(buf, arena, lhs),
-                Node::space(),
+                Node::FlatText(" "),
+                Node::BreakText("\n"),
+                Node::BreakText(indent_str(arena, "")),
                 Node::Text(kind.as_str()),
                 Node::space(),
                 nodify_expr(buf, arena, rhs),
@@ -495,12 +506,18 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node
             ],
         ),
         Expr::MethodCall {
-            lhs, method, args, ..
+            receiver,
+            method,
+            args,
+            ..
         } => Node::group(
             arena,
             &[
-                nodify_expr(buf, arena, lhs),
-                Node::Text("."),
+                nodify_method_receiver(buf, arena, receiver),
+                match receiver {
+                    MethodPath::Field(_) => Node::Text("."),
+                    MethodPath::Path(_) => Node::Text("::"),
+                },
                 Node::token(buf, method),
                 Node::indent_delimited_with(buf, arena, Paren, args, BreakCond::Width, nodify_args),
             ],
@@ -602,6 +619,28 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node
             }
         }
     }
+}
+
+fn nodify_method_receiver<'a>(
+    buf: &'a TokenBuffer,
+    arena: &BlobArena,
+    receiver: &MethodPath,
+) -> Node<'a> {
+    match receiver {
+        MethodPath::Field(expr) => nodify_expr(buf, arena, expr),
+        MethodPath::Path(path) => nodify_path(buf, arena, path),
+    }
+}
+
+fn nodify_path<'a>(buf: &'a TokenBuffer, arena: &BlobArena, path: &Path) -> Node<'a> {
+    assert!(!path.segments.is_empty());
+    let mut nodes = path
+        .segments
+        .iter()
+        .flat_map(|t| [Node::token(buf, t), Node::Text("::")])
+        .collect::<Vec<_>>();
+    nodes.pop();
+    Node::group(arena, &nodes)
 }
 
 fn nodify_struct_fields<'a>(
@@ -785,12 +824,7 @@ fn nodify_extern_funcs<'a>(
 
 pub fn nodify_use<'a>(buf: &'a TokenBuffer, arena: &BlobArena, uze: &Use) -> Node<'a> {
     let mut path = vec![Node::Text("use ")];
-    path.extend(
-        uze.path
-            .iter()
-            .flat_map(|t| [Node::Text(buf.as_str(t)), Node::Text("::")]),
-    );
-    path.pop();
+    path.push(nodify_path(buf, arena, &uze.path));
     path.push(Node::Text(";"));
 
     Node::group(arena, &path)

@@ -542,6 +542,17 @@ impl Expr<'_> {
                 },
                 UOpKind::Not | UOpKind::Neg => unary.inner.infer(ctx),
             },
+            Self::MethodCall(call) => InferTy::Ty(call.expect_sig(ctx).ty),
+            Self::Struct(def) => InferTy::Ty(def.ty),
+            Self::Enum(_) => unimplemented!(),
+            Self::Block(block) => block
+                .end
+                .map(|e| e.infer(ctx))
+                .unwrap_or_else(|| InferTy::Ty(Ty::UNIT)),
+            Self::If(if_) => if_.block.infer(ctx),
+            Self::Loop(_) | Self::For(_) => InferTy::Ty(Ty::UNIT),
+            Self::Break(_) | Self::Continue(_) => unreachable!(),
+            // TODO: there is array and range left, but they are never called? Why not?
             ty => todo!("infer: {ty:?}"),
         }
     }
@@ -599,33 +610,7 @@ fn aquire_access_ty(ctx: &mut AirCtx, access: &Access) -> Ty {
 pub fn lower_const<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, konst: &Const) -> Vec<Air<'a>> {
     ctx.start_const();
     let dst = OffsetVar::zero(ctx.new_var_registered(&konst.name, konst.ty));
-    match konst.expr {
-        Expr::Lit(lit) => match lit.kind {
-            LitKind::Int(int) => {
-                let width = match konst.ty.0 {
-                    TyKind::Int(ty) => ty.width(),
-                    _ => unreachable!(),
-                };
-
-                ctx.ins(Air::PushIConst(
-                    dst,
-                    ConstData::Bits(Bits::from_width(*int as u64, width)),
-                ));
-            }
-            LitKind::Float(float) => {
-                let ty = match konst.ty.0 {
-                    TyKind::Float(ty) => ty,
-                    _ => unreachable!(),
-                };
-
-                ctx.ins(Air::PushIConst(
-                    dst,
-                    ConstData::Bits(Bits::from_width_float(*float, ty.width())),
-                ));
-            }
-        },
-        _ => unimplemented!(),
-    }
+    assign_expr(ctx, dst, konst.ty, &konst.expr);
     ctx.finish_const()
 }
 
@@ -1006,18 +991,26 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
                 let args = generate_args(ctx, call.sig, call.args);
                 ctx.call(call.sig, args);
             });
-            extract_return_from_a(ctx, dst, ty);
+            if !ty.is_unit() {
+                extract_return_from_a(ctx, dst, ty);
+            }
         }
         Expr::MethodCall(call) => {
             let sig = call.expect_sig(ctx);
             assert_eq!(ty, sig.ty);
 
             ctx.push_pop_sp(|ctx| {
-                let args = generate_method_args(ctx, sig, call.lhs, call.args);
+                let args = match call.receiver {
+                    MethodPath::Field(expr) => generate_method_args(ctx, sig, expr, call.args),
+                    MethodPath::Path(_, _) => generate_args(ctx, sig, call.args),
+                };
+
                 let ty = call.expect_ty(ctx);
                 ctx.method_call(sig, ty, args);
             });
-            extract_return_from_a(ctx, dst, ty);
+            if !ty.is_unit() {
+                extract_return_from_a(ctx, dst, ty);
+            }
         }
         Expr::Ident(ident) => {
             let other = OffsetVar::zero(ctx.expect_var(ident.id));
@@ -1196,7 +1189,10 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
 
 impl MethodCall<'_> {
     pub fn expect_ty(&self, ctx: &mut AirCtx) -> Ty {
-        self.lhs.infer_abs(ctx).unwrap()
+        match self.receiver {
+            MethodPath::Field(expr) => expr.infer_abs(ctx).unwrap(),
+            MethodPath::Path(_, ty) => ty,
+        }
     }
 
     pub fn expect_sig<'a, 'ctx>(&self, ctx: &mut AirCtx<'a, 'ctx>) -> &'ctx Sig<'ctx> {
@@ -1205,6 +1201,7 @@ impl MethodCall<'_> {
     }
 }
 
+#[track_caller]
 fn extract_return_from_a(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty) {
     match ty.0 {
         TyKind::Int(ty) => {
@@ -1312,7 +1309,6 @@ fn take_arr_ref(ctx: &mut AirCtx, ty: Ty, dst: OffsetVar, expr: &Expr) {
     }
 }
 
-#[track_caller]
 fn extract_var_from_expr(ctx: &mut AirCtx, ty: Ty, expr: &Expr) -> OffsetVar {
     match expr {
         Expr::Ident(ident) => {
@@ -1514,39 +1510,13 @@ fn eval_or_assign_if(ctx: &mut AirCtx, if_: &If, dst: Option<(OffsetVar, Ty)>) {
     });
 }
 
+// TODO: perhaps unify eval and assign entirely? Creating unnecessary anon_var for expressions that
+// cannot return a type does incur overhead in the bytecode, but like, not a lot?
 fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
     match &expr {
-        Expr::IndexOf(_) => todo!(),
-        Expr::Access(_) | Expr::Str(_) | Expr::Lit(_) | Expr::Bool(_) | Expr::Ident(_) => {}
-        Expr::Cast(cast) => {
-            eval_expr(ctx, cast.lhs);
+        Expr::If(if_) => {
+            eval_if(ctx, if_);
         }
-        Expr::Bin(bin) => {
-            eval_bin_op(ctx, bin);
-        }
-        Expr::Struct(def) => {
-            let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
-            define_struct(ctx, def, dst);
-        }
-        Expr::Call(call) => {
-            ctx.push_pop_sp(|ctx| {
-                let args = generate_args(ctx, call.sig, call.args);
-                ctx.call(call.sig, args);
-            });
-        }
-        Expr::MethodCall(call) => {
-            let sig = call.expect_sig(ctx);
-            ctx.push_pop_sp(|ctx| {
-                let args = generate_method_args(ctx, sig, call.lhs, call.args);
-                let ty = call.expect_ty(ctx);
-                ctx.method_call(sig, ty, args);
-            });
-        }
-        Expr::Enum(_) => {
-            todo!()
-        }
-        Expr::If(if_) => eval_if(ctx, if_),
-        Expr::Block(_) => todo!(),
         Expr::Loop(loop_) => {
             ctx.in_var_scope(|ctx| {
                 let sp = OffsetVar::zero(ctx.anon_var(Ty::USIZE));
@@ -1754,9 +1724,11 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
             let loop_start = ctx.loop_start().unwrap();
             ctx.ins(Air::Jmp(loop_start));
         }
-        Expr::Array(_) => todo!(),
-        Expr::Unary(_) => todo!(),
-        Expr::Range(_) => panic!("range should not be evaluated!"),
+        _ => {
+            let ty = expr.infer_abs(ctx).unwrap();
+            let dst = OffsetVar::zero(ctx.anon_var(ty));
+            assign_expr(ctx, dst, ty, expr);
+        }
     }
 }
 

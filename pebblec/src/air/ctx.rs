@@ -332,9 +332,9 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
 
     #[track_caller]
     pub fn expect_var(&self, ident: IdentId) -> Var {
-        let builder = self.expect_func_builder();
         self.var(ident)
             .or_else(|| {
+                let builder = self.expect_func_builder();
                 builder.func.sig.params.iter().find_map(|p| match &p {
                     Param::Named { ident: name, .. } => {
                         if name.id == ident {

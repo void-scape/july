@@ -1,0 +1,58 @@
+use core::io;
+use core::float;
+
+INIT_X: const f32 = 42.;
+INIT_Y: const f32 = INIT_X * 2.;
+
+Vec2: struct {
+    x: f32,
+    y: f32,
+}
+
+impl Vec2 {
+    new: () -> Vec2 {
+        Vec2 { x: INIT_X, y: INIT_Y }
+    }
+    
+    length_squared: (self) -> f32 {
+        (self*.x * self*.x) + (self*.y * self*.y)
+    }
+    
+    length: (self) -> f32 {
+        self*.length_squared().sqrt()
+    }
+    
+    mutate: (self) {
+        self*.y = INIT_X;
+        self*.x = INIT_Y;
+    }
+}
+
+simple: () -> bool {
+    let v = Vec2::new();
+    let len = Vec2::new().length();
+    let expected_len = (INIT_X * INIT_X) + (INIT_Y * INIT_Y) == v.length_squared();
+    
+    expected_len && v.x == INIT_X && v.y == INIT_Y && Vec2::new().x == INIT_X
+        && Vec2::new().y == INIT_Y
+        && v.length() == Vec2::new().length()
+}
+
+mutation: () -> bool {
+    let v = Vec2::new();
+    let init = v.x == INIT_X && v.y == INIT_Y;
+    v.mutate();
+    let mutation = v.x == INIT_Y && v.y == INIT_X;
+    
+    init && mutation
+}
+
+main: () -> i32 {
+    let results = [simple(), mutation()];
+    
+    for result in results {
+        if !result* { return 1; }
+    }
+    
+    0
+}

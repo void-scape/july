@@ -7,6 +7,7 @@ use crate::{combinator::prelude::*, matc::*, rules::prelude::*, stream::TokenStr
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Let {
+        span: Span,
         let_: TokenId,
         name: TokenId,
         ty: Option<PType>,
@@ -68,6 +69,7 @@ impl<'a, 's> ParserRule<'a> for LetRule {
                 .map_err(PErr::fail)?;
 
         Ok(Stmt::Let {
+            span: Span::from_spans(stream.span(let_), stream.span(_semi)),
             let_,
             ty,
             assign: expr,

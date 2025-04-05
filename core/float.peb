@@ -1,0 +1,7 @@
+use core::intrinsics;
+
+impl f32 {
+    sqrt: (self) -> f32 {
+        sqrt_f32(self*)
+    }
+}

@@ -183,6 +183,7 @@ impl SourceMap {
                 ItemKind::Use(uze) => Some((
                     uze.span,
                     uze.path
+                        .segments
                         .iter()
                         .map(|step| self.buffer(item.source).as_str(step).to_string())
                         .collect::<Vec<_>>(),

@@ -7,11 +7,13 @@ use super::types::{PType, TypeRule};
 use super::{ParserRule, RResult};
 use crate::combinator::opt::Opt;
 use crate::combinator::spanned::Spanned;
+use crate::combinator::wile::{NextToken, While};
 use crate::lex::{buffer::*, kind::*};
-use crate::rules::PErr;
 use crate::rules::strukt::StructDefRule;
+use crate::rules::{Next, PErr};
 use crate::{AssignKind, BinOpKind, UOpKind};
 use crate::{matc::*, stream::TokenStream};
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -45,7 +47,7 @@ pub enum Expr {
     },
     MethodCall {
         span: Span,
-        lhs: Box<Expr>,
+        receiver: MethodPath,
         method: TokenId,
         args: Vec<Expr>,
     },
@@ -108,6 +110,41 @@ impl Expr {
             Self::Unary(span, _, _, _) => *span,
             Self::MethodCall { span, .. } => *span,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MethodPath {
+    Field(Box<Expr>),
+    Path(Path),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Path {
+    pub span: Span,
+    pub segments: Vec<TokenId>,
+}
+
+pub struct PathRules<Terminator>(PhantomData<Terminator>);
+
+impl<'a, T> ParserRule<'a> for PathRules<T>
+where
+    T: MatchTokenKind,
+{
+    type Output = Path;
+
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
+        let spanned = Spanned::<
+            While<NextToken<Not<T>>, (Next<Ident>, Opt<(Next<Colon>, Next<Colon>)>)>,
+        >::parse(stream)?;
+        Ok(Path {
+            span: spanned.span(),
+            segments: spanned
+                .into_inner()
+                .into_iter()
+                .map(|(ident, _)| ident)
+                .collect(),
+        })
     }
 }
 
@@ -311,6 +348,19 @@ impl<'a, 's> ParserRule<'a> for TermRule {
                         args,
                     })
                 }
+                Some(TokenKind::Colon) => {
+                    let mut path = PathRules::<OpenParen>::parse(stream)?;
+                    let (args_span, args) = ArgsRule::parse(stream)?;
+                    let span = Span::from_spans(path.span, args_span);
+                    let method = path.segments.pop().unwrap();
+
+                    Ok(Expr::MethodCall {
+                        span,
+                        receiver: MethodPath::Path(path),
+                        method,
+                        args,
+                    })
+                }
                 Some(TokenKind::OpenCurly) => Ok(Expr::StructDef(
                     StructDefRule::parse(stream).map_err(PErr::fail)?,
                 )),
@@ -419,7 +469,7 @@ impl<'a, 's> ParserRule<'a> for TermRule {
                     term_result = Expr::MethodCall {
                         span: Span::from_spans(stream.span(field), span),
                         method: field,
-                        lhs: Box::new(term_result),
+                        receiver: MethodPath::Field(Box::new(term_result)),
                         args,
                     };
                 } else {

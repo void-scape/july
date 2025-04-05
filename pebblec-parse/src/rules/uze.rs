@@ -1,11 +1,9 @@
+use super::expr::{Path, PathRules};
 use super::{Next, ParserRule, RResult};
 use crate::combinator::prelude::*;
 use crate::lex::buffer::*;
 use crate::lex::kind;
-use crate::lex::kind::Colon;
-use crate::lex::kind::Ident;
 use crate::lex::kind::Semi;
-use crate::matc::Not;
 use crate::rules::PErr;
 use crate::stream::TokenStream;
 
@@ -13,7 +11,7 @@ use crate::stream::TokenStream;
 pub struct Use {
     pub span: Span,
     pub uze: TokenId,
-    pub path: Vec<TokenId>,
+    pub path: Path,
 }
 
 #[derive(Debug, Default)]
@@ -27,15 +25,10 @@ impl<'a> ParserRule<'a> for UseRule {
             return Err(PErr::Recover(stream.error("expected `use`")));
         }
 
-        let spanned = Spanned::<(
-            Next<kind::Use>,
-            While<NextToken<Not<Semi>>, (Next<Ident>, Opt<(Next<Colon>, Next<Colon>)>)>,
-            Next<Semi>,
-        )>::parse(stream)
-        .map_err(PErr::fail)?;
+        let spanned = Spanned::<(Next<kind::Use>, PathRules<Semi>, Next<Semi>)>::parse(stream)
+            .map_err(PErr::fail)?;
         let span = spanned.span();
-        let (uze, source, _) = spanned.into_inner();
-        let path = source.into_iter().map(|(step, _)| step).collect();
+        let (uze, path, _) = spanned.into_inner();
 
         Ok(Use { span, uze, path })
     }

@@ -8,6 +8,15 @@ fn cast() {
     );
 }
 #[test]
+fn methods() {
+    assert_eq!(
+        0, pebblec::interp::InterpInstance::new(&
+        pebblec::comp::CompUnit::new(pebblec::comp::Config::default().no_capture(true))
+        .compile("/Users/nicolasball/dev/pebble/pebblec/tests/hosted/methods.peb")
+        .unwrap()).run(true)
+    );
+}
+#[test]
 fn general() {
     assert_eq!(
         0, pebblec::interp::InterpInstance::new(&

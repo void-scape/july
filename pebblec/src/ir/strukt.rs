@@ -43,6 +43,7 @@ pub struct Field {
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct StructDef<'a> {
     pub span: Span,
+    pub ty: Ty,
     pub id: StructId,
     pub fields: &'a [FieldDef<'a>],
 }

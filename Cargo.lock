@@ -482,6 +482,11 @@ dependencies = [
  "pebblec",
  "pebblec-arena",
  "pebblec-parse",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "walkdir",
 ]
 
 [[package]]
@@ -496,7 +501,6 @@ dependencies = [
  "libffi",
  "libloading",
  "pebblec-arena",
- "pebblec-macros",
  "pebblec-parse",
  "prettyplease",
  "proc-macro2",
