@@ -272,6 +272,7 @@ fn keyword_ident<'a>(input: &mut LocatingSlice<&'a str>) -> ModalResult<Token> {
         "impl" => TokenKind::Impl,
         "enum" => TokenKind::Enum,
         "loop" => TokenKind::Loop,
+        "while" => TokenKind::While,
         "const" => TokenKind::Const,
         "use" => TokenKind::Use,
         "extern" => TokenKind::Extern,

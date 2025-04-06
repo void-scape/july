@@ -1,4 +1,5 @@
 use super::{Next, ParserRule, RResult};
+use crate::combinator;
 use crate::lex::buffer::*;
 use crate::lex::kind;
 use crate::lex::kind::*;
@@ -32,8 +33,8 @@ impl<'a, 's> ParserRule<'a> for ImplRule {
         let mut slice = stream.slice(offset);
         stream.eat_n(offset + 1);
 
-        let spanned =
-            Spanned::<While<Atleast<1>, FnRule>>::parse(&mut slice).map_err(PErr::fail)?;
+        let spanned = Spanned::<combinator::prelude::While<Atleast<1>, FnRule>>::parse(&mut slice)
+            .map_err(PErr::fail)?;
         let span = spanned.span();
         let funcs = spanned.into_inner();
 

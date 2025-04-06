@@ -1,6 +1,7 @@
 use super::{Next, PErr, ParserRule, RResult};
 use crate::AssignKind;
 use crate::lex::buffer::*;
+use crate::lex::kind;
 use crate::lex::kind::*;
 use crate::{combinator::prelude::*, matc::*, rules::prelude::*, stream::TokenStream};
 
@@ -33,7 +34,14 @@ impl<'a, 's> ParserRule<'a> for StmtRule {
 
                 *stream = chk;
                 let (expr, semi) = <(
-                    Alt<(CntrlFlowRule, ForRule, LoopRule, ExprRule, AssignRule)>,
+                    Alt<(
+                        CntrlFlowRule,
+                        ForRule,
+                        LoopRule,
+                        WhileRule,
+                        ExprRule,
+                        AssignRule,
+                    )>,
                     Opt<Next<Semi>>,
                 )>::parse(stream)?;
 
@@ -314,9 +322,39 @@ impl<'a, 's> ParserRule<'a> for LoopRule {
             return Err(PErr::Recover(stream.error("expected `loop`")));
         }
 
-        let (loop_, block) =
-            <(Next<Loop>, BlockRules) as ParserRule>::parse(stream).map_err(PErr::fail)?;
-        Ok(Expr::Loop(loop_, block))
+        let spanned = Spanned::<(Next<Loop>, BlockRules)>::parse(stream).map_err(PErr::fail)?;
+        let span = spanned.span();
+        let (luup, block) = spanned.into_inner();
+
+        Ok(Expr::Loop { span, luup, block })
+    }
+}
+
+pub struct WhileRule;
+
+impl<'a, 's> ParserRule<'a> for WhileRule {
+    type Output = Expr;
+
+    fn parse(stream: &mut TokenStream<'a>) -> RResult<Self::Output> {
+        if !stream.match_peek::<kind::While>() {
+            return Err(PErr::Recover(stream.error("expected `while`")));
+        }
+
+        let spanned = Spanned::<(
+            Next<kind::While>,
+            ToFirstOpenCurlyExprButSubjectToChangeInOtherWordsPleaseFixMe,
+            BlockRules,
+        )>::parse(stream)
+        .map_err(PErr::fail)?;
+        let span = spanned.span();
+        let (wile, condition, block) = spanned.into_inner();
+
+        Ok(Expr::While {
+            span,
+            wile,
+            condition: Box::new(condition),
+            block,
+        })
     }
 }
 

@@ -74,7 +74,17 @@ pub enum Expr {
         lhs: Box<Expr>,
         ty: PType,
     },
-    Loop(TokenId, Block),
+    Loop {
+        span: Span,
+        luup: TokenId,
+        block: Block,
+    },
+    While {
+        span: Span,
+        wile: TokenId,
+        condition: Box<Expr>,
+        block: Block,
+    },
     Unary(Span, TokenId, UOpKind, Box<Expr>),
 }
 
@@ -90,9 +100,7 @@ impl Expr {
             Self::Paren(inner) => inner.span(token_buffer),
             Self::Bin(span, _, _, _) => *span,
             Self::Ret(span, _) => *span,
-            Self::Assign(assign) => {
-                Span::from_spans(assign.lhs.span(token_buffer), assign.rhs.span(token_buffer))
-            }
+            Self::Assign(assign) => assign.span,
             Self::StructDef(def) => def.span,
             //Self::EnumDef(def) => def.span,
             Self::Array(def) => match def {
@@ -105,7 +113,8 @@ impl Expr {
             Self::If { span, .. } => *span,
             Self::For { span, .. } => *span,
             Self::Range { span, .. } => *span,
-            Self::Loop(t, block) => Span::from_spans(token_buffer.span(*t), block.span),
+            Self::Loop { span, .. } => *span,
+            Self::While { span, .. } => *span,
             Self::Cast { span, .. } => *span,
             Self::Unary(span, _, _, _) => *span,
             Self::MethodCall { span, .. } => *span,

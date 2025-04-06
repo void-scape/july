@@ -1182,8 +1182,12 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
             }
         },
         Expr::Enum(_) | Expr::Block(_) => todo!(),
-        Expr::Continue(_) | Expr::Break(_) => unreachable!(),
-        Expr::Range(_) | Expr::For(_) | Expr::Loop(_) => panic!("invalid assignment"),
+        Expr::Continue(_)
+        | Expr::Break(_)
+        | Expr::Range(_)
+        | Expr::For(_)
+        | Expr::Loop(_)
+        | Expr::While(_) => unreachable!(),
     }
 }
 
@@ -1532,6 +1536,31 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
                 ctx.set_active_block(exit);
 
                 ctx.ins(Air::WriteSP(sp));
+            });
+        }
+        Expr::While(while_) => {
+            ctx.in_var_scope(|ctx| {
+                let condition = OffsetVar::zero(ctx.anon_var(Ty::BOOL));
+
+                ctx.push_pop_sp(|ctx| {
+                    let exit = ctx.new_block();
+                    let loop_block = ctx.in_loop(exit, |ctx, loop_block| {
+                        let post_condition = ctx.in_scope(|ctx, _| {
+                            air_block(ctx, &while_.block);
+                            ctx.ins(Air::Jmp(loop_block));
+                        });
+
+                        assign_expr(ctx, condition, Ty::BOOL, while_.condition);
+                        ctx.ins(Air::MovIVar(Reg::A, condition, Width::BOOL));
+                        ctx.ins(Air::IfElse {
+                            condition: Reg::A,
+                            then: post_condition,
+                            otherwise: exit,
+                        });
+                    });
+                    ctx.ins(Air::Jmp(loop_block));
+                    ctx.set_active_block(exit);
+                });
             });
         }
         Expr::For(for_) => {

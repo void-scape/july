@@ -343,8 +343,4 @@ load_bmp_texture: (path: &str, renderer: &Renderer) -> &Texture {
 report_error: (msg: &str) {
     println(msg);
     let err = SDL_GetError();
-
-    //while err* != 0 {
-    //    err += 1;
-    //}
 }

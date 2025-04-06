@@ -600,7 +600,9 @@ impl Expr<'_> {
                     (c, None) => c,
                 }
             }
-            Self::Break(_) | Self::Continue(_) | Self::Loop(_) | Self::For(_) => true,
+            Self::Break(_) | Self::Continue(_) | Self::Loop(_) | Self::While(_) | Self::For(_) => {
+                true
+            }
             Self::Block(block) => match block.end {
                 Some(end) => end.is_unit(ctx, infer)?,
                 None => true,
@@ -736,6 +738,7 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Block(block) => block.constrain(ctx, infer, sig),
             Self::If(if_) => if_.constrain(ctx, infer, sig),
             Self::Loop(loop_) => loop_.constrain(ctx, infer, sig),
+            Self::While(while_) => while_.constrain(ctx, infer, sig),
             Self::For(for_) => for_.constrain(ctx, infer, sig),
             Self::Unary(unary) => unary.constrain(ctx, infer, sig),
             Self::Array(arr) => arr.constrain(ctx, infer, sig),
@@ -1157,6 +1160,18 @@ impl<'a> Constrain<'a> for Loop<'a> {
         validate_loop_block(ctx, infer, sig, &self.block)?;
         self.block.constrain(ctx, infer, sig)?;
         Expr::Block(self.block).infer_equality(ctx, infer, Ty::UNIT, self.span)
+    }
+}
+
+impl<'a> Constrain<'a> for While<'a> {
+    fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, sig: &Sig) -> Result<(), Diag> {
+        self.condition.constrain(ctx, infer, sig)?;
+        self.condition
+            .infer_equality(ctx, infer, Ty::BOOL, self.span)?;
+        infer.in_scope(ctx, |ctx, infer| {
+            self.block.block_constrain(ctx, infer, sig)?;
+            Ok(())
+        })
     }
 }
 

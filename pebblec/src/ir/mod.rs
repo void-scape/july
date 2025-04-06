@@ -961,6 +961,7 @@ pub enum Expr<'a> {
     Block(Block<'a>),
     If(If<'a>),
     Loop(Loop<'a>),
+    While(While<'a>),
     For(ForLoop<'a>),
     Array(ArrDef<'a>),
     IndexOf(IndexOf<'a>),
@@ -984,6 +985,7 @@ impl Expr<'_> {
             Self::Block(block) => block.span,
             Self::If(if_) => if_.span,
             Self::Loop(block) => block.span,
+            Self::While(wile) => wile.span,
             Self::For(for_) => for_.span,
             Self::Str(str) => str.span,
             Self::Access(access) => access.span,
@@ -1102,6 +1104,13 @@ pub struct BoolLit {
 #[derive(Debug, Clone, Copy, PartialEq, Hash)]
 pub struct Loop<'a> {
     pub span: Span,
+    pub block: Block<'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Hash)]
+pub struct While<'a> {
+    pub span: Span,
+    pub condition: &'a Expr<'a>,
     pub block: Block<'a>,
 }
 
@@ -1283,8 +1292,10 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag> {
             span: ctx.span(*str),
             val: ctx.intern_str(ctx.as_str(str).as_ref()),
         }),
-        rules::Expr::Loop(loop_, blck) => Expr::Loop(Loop {
-            span: ctx.span(*loop_),
+        rules::Expr::Loop {
+            span, block: blck, ..
+        } => Expr::Loop(Loop {
+            span: *span,
             block: block(ctx, blck)?,
         }),
         rules::Expr::Access { span, lhs, field } => Expr::Access(access(ctx, *span, lhs, *field)?),
@@ -1344,7 +1355,20 @@ fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag> {
             method,
             args,
         } => Expr::MethodCall(method_call(ctx, *span, receiver, *method, args)?),
-        expr => panic!("expected expression: {expr:#?}"),
+        rules::Expr::While {
+            span,
+            condition,
+            block: blck,
+            ..
+        } => Expr::While({
+            let expr = pexpr(ctx, condition)?;
+            While {
+                span: *span,
+                condition: ctx.intern(expr),
+                block: block(ctx, blck)?,
+            }
+        }),
+        rules::Expr::Ret(_, _) | rules::Expr::Assign(_) => unreachable!(),
     })
 }
 

@@ -598,11 +598,22 @@ fn nodify_expr<'a>(buf: &'a TokenBuffer, arena: &BlobArena, expr: &Expr) -> Node
                 nodify_ty(buf, arena, ty),
             ],
         ),
-        Expr::Loop(_, block) => Node::group(
+        Expr::Loop { block, .. } => Node::group(
             arena,
             &[
                 Node::Text("loop "),
                 nodify_block(buf, arena, block, BreakCond::Always),
+            ],
+        ),
+        Expr::While {
+            condition, block, ..
+        } => Node::group(
+            arena,
+            &[
+                Node::Text("while "),
+                nodify_expr(buf, arena, condition),
+                Node::space(),
+                nodify_block(buf, arena, block, BreakCond::MoreThanOne),
             ],
         ),
         Expr::Unary(_, _, kind, expr) => {

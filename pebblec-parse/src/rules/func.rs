@@ -1,5 +1,6 @@
 use super::types::{PType, TypeRule};
 use super::{Next, ParserRule, RResult};
+use crate::combinator;
 use crate::diagnostic::Diag;
 use crate::lex::buffer::*;
 use crate::lex::kind::TokenKind;
@@ -185,7 +186,7 @@ impl<'a, 's> ParserRule<'a> for ExternFnRule {
             Next<Str>,
             Next<CloseParen>,
             Next<OpenCurly>,
-            While<
+            combinator::prelude::While<
                 NextToken<Not<CloseCurly>>,
                 Spanned<(
                     Next<Ident>,
@@ -313,14 +314,17 @@ impl<'a, 's> ParserRule<'a> for ArgsRule {
         if !stream.match_peek::<CloseParen>() {
             let index = stream.find_matched_delim_offset::<Paren>();
             let mut slice = stream.slice(index);
-            let args =
-                match While::<NextToken<Any>, (ExprRule, Opt<Next<Comma>>)>::parse(&mut slice) {
-                    Err(err) => {
-                        *stream = str;
-                        return Err(err);
-                    }
-                    Ok(args) => args,
-                };
+            let args = match combinator::prelude::While::<
+                NextToken<Any>,
+                (ExprRule, Opt<Next<Comma>>),
+            >::parse(&mut slice)
+            {
+                Err(err) => {
+                    *stream = str;
+                    return Err(err);
+                }
+                Ok(args) => args,
+            };
 
             stream.eat_n(index);
             let close = if let Some(t) = stream.next() {
