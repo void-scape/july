@@ -12,6 +12,12 @@ pub struct BlobArena {
 }
 
 impl BlobArena {
+    pub const fn new() -> Self {
+        Self {
+            arena: Arena::new(),
+        }
+    }
+
     #[track_caller]
     pub fn alloc<'a, T>(&self, elem: T) -> &'a mut T
     where
@@ -106,6 +112,13 @@ impl<T> Debug for Arena<T> {
 
 impl<T> Default for Arena<T> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[allow(unused)]
+impl<T> Arena<T> {
+    pub const fn new() -> Self {
         assert!(
             std::mem::size_of::<T>() > 0,
             "arena does not support zero sized types"
@@ -119,10 +132,7 @@ impl<T> Default for Arena<T> {
             //_owned: PhantomData,
         }
     }
-}
 
-#[allow(unused)]
-impl<T> Arena<T> {
     pub fn alloc(&self, item: T) -> &mut T {
         if self.last == self.ptr {
             self.grow();

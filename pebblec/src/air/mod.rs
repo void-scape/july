@@ -1,7 +1,7 @@
 use self::data::Bss;
 use crate::ir::ctx::CtxFmt;
-use crate::ir::ident::IdentId;
 use crate::ir::lit::{Lit, LitKind};
+use crate::ir::mem::Layout;
 use crate::ir::sig::{Param, Sig};
 use crate::ir::strukt::StructDef;
 use crate::ir::ty::store::TyStore;
@@ -13,6 +13,7 @@ use data::BssEntry;
 use indexmap::IndexMap;
 use pebblec_arena::BlobArena;
 use pebblec_parse::rules::prelude::Attr;
+use pebblec_parse::sym::Symbol;
 use pebblec_parse::{AssignKind, UOpKind};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -25,8 +26,6 @@ pub mod data;
 ///
 /// `Air` is a collection of low level instructions that are intended to be easily executable as
 /// byte-code and lowerable in a backend.
-///
-/// TODO: break out IntKind in favor of byte slices with sign extension?
 #[derive(Debug, PartialEq)]
 pub enum Air<'a> {
     Ret,
@@ -400,8 +399,8 @@ impl<'a, 'ctx> AirFuncBuilder<'a, 'ctx> {
     #[track_caller]
     pub fn build(
         &mut self,
-        sigs: &IndexMap<IdentId, &'a AirSig<'a>>,
-        impl_sigs: &IndexMap<(Ty, IdentId), &'a AirSig<'a>>,
+        sigs: &IndexMap<Symbol, &'a AirSig<'a>>,
+        impl_sigs: &IndexMap<(Ty, Symbol), &'a AirSig<'a>>,
     ) -> AirFunc<'a> {
         assert!(!self.instrs.is_empty());
         let sig = self.func.sig;
@@ -500,7 +499,7 @@ impl Expr<'_> {
                 //      |                           `var_ty` would grab the type defined here
                 //      |                                                                 |
                 //      |-----------------------------------------------------------------|
-                InferTy::Ty(ctx.expect_var_ty(ctx.expect_var(ident.id)))
+                InferTy::Ty(ctx.expect_var_ty(ctx.expect_var(ident.sym)))
             }
             Self::Access(access) => InferTy::Ty(aquire_access_ty(ctx, access)),
             Self::Call(call) => InferTy::Ty(call.sig.ty),
@@ -544,7 +543,6 @@ impl Expr<'_> {
             },
             Self::MethodCall(call) => InferTy::Ty(call.expect_sig(ctx).ty),
             Self::Struct(def) => InferTy::Ty(def.ty),
-            Self::Enum(_) => unimplemented!(),
             Self::Block(block) => block
                 .end
                 .map(|e| e.infer(ctx))
@@ -583,7 +581,7 @@ fn aquire_access_ty(ctx: &mut AirCtx, access: &Access) -> Ty {
     let mut strukt = ctx.tys.strukt(*id);
 
     for (i, acc) in access.accessors.iter().rev().enumerate() {
-        let ty = strukt.field_ty(acc.id);
+        let ty = strukt.field_ty(acc.sym);
         if i == access.accessors.len() - 1 {
             return ty;
         }
@@ -643,7 +641,7 @@ pub fn lower<'a, 'ctx>(mut ir: Ir<'ctx>) -> ByteCode<'a> {
         .iter()
         .filter_map(|(ident, sig)| {
             matches!(sig.linkage, AirLinkage::External { .. })
-                .then_some((air_ctx.storage.alloc_str(ir.ctx.expect_ident(*ident)), *sig))
+                .then_some((air_ctx.storage.alloc_str(ident.as_str()), *sig))
         })
         .collect();
     let tys = std::mem::take(&mut air_ctx.tys);
@@ -670,7 +668,7 @@ pub fn lower_func<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> Air
 
         if func.sig.ty.is_unit() {
             air_block(ctx, &func.block);
-            if ctx.expect_ident(func.sig.ident) == "main" {
+            if func.sig.ident.as_str() == "main" {
                 ctx.ins(Air::MovIConst(Reg::A, ConstData::Bits(Bits::from_u64(0))));
             }
             ctx.ins(Air::Ret);
@@ -686,12 +684,11 @@ pub fn lower_func<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> Air
 pub fn lower_intrinsic<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
     ctx.in_var_scope(|ctx| {
         init_params(ctx, func);
-        match ctx.expect_ident(func.sig.ident) {
+        match func.sig.ident.as_str() {
             "exit" => exit(ctx, func),
             "print" => print(ctx, func),
             "println" => println(ctx, func),
-            "cs" => c_str(ctx, func),
-            "print_cs" => print_c_str(ctx, func),
+            "str_from_raw_parts" => str_from_raw_parts(ctx, func),
             "sqrt_f32" => sqrt_f32(ctx, func),
             i => unimplemented!("intrinsic: {i}"),
         }
@@ -704,39 +701,10 @@ pub fn exit<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'
         unreachable!()
     };
 
-    let var = ctx.expect_var(ident.id);
+    let var = ctx.expect_var(ident.sym);
     ctx.ins_set([
         Air::MovIVar(Reg::A, OffsetVar::zero(var), Width::W32),
         Air::Exit,
-    ]);
-    ctx.finish_func()
-}
-
-pub fn c_str<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
-    ctx.start_func(func);
-    let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
-        unreachable!()
-    };
-
-    let var = ctx.expect_var(ident.id);
-    ctx.ins_set([
-        Air::Addr(Reg::A, OffsetVar::new(var, IntKind::USIZE)),
-        Air::Ret,
-    ]);
-    ctx.finish_func()
-}
-
-pub fn print_c_str<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
-    ctx.start_func(func);
-    let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
-        unreachable!()
-    };
-
-    let var = ctx.expect_var(ident.id);
-    ctx.ins_set([
-        Air::MovIVar(Reg::A, OffsetVar::zero(var), Width::PTR),
-        Air::PrintCStr,
-        Air::Ret,
     ]);
     ctx.finish_func()
 }
@@ -755,13 +723,43 @@ pub fn println<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFun
     ctx.finish_func()
 }
 
+pub fn str_from_raw_parts<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
+    ctx.start_func(func);
+    let Param::Named { ident: len, .. } = func.sig.params[0] else {
+        unreachable!()
+    };
+    let Param::Named { ident: bytes, .. } = func.sig.params[1] else {
+        unreachable!()
+    };
+
+    let len = OffsetVar::zero(ctx.expect_var(len.sym));
+    let bytes = OffsetVar::zero(ctx.expect_var(bytes.sym));
+    let var = OffsetVar::zero(ctx.anon_var(Ty::STR_LIT));
+
+    ctx.ins_set([
+        Air::PushIVar {
+            dst: var.add(Width::PTR),
+            width: Width::SIZE,
+            src: len,
+        },
+        Air::PushIVar {
+            dst: var,
+            width: Width::PTR,
+            src: bytes,
+        },
+    ]);
+
+    ctx.ret_var(var, Ty::STR_LIT);
+    ctx.finish_func()
+}
+
 pub fn sqrt_f32<'a, 'ctx>(ctx: &mut AirCtx<'a, 'ctx>, func: &'ctx Func) -> AirFunc<'a> {
     ctx.start_func(func);
     let Param::Named { ident, .. } = func.sig.params.iter().next().unwrap() else {
         unreachable!()
     };
 
-    let var = ctx.expect_var(ident.id);
+    let var = ctx.expect_var(ident.sym);
     ctx.ins_set([
         Air::MovIVar(Reg::A, OffsetVar::zero(var), Width::W32),
         Air::FSqrt(FloatTy::F32),
@@ -1013,7 +1011,7 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
             }
         }
         Expr::Ident(ident) => {
-            let other = OffsetVar::zero(ctx.expect_var(ident.id));
+            let other = OffsetVar::zero(ctx.expect_var(ident.sym));
             assert!(
                 ctx.expect_var_ty(other.var).equiv(*ty.0),
                 "`{:?}` != `{:?}`",
@@ -1181,8 +1179,8 @@ fn assign_expr(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty, expr: &Expr) {
                 }
             }
         },
-        Expr::Enum(_) | Expr::Block(_) => todo!(),
-        Expr::Continue(_)
+        Expr::Block(_)
+        | Expr::Continue(_)
         | Expr::Break(_)
         | Expr::Range(_)
         | Expr::For(_)
@@ -1201,7 +1199,7 @@ impl MethodCall<'_> {
 
     pub fn expect_sig<'a, 'ctx>(&self, ctx: &mut AirCtx<'a, 'ctx>) -> &'ctx Sig<'ctx> {
         let ty = self.expect_ty(ctx);
-        ctx.get_method_sig(ty, self.call.id).unwrap()
+        ctx.get_method_sig(ty, self.call.sym).unwrap()
     }
 }
 
@@ -1224,15 +1222,15 @@ fn extract_return_from_a(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty) {
         }
         TyKind::Ref(TyKind::Str) | TyKind::Slice(_) => {
             ctx.ins_set([
-                Air::Deref { dst, addr: Reg::A },
-                Air::MovIConst(
-                    Reg::B,
-                    ConstData::Bits(Bits::from_u64(Width::SIZE.size() as u64)),
-                ),
-                Air::AddAB(Width::SIZE, Sign::U),
-                Air::Deref {
-                    dst: dst.add(Width::SIZE),
-                    addr: Reg::A,
+                Air::Addr(Reg::B, dst),
+                Air::MemCpy {
+                    dst: Reg::B,
+                    src: {
+                        // the destination is supplied by the callee
+                        const _: () = assert!(matches!(RET_REG, Reg::A));
+                        Reg::A
+                    },
+                    bytes: Layout::FAT_PTR.size,
                 },
             ]);
         }
@@ -1287,7 +1285,7 @@ fn extract_return_from_a(ctx: &mut AirCtx, dst: OffsetVar, ty: Ty) {
 fn take_arr_ref(ctx: &mut AirCtx, ty: Ty, dst: OffsetVar, expr: &Expr) {
     match expr {
         Expr::Ident(ident) => {
-            let var = ctx.expect_var(ident.id);
+            let var = ctx.expect_var(ident.sym);
             let var_ty = ctx.expect_var_ty(var);
 
             match (var_ty.0, ty.0) {
@@ -1316,7 +1314,7 @@ fn take_arr_ref(ctx: &mut AirCtx, ty: Ty, dst: OffsetVar, expr: &Expr) {
 fn extract_var_from_expr(ctx: &mut AirCtx, ty: Ty, expr: &Expr) -> OffsetVar {
     match expr {
         Expr::Ident(ident) => {
-            let var = ctx.expect_var(ident.id);
+            let var = ctx.expect_var(ident.sym);
             let var_ty = ctx.expect_var_ty(var);
 
             assert_eq!(
@@ -1325,7 +1323,7 @@ fn extract_var_from_expr(ctx: &mut AirCtx, ty: Ty, expr: &Expr) -> OffsetVar {
                 "{} != {} @ {}",
                 var_ty.to_string(ctx),
                 ty.to_string(ctx),
-                ctx.expect_ident(ident.id)
+                ident.as_str()
             );
 
             OffsetVar::zero(var)
@@ -1762,7 +1760,7 @@ fn eval_expr(ctx: &mut AirCtx, expr: &Expr) {
 }
 
 fn generate_args(ctx: &mut AirCtx, sig: &Sig, args: &[Expr]) -> Args {
-    let ident = ctx.expect_ident(sig.ident);
+    let ident = sig.ident.as_str();
     if ident == "print" || ident == "println" {
         return print_generate_args(ctx, args);
     }
@@ -1859,8 +1857,8 @@ fn generate_method_args(ctx: &mut AirCtx, sig: &Sig, callee: &Expr, args: &[Expr
 fn define_struct(ctx: &mut AirCtx, def: &StructDef, dst: OffsetVar) {
     for field in def.fields.iter() {
         let strukt = ctx.tys.strukt(def.id);
-        let field_offset = strukt.field_offset(&ctx.tys, field.name.id);
-        let ty = strukt.field_ty(field.name.id);
+        let field_offset = strukt.field_offset(&ctx.tys, field.name.sym);
+        let ty = strukt.field_ty(field.name.sym);
 
         assign_expr(
             ctx,
@@ -2011,7 +2009,7 @@ fn air_return(ctx: &mut AirCtx, ty: Ty, end: &Expr) {
     //        _ => unreachable!(),
     //    },
     //    Expr::Ident(ident) => {
-    //        let var = OffsetVar::zero(ctx.expect_var(ident.id));
+    //        let var = OffsetVar::zero(ctx.expect_var(ident.sym));
     //        let out_ty = ctx.expect_var_ty(var.var);
     //        assert_eq!(out_ty, ty);
     //
@@ -2069,7 +2067,7 @@ fn air_return(ctx: &mut AirCtx, ty: Ty, end: &Expr) {
     //        ctx.ins(Air::Ret);
     //    }
     //    Expr::Struct(def) => {
-    //        let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.id)));
+    //        let dst = OffsetVar::zero(ctx.anon_var(ctx.tys.struct_ty_id(def.sym)));
     //        define_struct(ctx, def, dst);
     //        ctx.ret_ptr(dst);
     //    }

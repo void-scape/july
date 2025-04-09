@@ -32,14 +32,7 @@ fn main() -> ExitCode {
     let args = Args::parse();
     match CompUnit::new(args.config()).compile(args.file) {
         Ok(bytecode) => {
-            // TODO: if the interpreter panics, then we should report it (ICE). Buuut, the user code
-            // could also crash the interpreter... annoying
             ExitCode::from(InterpInstance::new(&bytecode).run(args.log) as u8)
-
-            //match ice::reported_panic(false, move || InterpInstance::new(&bytecode).run(args.log)) {
-            //    Some(exit_code) => ExitCode::from(exit_code as u8),
-            //    None => ExitCode::FAILURE,
-            //}
         }
         Err(err) => {
             match err {

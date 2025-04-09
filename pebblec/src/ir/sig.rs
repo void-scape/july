@@ -1,5 +1,5 @@
 use super::FuncHash;
-use super::ident::{Ident, IdentId};
+use pebblec_parse::sym::{Ident, Symbol};
 use super::ty::Ty;
 use pebblec_parse::lex::buffer::Span;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -7,7 +7,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Sig<'a> {
     pub span: Span,
-    pub ident: IdentId,
+    pub ident: Symbol,
     pub ty: Ty,
     pub params: &'a [Param],
     pub method_self: Option<Ty>,

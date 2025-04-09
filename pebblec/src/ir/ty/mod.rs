@@ -1,9 +1,8 @@
 use self::store::TyStore;
-
 use super::ctx::Ctx;
-use super::ident::{Ident, IdentId};
 use super::mem::Layout;
 use super::strukt::StructId;
+use pebblec_parse::sym::{Ident, Symbol};
 use std::collections::HashMap;
 use std::ops::Deref;
 
@@ -143,7 +142,7 @@ impl TyKind {
             Self::Str => "str".to_string(),
             Self::Int(int) => int.as_str().to_string(),
             Self::Float(float) => float.as_str().to_string(),
-            Self::Struct(s) => ctx.expect_ident(ctx.tys.strukt(*s).name.id).to_string(),
+            Self::Struct(s) => ctx.tys.strukt(*s).name.as_str().to_string(),
             Self::Array(len, inner) => format!("[{}; {}]", inner.to_string(ctx), len),
             Self::Slice(inner) => format!("[{}]", inner.to_string(ctx)),
         }
@@ -318,12 +317,12 @@ pub struct TyVar(usize);
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TypeKey {
-    key: HashMap<IdentId, Vec<(Ident, Ty)>>,
+    key: HashMap<Symbol, Vec<(Ident, Ty)>>,
 }
 
 impl TypeKey {
     pub fn insert(&mut self, ident: Ident, ty: Ty) {
-        let entry = self.key.entry(ident.id).or_default();
+        let entry = self.key.entry(ident.sym).or_default();
         let elem = (ident, ty);
         if entry.contains(&elem) {
             assert!(
@@ -338,7 +337,7 @@ impl TypeKey {
         }
     }
 
-    pub fn ident_set(&self, ident: IdentId) -> &[(Ident, Ty)] {
+    pub fn ident_set(&self, ident: Symbol) -> &[(Ident, Ty)] {
         self.key
             .get(&ident)
             .map(Vec::as_slice)

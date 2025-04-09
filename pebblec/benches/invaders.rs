@@ -4,7 +4,7 @@ use pebblec::{air, ir};
 use pebblec_parse::lex::source::SourceMap;
 use std::time::Instant;
 
-const INVADERS: &str = "../demo/invaders.peb";
+const INVADERS: &str = "../demo/invaders/invaders.peb";
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("source map parse", |b| {

@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+pebblec-arena = { path = "../pebblec-arena" }
+pebblec-macros = { path = "../pebblec-macros" }
 winnow = "0.6.24"
 variadics_please = "1.1.0"
 annotate-snippets = "0.11.5"
-pebblec-macros = { path = "../pebblec-macros" }
 thiserror = "2.0.12"
 indexmap = "2.8.0"

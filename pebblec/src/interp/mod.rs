@@ -9,6 +9,8 @@ use libffi::low::CodePtr;
 use libffi::middle::{Arg, Cif, Type};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_void};
+use std::ops::{Add, Div, Mul, Rem, Shl, Shr, Sub};
+use std::panic::AssertUnwindSafe;
 
 mod ctx;
 mod stack;
@@ -66,26 +68,44 @@ fn entry(
     log: bool,
 ) -> i32 {
     let mut ctx = InterpCtx::new(&bytecode.tys, &bytecode.bss);
-    ctx.consts(&bytecode.consts);
-    loop {
-        match execute(&mut ctx, &bytecode.funcs, libs, log) {
-            InstrResult::Break => break,
-            InstrResult::Continue => continue,
-            InstrResult::Ok => {}
-        }
 
-        ctx.incr_instr();
+    ctx.consts(&bytecode.consts);
+
+    loop {
+        let bytecode = AssertUnwindSafe(bytecode);
+        let mut unwind_ctx = AssertUnwindSafe(&mut ctx);
+        match std::panic::catch_unwind(move || execute(&mut unwind_ctx, &bytecode.funcs, libs, log))
+        {
+            Ok(result) => match result {
+                InstrResult::Break => break,
+                InstrResult::Continue => continue,
+                InstrResult::Ok => {
+                    ctx.incr_instr();
+                }
+            },
+            Err(_) => todo!("more information required"),
+        }
     }
 
     ctx.start_func(main);
     loop {
-        match execute(&mut ctx, &bytecode.funcs, libs, log) {
-            InstrResult::Break => break,
-            InstrResult::Continue => continue,
-            InstrResult::Ok => {}
+        let bytecode = AssertUnwindSafe(bytecode);
+        let mut unwind_ctx = AssertUnwindSafe(&mut ctx);
+        match std::panic::catch_unwind(move || execute(&mut unwind_ctx, &bytecode.funcs, libs, log))
+        {
+            Ok(result) => match result {
+                InstrResult::Break => break,
+                InstrResult::Continue => continue,
+                InstrResult::Ok => {
+                    ctx.incr_instr();
+                }
+            },
+            Err(_) => {
+                ctx.report_backtrace();
+                ctx.a.w(1);
+                break;
+            }
         }
-
-        ctx.incr_instr();
     }
     ctx.a.r() as i32
 }
@@ -94,14 +114,12 @@ macro_rules! float_op {
     ($ctx:expr, $width:expr, $op:tt) => {
         match $width {
             Width::W32 => {
-                $ctx.a.w(
-                    (f32::from_bits($ctx.a.r() as u32) $op f32::from_bits($ctx.b.r() as u32)).to_bits()
-                        as u64,
-                );
+                let val = (f32::from_bits($ctx.a.r() as u32) $op f32::from_bits($ctx.b.r() as u32)).to_bits() as u64;
+                $ctx.a.w(val);
             }
             Width::W64 => {
-                $ctx.a
-                    .w((f64::from_bits($ctx.a.r()) $op f64::from_bits($ctx.b.r())).to_bits());
+                let val = (f64::from_bits($ctx.a.r()) $op f64::from_bits($ctx.b.r())).to_bits();
+                $ctx.a.w(val);
             }
             _ => unreachable!(),
         }
@@ -110,13 +128,12 @@ macro_rules! float_op {
     (Cmp, $ctx:expr, $width:expr, $op:tt) => {
         match $width {
             Width::W32 => {
-                $ctx.a.w(
-                    (f32::from_bits($ctx.a.r() as u32) $op f32::from_bits($ctx.b.r() as u32)) as u64,
-                );
+                let val = (f32::from_bits($ctx.a.r() as u32) $op f32::from_bits($ctx.b.r() as u32)) as u64;
+                $ctx.a.w(val);
             }
             Width::W64 => {
-                $ctx.a
-                    .w((f64::from_bits($ctx.a.r()) $op f64::from_bits($ctx.b.r())) as u64);
+                let val = (f64::from_bits($ctx.a.r()) $op f64::from_bits($ctx.b.r())) as u64;
+                $ctx.a.w(val);
             }
             _ => unreachable!(),
         }
@@ -127,43 +144,45 @@ macro_rules! int_op {
     ($ctx:expr, $width:expr, $sign:expr, $op:tt) => {
         match $width {
             Width::W8 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u8).$op(($ctx.b.r() as u8))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u8).$op(($ctx.b.r() as u8))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i8).$op(($ctx.b.r() as i8))) as i64,
-                    ))
+                    let val = (($ctx.a.r() as i8).$op(($ctx.b.r() as i8))) as i64;
+                    $ctx.a.w(std::mem::transmute(val));
                 },
             },
             Width::W16 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u16).$op(($ctx.b.r() as u16))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u16).$op(($ctx.b.r() as u16))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i16).$op(($ctx.b.r() as i16))) as i64,
-                    ))
+                    let val = (($ctx.a.r() as i16).$op(($ctx.b.r() as i16))) as i64;
+                    $ctx.a.w(std::mem::transmute(val))
                 },
             },
             Width::W32 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u32).$op(($ctx.b.r() as u32))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u32).$op(($ctx.b.r() as u32))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i32).$op(($ctx.b.r() as i32))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i32).$op(($ctx.b.r() as i32))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W64 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u64).$op(($ctx.b.r() as u64))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u64).$op(($ctx.b.r() as u64))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i64).$op(($ctx.b.r() as i64))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i64).$op(($ctx.b.r() as i64))) as i64);
+                    $ctx.a.w(val);
                 },
             },
         }
@@ -174,43 +193,47 @@ macro_rules! shift_op {
     ($ctx:expr, $width:expr, $sign:expr, $op:tt) => {
         match $width {
             Width::W8 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u8).$op(($ctx.b.r() as u32))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u8).$op(($ctx.b.r() as u32))) as u64;
+                    $ctx.a.w(val)
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i8).$op(($ctx.b.r() as u32))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i8).$op(($ctx.b.r() as u32))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W16 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u16).$op(($ctx.b.r() as u32))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u16).$op(($ctx.b.r() as u32))) as u64;
+                    $ctx.a.w(val)
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i16).$op(($ctx.b.r() as u32))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i16).$op(($ctx.b.r() as u32))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W32 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u32).$op(($ctx.b.r() as u32))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u32).$op(($ctx.b.r() as u32))) as u64;
+                    $ctx.a.w(val)
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i32).$op(($ctx.b.r() as u32))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i32).$op(($ctx.b.r() as u32))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W64 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u64).$op(($ctx.b.r() as u32))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u64).$op(($ctx.b.r() as u32))) as u64;
+                    $ctx.a.w(val)
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i64).$op(($ctx.b.r() as u32))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i64).$op(($ctx.b.r() as u32))) as i64);
+                    $ctx.a.w(val);
                 },
             },
         }
@@ -221,43 +244,47 @@ macro_rules! cmp_op {
     ($ctx:expr, $width:expr, $sign:expr, $op:tt) => {
         match $width {
             Width::W8 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u8).$op(&($ctx.b.r() as u8))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u8).$op(&($ctx.b.r() as u8))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i8).$op(&($ctx.b.r() as i8))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i8).$op(&($ctx.b.r() as i8))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W16 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u16).$op(&($ctx.b.r() as u16))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u16).$op(&($ctx.b.r() as u16))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i16).$op(&($ctx.b.r() as i16))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i16).$op(&($ctx.b.r() as i16))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W32 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u32).$op(&($ctx.b.r() as u32))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u32).$op(&($ctx.b.r() as u32))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i32).$op(&($ctx.b.r() as i32))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i32).$op(&($ctx.b.r() as i32))) as i64);
+                    $ctx.a.w(val);
                 },
             },
             Width::W64 => match $sign {
-                Sign::U => $ctx
-                    .a
-                    .w((($ctx.a.r() as u64).$op(&($ctx.b.r() as u64))) as u64),
+                Sign::U => {
+                    let val = (($ctx.a.r() as u64).$op(&($ctx.b.r() as u64))) as u64;
+                    $ctx.a.w(val);
+                }
                 Sign::I => unsafe {
-                    $ctx.a.w(std::mem::transmute(
-                        (($ctx.a.r() as i64).$op(&($ctx.b.r() as i64))) as i64,
-                    ))
+                    let val =
+                        std::mem::transmute((($ctx.a.r() as i64).$op(&($ctx.b.r() as i64))) as i64);
+                    $ctx.a.w(val);
                 },
             },
         }
@@ -268,16 +295,20 @@ macro_rules! bit_op {
     ($ctx:expr, $width:tt, $op:tt) => {
         match $width {
             Width::W8 => {
-                $ctx.a.w((($ctx.a.r() as u8) $op ($ctx.b.r() as u8)) as u64)
+                let val = (($ctx.a.r() as u8) $op ($ctx.b.r() as u8)) as u64;
+                $ctx.a.w(val);
             }
             Width::W16 => {
-                $ctx.a.w((($ctx.a.r() as u16) $op ($ctx.b.r() as u16)) as u64)
+                let val = (($ctx.a.r() as u16) $op ($ctx.b.r() as u16)) as u64;
+                $ctx.a.w(val);
             }
             Width::W32 => {
-                $ctx.a.w((($ctx.a.r() as u32) $op ($ctx.b.r() as u32)) as u64)
+                let val = (($ctx.a.r() as u32) $op ($ctx.b.r() as u32)) as u64;
+                $ctx.a.w(val);
             }
             Width::W64 => {
-                $ctx.a.w($ctx.a.r() $op $ctx.b.r())
+                let val = $ctx.a.r() $op $ctx.b.r();
+                $ctx.a.w(val);
             }
         }
     };
@@ -382,14 +413,14 @@ fn execute<'a>(
                                                     print!("{}", ctx.stack.read_var::<u8>(var) == 1)
                                                 }
                                                 TyKind::Ref(TyKind::Str) => {
-                                                    let len = ctx
+                                                    let ptr = ctx
                                                         .stack
                                                         .read_some_bits(var, Width::SIZE)
                                                         .to_u64();
-                                                    let ptr = ctx
+                                                    let len = ctx
                                                         .stack
                                                         .read_some_bits(
-                                                            var.add(Width::SIZE),
+                                                            var.add(Width::PTR),
                                                             Width::SIZE,
                                                         )
                                                         .to_u64();
@@ -547,8 +578,8 @@ fn execute<'a>(
         }
 
         Air::ReadSP(var) => {
-            ctx.stack
-                .push_some_bits(*var, Bits::from_u64(ctx.stack.sp() as u64));
+            let sp = ctx.stack.sp() as u64;
+            ctx.stack.push_some_bits(*var, Bits::from_u64(sp));
         }
         Air::WriteSP(var) => {
             *ctx.stack.sp_mut() = ctx.stack.read_var::<u64>(*var) as usize;
@@ -583,12 +614,11 @@ fn execute<'a>(
 
         Air::Read { dst, addr, width } => {
             let addr = ctx.r(*addr);
-            ctx.w(
-                *dst,
-                ctx.stack
-                    .read_some_bits_with_addr(addr as usize, *width)
-                    .to_u64(),
-            );
+            let bits = ctx
+                .stack
+                .read_some_bits_with_addr(addr as usize, *width)
+                .to_u64();
+            ctx.w(*dst, bits);
         }
         Air::Write { addr, data, width } => {
             let addr = ctx.r(*addr);
@@ -603,7 +633,8 @@ fn execute<'a>(
 
         Air::SwapReg => {
             let tmp = ctx.a.r();
-            ctx.a.w(ctx.b.r());
+            let b = ctx.b.r();
+            ctx.a.w(b);
             ctx.b.w(tmp);
         }
         Air::MovIConst(reg, data) => {
@@ -619,15 +650,15 @@ fn execute<'a>(
             ctx.w(*reg, bits);
         }
 
-        Air::MulAB(width, sign) => int_op!(ctx, width, sign, wrapping_mul),
-        Air::DivAB(width, sign) => int_op!(ctx, width, sign, wrapping_div),
-        Air::RemAB(width, sign) => int_op!(ctx, width, sign, wrapping_rem),
+        Air::MulAB(width, sign) => int_op!(ctx, width, sign, mul),
+        Air::DivAB(width, sign) => int_op!(ctx, width, sign, div),
+        Air::RemAB(width, sign) => int_op!(ctx, width, sign, rem),
 
-        Air::AddAB(width, sign) => int_op!(ctx, width, sign, wrapping_add),
-        Air::SubAB(width, sign) => int_op!(ctx, width, sign, wrapping_sub),
+        Air::AddAB(width, sign) => int_op!(ctx, width, sign, add),
+        Air::SubAB(width, sign) => int_op!(ctx, width, sign, sub),
 
-        Air::ShlAB(width, sign) => shift_op!(ctx, width, sign, wrapping_shl),
-        Air::ShrAB(width, sign) => shift_op!(ctx, width, sign, wrapping_shr),
+        Air::ShlAB(width, sign) => shift_op!(ctx, width, sign, shl),
+        Air::ShrAB(width, sign) => shift_op!(ctx, width, sign, shr),
 
         Air::BandAB(width) => bit_op!(ctx, width, &),
         Air::XorAB(width) => bit_op!(ctx, width, ^),
@@ -656,11 +687,12 @@ fn execute<'a>(
 
         Air::FSqrt(ty) => match ty {
             FloatTy::F32 => {
-                ctx.a
-                    .w(f32::from_bits(ctx.a.r() as u32).sqrt().to_bits() as u64);
+                let val = ctx.a.r() as u32;
+                ctx.a.w(f32::from_bits(val).sqrt().to_bits() as u64);
             }
             FloatTy::F64 => {
-                ctx.a.w(f64::from_bits(ctx.a.r()).sqrt().to_bits());
+                let val = ctx.a.r();
+                ctx.a.w(f64::from_bits(val).sqrt().to_bits());
             }
         },
 

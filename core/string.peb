@@ -1,5 +1,15 @@
+use core::intrinsics;
+
 impl str {
+    len: (self) -> u64 {
+        ((self as &u8 as u64 + 8) as &u64)*
+    }
+    
     as_ptr: (self) -> &u8 {
         self as &u8
+    }
+    
+    from_raw_parts: (len: u64, bytes: &u8) -> &str {
+        str_from_raw_parts(len, bytes)
     }
 }

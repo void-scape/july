@@ -2,8 +2,8 @@ use super::InstrResult;
 use super::stack::Stack;
 use crate::air::data::Bss;
 use crate::air::{Air, AirFunc, BlockId, Reg};
-use crate::ir::ty::FloatTy;
 use crate::ir::ty::store::TyStore;
+use crate::ir::ty::{FloatTy, Width};
 use std::slice;
 
 #[derive(Default)]
@@ -19,8 +19,9 @@ impl BitsReg {
     }
 }
 
+#[derive(Debug)]
 pub struct Frame<'a> {
-    func: &'a AirFunc<'a>,
+    pub func: &'a AirFunc<'a>,
     instr: usize,
     block: BlockId,
 }
@@ -36,7 +37,7 @@ pub struct InterpCtx<'a> {
     _bss: &'a Bss,
     pub stack: Stack,
     pub tys: &'a TyStore,
-    frames: Vec<Frame<'a>>,
+    pub frames: Vec<Frame<'a>>,
 
     func_block: Option<(&'a AirFunc<'a>, BlockId)>,
     instrs: slice::Iter<'a, Air<'a>>,
@@ -170,6 +171,19 @@ impl<'a> InterpCtx<'a> {
         }
     }
 
+    pub fn report_backtrace(&self) {
+        println!("Backtrace:");
+        for (i, func) in self
+            .frames
+            .iter()
+            .rev()
+            .map(|f| f.func.sig.ident)
+            .enumerate()
+        {
+            println!("    {i}: {func}");
+        }
+    }
+
     pub fn log(&mut self, instr: &Air<'a>) {
         match self.func_block {
             Some((f, block)) => {
@@ -223,12 +237,20 @@ impl<'a> InterpCtx<'a> {
                 );
             }
             Air::Deref { dst, addr } => {
-                println!("| Var({dst:?}) @ Addr({:#x})", self.r(*addr));
+                let addr = self.r(*addr);
+                println!("| Var({dst:?}) @ Addr({:#x})", addr);
+                println!(
+                    "| value @ Addr({:#x}) = {:#x}",
+                    addr,
+                    self.stack
+                        .read_some_bits_with_addr(addr as usize, Width::SIZE)
+                        .to_u64()
+                );
             }
             Air::PushIVar { dst, width, src } => {
                 println!(
-                    " | {dst:?} <- {:?}",
-                    self.stack.read_some_bits(*src, *width)
+                    " | {dst:?} <- {:#x}",
+                    self.stack.read_some_bits(*src, *width).to_u64()
                 );
             }
             Air::PushIReg { dst, width, src } => {

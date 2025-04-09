@@ -1,15 +1,15 @@
 use super::{Ty, TyVar, TypeKey};
 use crate::ir::ctx::Ctx;
-use crate::ir::ident::{Ident, IdentId};
 use indexmap::IndexMap;
 use pebblec_parse::diagnostic::{Diag, Msg};
 use pebblec_parse::lex::buffer::Span;
+use pebblec_parse::sym::{Ident, Symbol};
 use std::collections::HashMap;
 use std::panic::Location;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SymbolTable<T> {
-    table: HashMap<IdentId, Vec<(Ident, T)>>,
+    table: HashMap<Symbol, Vec<(Ident, T)>>,
 }
 
 impl<T> Default for SymbolTable<T> {
@@ -23,10 +23,10 @@ impl<T> Default for SymbolTable<T> {
 impl<T> SymbolTable<T> {
     #[track_caller]
     pub fn register(&mut self, ident: Ident, data: T) {
-        self.table.entry(ident.id).or_default().push((ident, data));
+        self.table.entry(ident.sym).or_default().push((ident, data));
     }
 
-    pub fn symbol(&self, ident: IdentId) -> Option<&(Ident, T)> {
+    pub fn symbol(&self, ident: Symbol) -> Option<&(Ident, T)> {
         self.table.get(&ident).and_then(|idents| idents.last())
     }
 
@@ -127,19 +127,19 @@ impl InferCtx {
         TyVar(idx)
     }
 
-    pub fn var_meta(&self, ident: IdentId) -> Option<&(Ident, TyVar)> {
+    pub fn var_meta(&self, ident: Symbol) -> Option<&(Ident, TyVar)> {
         self.tables.iter().rev().find_map(|t| t.symbol(ident))
     }
 
-    pub fn var(&self, ident: IdentId) -> Option<TyVar> {
+    pub fn var(&self, ident: Symbol) -> Option<TyVar> {
         self.var_meta(ident).map(|(_, var)| *var)
     }
 
     #[track_caller]
-    pub fn var_ident<'a>(&self, ctx: &'a Ctx<'a>, var: TyVar) -> &'a str {
+    pub fn var_ident(&self, var: TyVar) -> &str {
         self.constraints
             .get(&var)
-            .map(|(ident, _)| ctx.expect_ident(ident.id))
+            .map(|(ident, _)| ident.sym.as_str())
             .expect(INVALID)
     }
 
@@ -319,7 +319,7 @@ impl InferCtx {
                         Msg::note(
                             &ctx.source_map,
                             span,
-                            format!("because `{}` is used here", self.var_ident(ctx, var)),
+                            format!("because `{}` is used here", self.var_ident(var)),
                         ),
                     ));
                 }
@@ -335,7 +335,7 @@ impl InferCtx {
             } else {
                 Err(ctx.report_error(
                     self.var_span(var),
-                    format!("could not infer type of `{}`", self.var_ident(ctx, var)),
+                    format!("could not infer type of `{}`", self.var_ident(var)),
                 ))
             }
         }

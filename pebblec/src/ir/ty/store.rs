@@ -1,9 +1,9 @@
 use super::TyKind;
-use crate::ir::ident::IdentId;
 use crate::ir::mem::Layout;
 use crate::ir::strukt::{FieldMap, Struct, StructId};
 use crate::ir::ty::Ty;
 use pebblec_arena::BlobArena;
+use pebblec_parse::sym::Symbol;
 use std::collections::HashMap;
 
 pub const BUILTIN_TYPES: &[&str] = &[
@@ -15,7 +15,7 @@ pub struct TyStore {
     storage: BlobArena,
     interned: HashMap<TyKind, Ty>,
 
-    struct_map: HashMap<IdentId, StructId>,
+    struct_map: HashMap<Symbol, StructId>,
     struct_ty_map: HashMap<StructId, Ty>,
     structs: Vec<Struct>,
     fields: HashMap<StructId, FieldMap>,
@@ -50,7 +50,7 @@ impl TyStore {
     pub fn store_struct(&mut self, strukt: Struct) -> StructId {
         let idx = self.structs.len();
         let ty = self.intern_kind(TyKind::Struct(StructId(idx)));
-        self.struct_map.insert(strukt.name.id, StructId(idx));
+        self.struct_map.insert(strukt.name.sym, StructId(idx));
         self.struct_ty_map.insert(StructId(idx), ty);
         self.structs.push(strukt);
         StructId(idx)
@@ -74,12 +74,12 @@ impl TyStore {
             .expect("invalid struct id")
     }
 
-    pub fn struct_id(&self, ident: IdentId) -> Option<StructId> {
+    pub fn struct_id(&self, ident: Symbol) -> Option<StructId> {
         self.struct_map.get(&ident).copied()
     }
 
     #[track_caller]
-    pub fn expect_struct_id(&self, ident: IdentId) -> StructId {
+    pub fn expect_struct_id(&self, ident: Symbol) -> StructId {
         self.struct_id(ident).expect("invalid struct ident")
     }
 
@@ -106,7 +106,7 @@ impl TyStore {
         for (i, strukt) in self.structs.iter().enumerate() {
             let ty_id = self.struct_ty_map.get(&StructId(i)).unwrap();
             if !self.layouts.contains_key(&ty_id) {
-                let id = self.expect_struct_id(strukt.name.id);
+                let id = self.expect_struct_id(strukt.name.sym);
                 Self::layout_struct(
                     &self.structs,
                     &self.struct_ty_map,
@@ -174,7 +174,7 @@ impl TyStore {
                 byte += 1;
             }
 
-            struct_offsets.insert(field.name.id, (field.ty, byte as i32));
+            struct_offsets.insert(field.name.sym, (field.ty, byte as i32));
             byte += layout.size;
         }
 

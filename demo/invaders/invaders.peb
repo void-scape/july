@@ -341,6 +341,19 @@ load_bmp_texture: (path: &str, renderer: &Renderer) -> &Texture {
 }
 
 report_error: (msg: &str) {
-    println(msg);
     let err = SDL_GetError();
+    let str = parse_cstr(err);
+    println(str);
+}
+
+parse_cstr: (cstr: &u8) -> &str {
+    let ptr = cstr;
+    let start = cstr as u64;
+    while ptr* != 0 {
+        ptr = (ptr as u64 + 1) as &u8;
+    }
+    let end = ptr as u64;
+    let len = end - start;
+
+    str::from_raw_parts(len, cstr)
 }

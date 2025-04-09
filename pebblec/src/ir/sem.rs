@@ -61,11 +61,7 @@ impl<'a> Deref for SemCtx<'a> {
 }
 
 fn entry(ctx: &mut SemCtx) -> Result<(), Diag> {
-    if let Some(func) = ctx
-        .funcs
-        .iter()
-        .find(|f| ctx.expect_ident(f.sig.ident) == "main")
-    {
+    if let Some(func) = ctx.funcs.iter().find(|f| f.sig.ident.as_str() == "main") {
         if func.sig.params.len() > 0 {
             Err(ctx.report_error(func.sig.span, "`main` cannot have any parameters (sorry)"))
         } else if func.sig.ty != Ty::I32 && !func.sig.ty.is_unit() {

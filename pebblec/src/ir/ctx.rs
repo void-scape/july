@@ -1,5 +1,3 @@
-use super::enom::EnumStore;
-use super::ident::*;
 use super::sig::Sig;
 use super::ty::{store::TyStore, *};
 use super::{Const, Func};
@@ -10,32 +8,19 @@ use pebblec_parse::diagnostic::{Diag, Msg};
 use pebblec_parse::lex::buffer::{Span, TokenId, TokenQuery};
 use pebblec_parse::lex::kind::TokenKind;
 use pebblec_parse::lex::source::SourceMap;
+use pebblec_parse::sym::{Ident, Symbol};
 use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Ctx<'a> {
     pub tys: TyStore,
-    pub const_map: HashMap<IdentId, Const<'a>>,
-
-    /// The source map must be a reference so that we can return `Diag` with the `'a` lifetime.
-    ///
-    /// In many cases, diagnostics are not immediately reported and instead collected. If
-    /// `source_map` were owned, then a `Diag` would reference `self` and could not be further
-    /// mutated.
-    ///
-    /// `source_map` is wrapped in an Arc to rid annoying lifetime management in the creation and
-    /// passing of `Ctx`. In the current implementation, this is the only reference to the source
-    /// map.
-    pub source_map: Arc<SourceMap>,
-
+    pub const_map: HashMap<Symbol, Const<'a>>,
+    pub source_map: SourceMap,
     pub arena: BlobArena,
-    pub idents: IdentStore<'a>,
-    pub enums: EnumStore,
     pub funcs: Vec<Func<'a>>,
-    pub sigs: IndexMap<IdentId, &'a Sig<'a>>,
-    pub impl_sigs: IndexMap<(Ty, IdentId), &'a Sig<'a>>,
+    pub sigs: IndexMap<Symbol, &'a Sig<'a>>,
+    pub impl_sigs: IndexMap<(Ty, Symbol), &'a Sig<'a>>,
 }
 
 // TODO: move into deterministic test?
@@ -44,10 +29,8 @@ impl PartialEq for Ctx<'_> {
     fn eq(&self, other: &Ctx) -> bool {
         // omits `arena`
         self.source_map == other.source_map
-            && self.idents == other.idents
             && self.tys == other.tys
             && self.const_map == other.const_map
-            && self.enums == other.enums
             && self.funcs == other.funcs
             && self.sigs == other.sigs
             && self.impl_sigs == other.impl_sigs
@@ -59,12 +42,8 @@ impl<'a> Ctx<'a> {
         Self {
             tys: TyStore::default(),
             const_map: HashMap::default(),
-
-            source_map: Arc::new(source_map),
-
+            source_map,
             arena: BlobArena::default(),
-            idents: IdentStore::default(),
-            enums: EnumStore::default(),
             funcs: Vec::default(),
             sigs: IndexMap::default(),
             impl_sigs: IndexMap::default(),
@@ -121,46 +100,32 @@ impl<'a> Ctx<'a> {
         Ok(())
     }
 
-    pub fn get_sig(&self, ident: IdentId) -> Option<&'a Sig<'a>> {
+    pub fn get_sig(&self, ident: Symbol) -> Option<&'a Sig<'a>> {
         self.sigs.get(&ident).copied()
     }
 
-    pub fn get_method_sig(&self, ty: Ty, ident: IdentId) -> Option<&'a Sig<'a>> {
+    pub fn get_method_sig(&self, ty: Ty, ident: Symbol) -> Option<&'a Sig<'a>> {
         self.impl_sigs.get(&(ty, ident)).copied()
     }
 
-    #[track_caller]
-    pub fn store_ident(&mut self, ident: TokenId) -> Ident {
-        let str = self
-            .source_map
-            .buffer(ident.source as usize)
-            .as_str(ident)
-            .to_string();
-        Ident {
-            span: self.span(ident),
-            id: self.idents.store(&str),
-        }
-    }
-
-    pub fn get_ident(&'a self, id: IdentId) -> Option<&'a str> {
-        self.idents.get_ident(id)
-    }
-
-    #[track_caller]
-    pub fn expect_ident(&'a self, id: IdentId) -> &'a str {
-        self.get_ident(id).expect("invalid ident id")
-    }
-
     pub fn store_const(&mut self, konst: Const<'a>) {
-        self.const_map.insert(konst.name.id, konst);
+        self.const_map.insert(konst.name.sym, konst);
     }
 
-    pub fn get_const(&self, id: IdentId) -> Option<&Const> {
+    pub fn get_const(&self, id: Symbol) -> Option<&Const> {
         self.const_map.get(&id)
     }
 
     pub fn consts(&self) -> impl Iterator<Item = &Const<'a>> {
         self.const_map.values()
+    }
+
+    pub fn token_ident(&self, token: impl Borrow<TokenId>) -> Ident {
+        let token = token.borrow();
+        Ident {
+            sym: Symbol::intern(self.as_str(token)),
+            span: self.span(token),
+        }
     }
 }
 
@@ -321,14 +286,14 @@ impl CtxFmt for Ty {
 }
 
 impl CtxFmt for Ident {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String) {
-        buf.push_str(ctx.expect_ident(self.id));
+    fn ctx_fmt<'a>(&'a self, _: &'a Ctx<'a>, buf: &mut String) {
+        buf.push_str(self.as_str());
     }
 }
 
-impl CtxFmt for IdentId {
-    fn ctx_fmt<'a>(&'a self, ctx: &'a Ctx<'a>, buf: &mut String) {
-        buf.push_str(ctx.expect_ident(*self));
+impl CtxFmt for Symbol {
+    fn ctx_fmt<'a>(&'a self, _: &'a Ctx<'a>, buf: &mut String) {
+        buf.push_str(self.as_str());
     }
 }
 

@@ -174,15 +174,15 @@ pub fn aquire_accessor_field(ctx: &mut AirCtx, access: &Access) -> (OffsetVar, T
 
     let mut offset = 0;
     for (i, acc) in access.accessors.iter().rev().enumerate() {
-        let ty = strukt.field_ty(acc.id);
+        let ty = strukt.field_ty(acc.sym);
         if i == access.accessors.len() - 1 {
-            let field_offset = strukt.field_offset(&ctx.tys, acc.id);
+            let field_offset = strukt.field_offset(&ctx.tys, acc.sym);
             return (var.add((offset + field_offset) as usize), ty);
         }
 
         match ty.0 {
             TyKind::Struct(id) => {
-                let field_offset = strukt.field_offset(&ctx.tys, acc.id);
+                let field_offset = strukt.field_offset(&ctx.tys, acc.sym);
                 offset += field_offset;
                 strukt = ctx.tys.strukt(*id);
             }

@@ -3,3 +3,6 @@ exit: (code: i32) {}
 
 #[intrinsic]
 sqrt_f32: (f: f32) -> f32 {}
+
+#[intrinsic]
+str_from_raw_parts: (len: u64, bytes: &u8) -> &str {}

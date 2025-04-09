@@ -2,7 +2,6 @@ use super::data::{Bss, BssEntry};
 use super::{Air, AirFunc, AirFuncBuilder, AirLinkage, AirSig, BlockId, OffsetVar, Reg, Var};
 use crate::air::Args;
 use crate::ir::ctx::Ctx;
-use crate::ir::ident::{Ident, IdentId};
 use crate::ir::sig::{Param, Sig};
 use crate::ir::ty::infer::SymbolTable;
 use crate::ir::ty::store::TyStore;
@@ -10,6 +9,7 @@ use crate::ir::ty::{Ty, TyKind, TypeKey, Width};
 use crate::ir::{self, *};
 use indexmap::IndexMap;
 use pebblec_arena::BlobArena;
+use pebblec_parse::sym::{Ident, Symbol};
 use std::ops::Deref;
 
 #[derive(Debug)]
@@ -17,8 +17,8 @@ pub struct AirCtx<'a, 'ctx> {
     pub tys: TyStore,
     pub key: TypeKey,
     pub tables: Vec<SymbolTable<Var>>,
-    pub air_sigs: IndexMap<IdentId, &'a AirSig<'a>>,
-    pub impl_air_sigs: IndexMap<(Ty, IdentId), &'a AirSig<'a>>,
+    pub air_sigs: IndexMap<Symbol, &'a AirSig<'a>>,
+    pub impl_air_sigs: IndexMap<(Ty, Symbol), &'a AirSig<'a>>,
     pub storage: BlobArena,
 
     ctx: &'ctx Ctx<'ctx>,
@@ -44,9 +44,9 @@ impl PartialEq for AirCtx<'_, '_> {
     }
 }
 
-fn sig_to_air_sig<'a>(ctx: &Ctx, storage: &BlobArena, sig: &Sig) -> &'a AirSig<'a> {
+fn sig_to_air_sig<'a>(storage: &BlobArena, sig: &Sig) -> &'a AirSig<'a> {
     &*storage.alloc(AirSig {
-        ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
+        ident: storage.alloc_str(sig.ident.as_str()),
         ty: sig.ty,
         params: if sig.params.is_empty() {
             &[]
@@ -58,7 +58,6 @@ fn sig_to_air_sig<'a>(ctx: &Ctx, storage: &BlobArena, sig: &Sig) -> &'a AirSig<'
                     .collect::<Vec<_>>(),
             )
         },
-        // TODO: make this prettier
         linkage: match sig.linkage {
             sig::Linkage::Local => AirLinkage::Local,
             sig::Linkage::External { link } => AirLinkage::External {
@@ -75,9 +74,9 @@ fn param_to_air_param(param: &Param) -> Ty {
     }
 }
 
-fn method_sig_to_air_sig<'a>(ctx: &Ctx, storage: &BlobArena, ty: Ty, sig: &Sig) -> &'a AirSig<'a> {
+fn method_sig_to_air_sig<'a>(storage: &BlobArena, ty: Ty, sig: &Sig) -> &'a AirSig<'a> {
     &*storage.alloc(AirSig {
-        ident: storage.alloc_str(ctx.expect_ident(sig.ident)),
+        ident: storage.alloc_str(sig.ident.as_str()),
         ty: sig.ty,
         params: if sig.params.is_empty() {
             &[]
@@ -89,7 +88,6 @@ fn method_sig_to_air_sig<'a>(ctx: &Ctx, storage: &BlobArena, ty: Ty, sig: &Sig) 
                     .collect::<Vec<_>>(),
             )
         },
-        // TODO: make this prettier
         linkage: match sig.linkage {
             sig::Linkage::Local => AirLinkage::Local,
             sig::Linkage::External { link } => AirLinkage::External {
@@ -112,14 +110,14 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
         let air_sigs = ctx
             .sigs
             .iter()
-            .map(|(ident, sig)| (*ident, sig_to_air_sig(ctx, &storage, sig)))
+            .map(|(ident, sig)| (*ident, sig_to_air_sig(&storage, sig)))
             .collect();
         let impl_air_sigs = ctx
             .impl_sigs
             .iter()
             .map(|(ids, sig)| {
                 let ty = tys.intern_kind(TyKind::Ref(ids.0.0));
-                (*ids, method_sig_to_air_sig(ctx, &storage, ty, sig))
+                (*ids, method_sig_to_air_sig(&storage, ty, sig))
             })
             .collect();
 
@@ -256,7 +254,6 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
     }
 
     pub fn push_pop_sp<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        // TODO: this sort of leaks?
         let sp = OffsetVar::zero(self.anon_var(Ty::USIZE));
         self.ins(Air::ReadSP(sp));
         let result = f(self);
@@ -322,22 +319,22 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
         }
     }
 
-    pub fn var_meta(&self, ident: IdentId) -> Option<&(Ident, Var)> {
+    pub fn var_meta(&self, ident: Symbol) -> Option<&(Ident, Var)> {
         self.tables.iter().rev().find_map(|t| t.symbol(ident))
     }
 
-    pub fn var(&self, ident: IdentId) -> Option<Var> {
+    pub fn var(&self, ident: Symbol) -> Option<Var> {
         self.var_meta(ident).map(|(_, var)| *var)
     }
 
     #[track_caller]
-    pub fn expect_var(&self, ident: IdentId) -> Var {
+    pub fn expect_var(&self, ident: Symbol) -> Var {
         self.var(ident)
             .or_else(|| {
                 let builder = self.expect_func_builder();
                 builder.func.sig.params.iter().find_map(|p| match &p {
                     Param::Named { ident: name, .. } => {
-                        if name.id == ident {
+                        if name.sym == ident {
                             self.func_args.get(name).copied()
                         } else {
                             None
@@ -355,7 +352,7 @@ impl<'a, 'ctx> AirCtx<'a, 'ctx> {
     }
 
     pub fn var_ty(&self, ident: &Ident) -> Ty {
-        let set = self.key.ident_set(ident.id);
+        let set = self.key.ident_set(ident.sym);
         match set.len() {
             0 => panic!("ident not keyed: {:?}", ident),
             1 => set[0].1,

@@ -319,8 +319,7 @@ fn nodify_ty<'a>(buf: &'a TokenBuffer, arena: &BlobArena, ty: &PType) -> Node<'a
                 Node::Text("["),
                 nodify_ty(buf, arena, inner),
                 Node::Text("; "),
-                // TODO: parse the size in ir
-                Node::Text(String::leak(format!("{}", size))),
+                Node::token(buf, size),
                 Node::Text("]"),
             ],
         ),

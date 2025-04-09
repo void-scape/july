@@ -529,6 +529,7 @@ version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "indexmap 2.8.0",
+ "pebblec-arena",
  "pebblec-macros",
  "thiserror",
  "variadics_please",

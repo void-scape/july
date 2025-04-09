@@ -16,7 +16,7 @@ pub enum PType {
     },
     Array {
         span: Span,
-        size: usize,
+        size: TokenId,
         inner: Box<PType>,
     },
     Slice {
@@ -147,12 +147,6 @@ impl<'a, 's> ParserRule<'a> for ArrayType {
                 .map_err(PErr::fail)?;
                 let span = spanned.span();
                 let (_open, inner, _semi, size, _close) = spanned.into_inner();
-                let Ok(size) = stream.as_str(size).parse::<usize>() else {
-                    return Err(PErr::Fail(stream.report_error(
-                        "expected a positive integer size for an array type",
-                        stream.span(size),
-                    )));
-                };
 
                 Ok(PType::Array {
                     span,

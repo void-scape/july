@@ -9,6 +9,7 @@ pub extern crate annotate_snippets;
 mod combinator;
 pub mod diagnostic;
 pub mod lex;
+pub mod sym;
 pub mod matc;
 pub mod rules;
 mod stream;

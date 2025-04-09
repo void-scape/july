@@ -5,10 +5,7 @@ use self::sig::Linkage;
 use self::ty::{FloatTy, IntTy, Sign, Ty, TyKind};
 use crate::comp::CompErr;
 use crate::ir::ctx::Ctx;
-use crate::ir::ident::Ident;
 use crate::ir::lit::Lit;
-use enom::{Enum, EnumDef, Variant};
-use ident::IdentId;
 use indexmap::IndexMap;
 use pebblec_parse::diagnostic::{Diag, Msg};
 use pebblec_parse::lex::buffer::TokenId;
@@ -17,6 +14,7 @@ use pebblec_parse::lex::kind::TokenKind;
 use pebblec_parse::lex::source::SourceMap;
 use pebblec_parse::rules::prelude::PType;
 use pebblec_parse::rules::prelude::{self as rules, Attr};
+use pebblec_parse::sym::{Ident, Symbol};
 use pebblec_parse::{AssignKind, ItemKind, UOpKind};
 use pebblec_parse::{BinOpKind, Item};
 use resolve::resolve_types;
@@ -29,8 +27,6 @@ use strukt::{Field, FieldDef, Struct, StructDef};
 use ty::TypeKey;
 
 pub mod ctx;
-pub mod enom;
-pub mod ident;
 pub mod lit;
 pub mod mem;
 pub mod resolve;
@@ -43,7 +39,7 @@ pub mod ty;
 pub struct Ir<'ctx> {
     pub ctx: Ctx<'ctx>,
     pub key: TypeKey,
-    pub const_eval_order: Vec<IdentId>,
+    pub const_eval_order: Vec<Symbol>,
 }
 
 pub fn lower<'a>(mut source_map: SourceMap) -> Result<Ir<'a>, CompErr> {
@@ -92,7 +88,7 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
             ItemKind::Struct(strukt) => Some(strukt),
             _ => None,
         })
-        .map(|s| (ctx.store_ident(s.name).id, s))
+        .map(|s| (Symbol::intern(ctx.as_str(s.name)), s))
         .collect();
     add_structs(&mut ctx, &structs)?;
     ctx.build_type_layouts();
@@ -152,7 +148,7 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
             ItemKind::Const(konst) => Some(konst),
             _ => None,
         })
-        .map(|c| (ctx.store_ident(c.name).id, c))
+        .map(|c| (Symbol::intern(ctx.as_str(c.name)), c))
         .collect();
     let const_eval_order = add_consts(&mut ctx, &consts)?;
 
@@ -189,7 +185,7 @@ pub fn lower_items<'a>(mut ctx: Ctx<'a>, mut items: Vec<Item>) -> Result<Ir<'a>,
 
 fn add_structs<'a, 'ctx>(
     ctx: &mut Ctx<'ctx>,
-    structs: &IndexMap<IdentId, &'a rules::Struct>,
+    structs: &IndexMap<Symbol, &'a rules::Struct>,
 ) -> Result<(), Diag> {
     let mut defined = HashSet::with_capacity(structs.len());
     let mut processing = Vec::with_capacity(structs.len());
@@ -201,30 +197,30 @@ fn add_structs<'a, 'ctx>(
 }
 
 struct StructInfo<'a> {
-    id: IdentId,
+    sym: Symbol,
     strukt: &'a rules::Struct,
 }
 
 fn add_structs_recur<'a, 'ctx>(
     ctx: &mut Ctx<'ctx>,
-    structs: &IndexMap<IdentId, &'a rules::Struct>,
-    defined: &mut HashSet<IdentId>,
+    structs: &IndexMap<Symbol, &'a rules::Struct>,
+    defined: &mut HashSet<Symbol>,
     processing: &mut Vec<StructInfo<'a>>,
     rules_strukt: &'a rules::Struct,
 ) -> Result<(), Diag> {
     let mut errors = Vec::new();
 
-    let name = ctx.store_ident(rules_strukt.name).id;
+    let name = Symbol::intern(ctx.as_str(rules_strukt.name));
     if defined.contains(&name) {
         return Ok(());
     }
 
-    if processing.iter().any(|info| info.id == name) {
+    if processing.iter().any(|info| info.sym == name) {
         return Err(report_struct_cycle(ctx, processing, rules_strukt));
     }
 
     processing.push(StructInfo {
-        id: name,
+        sym: name,
         strukt: rules_strukt,
     });
 
@@ -294,11 +290,11 @@ fn report_struct_cycle<'a, 'ctx>(
 
     let cycle_start = processing
         .iter()
-        .position(|info| info.id == ctx.store_ident(current.name).id)
+        .position(|info| info.sym == Symbol::intern(ctx.as_str(current.name)))
         .unwrap();
 
     let current = StructInfo {
-        id: ctx.store_ident(current.name).id,
+        sym: Symbol::intern(ctx.as_str(current.name)),
         strukt: current,
     };
     let cycle_members = processing[cycle_start..]
@@ -319,13 +315,12 @@ fn report_struct_cycle<'a, 'ctx>(
         }
 
         if let Some(field) = curr.strukt.fields.iter().find(|f| {
-            ctx.store_ident(match f.ty {
+            Symbol::intern(ctx.as_str(match f.ty {
                 rules::PType::Simple(_, id) => id,
                 rules::PType::Array { .. }
                 | rules::PType::Slice { .. }
                 | rules::PType::Ref { .. } => unreachable!(),
-            })
-            .id == next.id
+            })) == next.sym
         }) {
             msgs.push(Msg::error_span(&ctx.source_map, ctx.span(curr.strukt.name)));
             msgs.push(Msg::note_span(&ctx.source_map, field.span));
@@ -342,11 +337,11 @@ fn report_struct_cycle<'a, 'ctx>(
 pub fn retrieve_struct<'a, 'ctx>(
     ty: &PType,
     ctx: &mut Ctx<'ctx>,
-    structs: &IndexMap<IdentId, &'a rules::Struct>,
+    structs: &IndexMap<Symbol, &'a rules::Struct>,
 ) -> Option<&'a rules::Struct> {
     match ty {
         PType::Simple(_, id) => {
-            let ident = ctx.store_ident(*id).id;
+            let ident = Symbol::intern(ctx.as_str(*id));
             structs.get(&ident).map(|s| *s)
         }
         PType::Ref { inner, .. } => retrieve_struct(inner, ctx, structs),
@@ -357,8 +352,8 @@ pub fn retrieve_struct<'a, 'ctx>(
 
 pub fn add_consts<'a, 'ctx>(
     ctx: &mut Ctx<'ctx>,
-    consts: &IndexMap<IdentId, &'a rules::Const>,
-) -> Result<Vec<IdentId>, Diag> {
+    consts: &IndexMap<Symbol, &'a rules::Const>,
+) -> Result<Vec<Symbol>, Diag> {
     let mut eval_order = Vec::new();
     let mut defined = HashSet::with_capacity(consts.len());
     let mut processing = Vec::with_capacity(consts.len());
@@ -378,19 +373,19 @@ pub fn add_consts<'a, 'ctx>(
 }
 
 struct ConstInfo<'a> {
-    id: IdentId,
+    id: Symbol,
     konst: &'a rules::Const,
 }
 
 fn add_consts_recur<'a, 'ctx>(
     ctx: &mut Ctx<'ctx>,
-    consts: &IndexMap<IdentId, &'a rules::Const>,
-    defined: &mut HashSet<IdentId>,
+    consts: &IndexMap<Symbol, &'a rules::Const>,
+    defined: &mut HashSet<Symbol>,
     processing: &mut Vec<ConstInfo<'a>>,
     rules_const: &'a rules::Const,
-    evaluation_order: &mut Vec<IdentId>,
+    evaluation_order: &mut Vec<Symbol>,
 ) -> Result<(), Diag> {
-    let name = ctx.store_ident(rules_const.name).id;
+    let name = Symbol::intern(ctx.as_str(rules_const.name));
     if defined.contains(&name) {
         return Ok(());
     }
@@ -425,12 +420,12 @@ fn add_consts_recur<'a, 'ctx>(
 
 fn process_expr<'a, 'ctx>(
     ctx: &mut Ctx<'ctx>,
-    consts: &IndexMap<IdentId, &'a rules::Const>,
-    defined: &mut HashSet<IdentId>,
+    consts: &IndexMap<Symbol, &'a rules::Const>,
+    defined: &mut HashSet<Symbol>,
     processing: &mut Vec<ConstInfo<'a>>,
     rules_const: &'a rules::Const,
-    evaluation_order: &mut Vec<IdentId>,
-    name_of_const: IdentId,
+    evaluation_order: &mut Vec<Symbol>,
+    name_of_const: Symbol,
     expr: &rules::Expr,
 ) -> Result<(), Diag> {
     match expr {
@@ -438,8 +433,8 @@ fn process_expr<'a, 'ctx>(
             evaluation_order.push(name_of_const);
         }
         rules::Expr::Ident(other) => {
-            let ident = ctx.store_ident(*other);
-            if let Some(other) = consts.get(&ident.id) {
+            let ident = ctx.token_ident(other);
+            if let Some(other) = consts.get(&ident.sym) {
                 add_consts_recur(ctx, consts, defined, processing, other, evaluation_order)?;
                 evaluation_order.push(name_of_const);
             } else {
@@ -485,11 +480,11 @@ fn report_const_cycle<'a, 'ctx>(
 
     let cycle_start = processing
         .iter()
-        .position(|info| info.id == ctx.store_ident(current.name).id)
+        .position(|info| info.id == Symbol::intern(ctx.as_str(current.name)))
         .unwrap();
 
     let current = ConstInfo {
-        id: ctx.store_ident(current.name).id,
+        id: Symbol::intern(ctx.as_str(current.name)),
         konst: current,
     };
     let cycle_members = processing[cycle_start..]
@@ -511,7 +506,7 @@ fn report_const_cycle<'a, 'ctx>(
 
         match curr.konst.expr {
             rules::Expr::Ident(ident) => {
-                if ctx.store_ident(ident).id == next.id {
+                if Symbol::intern(ctx.as_str(ident)) == next.id {
                     msgs.push(Msg::error_span(&ctx.source_map, ctx.span(curr.konst.name)));
                     msgs.push(Msg::note_span(&ctx.source_map, ctx.span(ident)));
                 }
@@ -559,46 +554,10 @@ fn konst<'a>(ctx: &mut Ctx<'a>, konst: &rules::Const) -> Result<Const<'a>, Diag>
     let expr = pexpr(ctx, &konst.expr)?;
     Ok(Const {
         span: konst.span,
-        name: ctx.store_ident(konst.name),
+        name: ctx.token_ident(konst.name),
         ty: ptype(ctx, &konst.ty)?.1,
         expr: ctx.intern(expr),
     })
-}
-
-#[allow(unused)]
-fn enom<'a>(ctx: &mut Ctx<'a>, enom: &rules::Enum) -> Result<Enum, Diag> {
-    let mut variant_names = Vec::with_capacity(enom.variants.len());
-
-    for field in enom.variants.iter() {
-        if variant_names.contains(&ctx.as_str(field.name)) {
-            todo!()
-            //return Err(ctx.errors(
-            //    "failed to parse enum",
-            //    [
-            //        Msg::error(ctx.span(field.name), "variant already declared"),
-            //        Msg::note(
-            //            ctx.span(enom.name),
-            //            format!("while parsing `{}`", ctx.as_str(enom.name)),
-            //        ),
-            //    ],
-            //));
-        }
-        variant_names.push(ctx.as_str(field.name));
-    }
-
-    Ok(Enum {
-        span: enom.span,
-        name: ctx.store_ident(enom.name),
-        variants: enom.variants.iter().map(|f| variant(ctx, f)).collect(),
-    })
-}
-
-#[allow(unused)]
-fn variant<'a>(ctx: &mut Ctx<'a>, variant: &rules::Variant) -> Variant {
-    Variant {
-        span: variant.span,
-        name: ctx.store_ident(variant.name),
-    }
 }
 
 fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag> {
@@ -619,7 +578,7 @@ fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag>
 
     Ok(Struct {
         span: strukt.span,
-        name: ctx.store_ident(strukt.name),
+        name: ctx.token_ident(strukt.name),
         fields: strukt
             .fields
             .iter()
@@ -631,7 +590,7 @@ fn strukt<'a>(ctx: &mut Ctx<'a>, strukt: &rules::Struct) -> Result<Struct, Diag>
 fn field<'a>(ctx: &mut Ctx<'a>, field: &rules::Field) -> Result<Field, Diag> {
     Ok(Field {
         span: field.span,
-        name: ctx.store_ident(field.name),
+        name: ctx.token_ident(field.name),
         ty: ptype(ctx, &field.ty)?.1,
     })
 }
@@ -700,7 +659,7 @@ fn func_sig<'a>(
 
     Ok(Sig {
         span: func.span,
-        ident: ctx.store_ident(func.name).id,
+        ident: Symbol::intern(ctx.as_str(func.name)),
         params: ctx.intern_slice(&params),
         method_self,
         ty,
@@ -733,7 +692,7 @@ fn extern_sig<'a>(ctx: &mut Ctx<'a>, func: &rules::ExternFunc) -> Result<Sig<'a>
 
     Ok(Sig {
         span: func.span,
-        ident: ctx.store_ident(func.name).id,
+        ident: Symbol::intern(ctx.as_str(func.name)),
         params: ctx.intern_slice(&params),
         method_self: None,
         ty: func
@@ -765,7 +724,7 @@ fn ptype<'a>(ctx: &mut Ctx<'a>, ty: &rules::PType) -> Result<(Span, Ty), Diag> {
                 "bool" => TyKind::Bool,
                 "str" => TyKind::Str,
                 _ => {
-                    let ident = ctx.store_ident(*id).id;
+                    let ident = Symbol::intern(ctx.as_str(*id));
                     if let Some(strukt) = ctx.tys.struct_id(ident) {
                         TyKind::Struct(strukt)
                     } else {
@@ -785,7 +744,12 @@ fn ptype<'a>(ctx: &mut Ctx<'a>, ty: &rules::PType) -> Result<(Span, Ty), Diag> {
         }
         rules::PType::Array { span, size, inner } => {
             let (_, inner) = ptype(ctx, inner)?;
-            (*span, ctx.tys.intern_kind(TyKind::Array(*size, inner.0)))
+            let Ok(size) = ctx.as_str(size).parse::<usize>() else {
+                return Err(
+                    ctx.report_error(size, "expected a positive integer size for an array type")
+                );
+            };
+            (*span, ctx.tys.intern_kind(TyKind::Array(size, inner.0)))
         }
         rules::PType::Slice { span, inner } => {
             let (_, inner) = ptype(ctx, inner)?;
@@ -802,11 +766,11 @@ fn params<'a>(ctx: &mut Ctx<'a>, fparams: &[rules::Param]) -> Result<Vec<Param>,
                 let (span, ty) = ptype(ctx, ty)?;
                 params.push(Param::Named {
                     span,
-                    ident: ctx.store_ident(*name),
+                    ident: ctx.token_ident(name),
                     ty,
                 });
             }
-            rules::Param::Slf(t) => params.push(Param::Slf(ctx.store_ident(*t))),
+            rules::Param::Slf(t) => params.push(Param::Slf(ctx.token_ident(t))),
         }
     }
 
@@ -955,7 +919,6 @@ pub enum Expr<'a> {
     Access(Access<'a>),
     Unary(Unary<'a>),
     Struct(StructDef<'a>),
-    Enum(EnumDef),
     Call(Call<'a>),
     MethodCall(MethodCall<'a>),
     Block(Block<'a>),
@@ -981,7 +944,6 @@ impl Expr<'_> {
             Self::MethodCall(call) => call.span,
             Self::Bin(bin) => bin.span,
             Self::Struct(def) => def.span,
-            Self::Enum(enom) => enom.span,
             Self::Block(block) => block.span,
             Self::If(if_) => if_.span,
             Self::Loop(block) => block.span,
@@ -1159,7 +1121,7 @@ fn if_<'a>(
 
 fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
     match expr {
-        rules::Expr::Ident(ident) => LetTarget::Ident(ctx.store_ident(*ident)),
+        rules::Expr::Ident(ident) => LetTarget::Ident(ctx.token_ident(ident)),
         _ => todo!(),
     }
 }
@@ -1173,7 +1135,7 @@ fn let_target<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> LetTarget {
 //}
 
 fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef<'a>, Diag> {
-    let ident = ctx.store_ident(def.name).id;
+    let ident = Symbol::intern(ctx.as_str(def.name));
     let fields = def
         .fields
         .iter()
@@ -1197,7 +1159,7 @@ fn struct_def<'a>(ctx: &mut Ctx<'a>, def: &rules::StructDef) -> Result<StructDef
 fn field_def<'a>(ctx: &mut Ctx<'a>, def: &rules::FieldDef) -> Result<FieldDef<'a>, Diag> {
     Ok(FieldDef {
         span: def.span,
-        name: ctx.store_ident(def.name),
+        name: ctx.token_ident(def.name),
         expr: pexpr(ctx, &def.expr)?,
     })
 }
@@ -1243,7 +1205,7 @@ fn access<'a>(
     mut lhs: &rules::Expr,
     field: TokenId,
 ) -> Result<Access<'a>, Diag> {
-    let mut accessors = vec![ctx.store_ident(field)];
+    let mut accessors = vec![ctx.token_ident(field)];
     let mut span = span;
 
     loop {
@@ -1255,7 +1217,7 @@ fn access<'a>(
             } => {
                 span = Span::from_spans(span, *next_span);
                 lhs = next_lhs;
-                accessors.push(ctx.store_ident(*field));
+                accessors.push(ctx.token_ident(field));
             }
             _ => {
                 break;
@@ -1273,7 +1235,7 @@ fn access<'a>(
 
 fn pexpr<'a>(ctx: &mut Ctx<'a>, expr: &rules::Expr) -> Result<Expr<'a>, Diag> {
     Ok(match expr {
-        rules::Expr::Ident(ident) => Expr::Ident(ctx.store_ident(*ident)),
+        rules::Expr::Ident(ident) => Expr::Ident(ctx.token_ident(ident)),
         rules::Expr::Lit(lit) => Expr::Lit(plit(ctx, *lit)?),
         rules::Expr::Bin(span, op, lhs, rhs) => Expr::Bin(bin_op(ctx, *span, *op, lhs, rhs)?),
         rules::Expr::Call { span, func, args } => Expr::Call(call(ctx, *span, *func, args)?),
@@ -1382,7 +1344,7 @@ fn for_loop<'a>(
     let iterable = pexpr(ctx, iterable)?;
     Ok(ForLoop {
         span,
-        iter: ctx.store_ident(iter),
+        iter: ctx.token_ident(iter),
         iterable: ctx.intern(iterable),
         block: block(ctx, blck)?,
     })
@@ -1526,7 +1488,7 @@ fn method_call<'a>(
     Ok(MethodCall {
         span,
         receiver,
-        call: ctx.store_ident(call),
+        call: ctx.token_ident(call),
         args: args(ctx, call_args)?,
     })
 }
@@ -1553,7 +1515,7 @@ fn call<'a>(
     name: TokenId,
     call_args: &[rules::Expr],
 ) -> Result<Call<'a>, Diag> {
-    let id = ctx.store_ident(name).id;
+    let id = Symbol::intern(ctx.as_str(name));
     let args = args(ctx, call_args)?;
     Ok(Call {
         sig: ctx

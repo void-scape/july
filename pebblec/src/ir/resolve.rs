@@ -146,7 +146,7 @@ impl Expr<'_> {
                 LitKind::Float(_) => InferTy::Float,
             },
             Self::Ident(ident) => {
-                let Some(var) = infer.var(ident.id) else {
+                let Some(var) = infer.var(ident.sym) else {
                     return Err(ctx.undeclared(ident));
                 };
 
@@ -415,7 +415,7 @@ impl Expr<'_> {
     ) -> Result<(), Diag> {
         match self {
             Expr::Ident(ident) => {
-                let var = infer.var(ident.id).ok_or_else(|| ctx.undeclared(ident))?;
+                let var = infer.var(ident.sym).ok_or_else(|| ctx.undeclared(ident))?;
                 self.infer_equality(ctx, infer, ty, source)?;
                 infer.eq(var, ty, source);
 
@@ -560,7 +560,7 @@ impl Expr<'_> {
 
     pub fn find_ty_var(&self, ctx: &Ctx, infer: &mut InferCtx) -> Option<TyVar> {
         match self {
-            Self::Ident(ident) => infer.var(ident.id),
+            Self::Ident(ident) => infer.var(ident.sym),
             Self::Bin(bin) => {
                 let lhs = bin.lhs.find_ty_var(ctx, infer);
                 let rhs = bin.rhs.find_ty_var(ctx, infer);
@@ -582,7 +582,6 @@ impl Expr<'_> {
             | Self::Array(_)
             | Self::Str(_)
             | Self::Struct(_)
-            | Self::Enum(_)
             | Self::Access(_)
             | Self::Bin(_)
             | Self::Lit(_)
@@ -732,7 +731,6 @@ impl<'a> Constrain<'a> for Expr<'a> {
             Self::Bin(bin) => bin.constrain(ctx, infer, sig),
             Self::Access(access) => access.constrain(ctx, infer, sig),
             Self::Struct(def) => def.constrain(ctx, infer, sig),
-            Self::Enum(def) => def.constrain(ctx, infer, sig),
             Self::Call(call) => call.constrain(ctx, infer, sig),
             Self::MethodCall(call) => call.constrain(ctx, infer, sig),
             Self::Block(block) => block.constrain(ctx, infer, sig),
@@ -806,7 +804,7 @@ impl<'a> Constrain<'a> for StructDef<'a> {
             field_def.expr.constrain(ctx, infer, sig)?;
 
             let field_map = ctx.tys.fields(self.id);
-            let field_ty = match field_map.field_ty(field_def.name.id) {
+            let field_ty = match field_map.field_ty(field_def.name.sym) {
                 Some(ty) => ty,
                 None => {
                     let strukt = ctx.tys.strukt(self.id);
@@ -815,8 +813,8 @@ impl<'a> Constrain<'a> for StructDef<'a> {
                             field_def.name,
                             format!(
                                 "`{}` has no field `{}`",
-                                ctx.expect_ident(ctx.tys.strukt(self.id).name.id),
-                                ctx.expect_ident(field_def.name.id),
+                                ctx.tys.strukt(self.id).name.as_str(),
+                                field_def.name.as_str(),
                             ),
                         )
                         .join(ctx.report_help(strukt.span, "Struct defined here")));
@@ -837,14 +835,14 @@ impl<'a> Constrain<'a> for StructDef<'a> {
             let missing_fields = strukt
                 .fields
                 .iter()
-                .filter(|f| self.fields.iter().all(|inner| inner.name.id != f.name.id))
+                .filter(|f| self.fields.iter().all(|inner| inner.name.sym != f.name.sym))
                 .collect::<Vec<_>>();
             let mut msg = String::from("struct definition missing fields: ");
             for (i, field) in missing_fields.iter().enumerate() {
                 if i > 0 {
                     msg.push_str(", ");
                 }
-                msg.push_str(&format!("`{}`", ctx.expect_ident(field.name.id)));
+                msg.push_str(&format!("`{}`", field.name.as_str()));
             }
             let mut diag = ctx.report_error(self.span, msg);
             for field in missing_fields.iter() {
@@ -859,12 +857,6 @@ impl<'a> Constrain<'a> for StructDef<'a> {
         } else {
             Ok(())
         }
-    }
-}
-
-impl<'a> Constrain<'a> for EnumDef {
-    fn constrain(&self, _ctx: &mut Ctx<'a>, _infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
-        todo!();
     }
 }
 
@@ -896,7 +888,7 @@ impl<'a> Constrain<'a> for Call<'a> {
         let params = self.sig.params.len();
         let args = self.args.len();
 
-        let name = ctx.expect_ident(self.sig.ident);
+        let name = self.sig.ident.as_str();
         if params != args
             && (name != "print" && name != "println"
                 || ((name == "print" || name == "println") && args == 0))
@@ -929,9 +921,9 @@ impl<'a> Constrain<'a> for Call<'a> {
 
                 expr.constrain(ctx, infer, sig)?;
                 match &expr {
-                    Expr::Ident(ident) => match infer.var(ident.id) {
+                    Expr::Ident(ident) => match infer.var(ident.sym) {
                         Some(var) => {
-                            if ctx.expect_ident(ident.id) != "NULL" {
+                            if ident.as_str() != "NULL" {
                                 infer.eq(var, *ty, *span);
                             }
                         }
@@ -982,14 +974,14 @@ impl MethodCall<'_> {
     #[track_caller]
     pub fn get_sig<'a>(&self, ctx: &mut Ctx<'a>, infer: &InferCtx) -> Result<&'a Sig<'a>, Diag> {
         let ty = self.get_ty(ctx, infer)?;
-        match ctx.get_method_sig(ty, self.call.id) {
+        match ctx.get_method_sig(ty, self.call.sym) {
             Some(sig) => Ok(sig),
             None => Err(ctx.report_error(
                 self.call,
                 format!(
                     "`{}` has no method `{}`",
                     ty.to_string(ctx),
-                    ctx.expect_ident(self.call.id),
+                    self.call.as_str(),
                 ),
             )),
         }
@@ -1018,7 +1010,14 @@ impl<'a> Constrain<'a> for MethodCall<'a> {
         }
 
         let mut errors = Vec::new();
-        let params = method_sig.params.len().saturating_sub(1);
+        let mut params = method_sig.params.len();
+        if method_sig
+            .params
+            .first()
+            .is_some_and(|param| matches!(param, Param::Slf(_)))
+        {
+            params -= 1;
+        }
         let args = self.args.len();
 
         if params != args {
@@ -1044,21 +1043,21 @@ impl<'a> Constrain<'a> for MethodCall<'a> {
             if i == 0 {
                 match self.receiver {
                     MethodPath::Path(_, ty) => {
-                        if ctx.get_method_sig(ty, self.call.id).is_none() {
+                        if ctx.get_method_sig(ty, self.call.sym).is_none() {
                             errors.push(ctx.report_error(
                                 self.span,
                                 format!(
                                     "type `{}` has not method `{}`",
                                     ty.to_string(ctx),
-                                    ctx.expect_ident(self.call.id)
+                                    self.call.as_str()
                                 ),
                             ));
                         }
                     }
                     MethodPath::Field(expr) => match expr {
-                        Expr::Ident(ident) => match infer.var(ident.id) {
+                        Expr::Ident(ident) => match infer.var(ident.sym) {
                             Some(var) => {
-                                if ctx.expect_ident(ident.id) != "NULL" {
+                                if ident.as_str() != "NULL" {
                                     infer.eq(var, ty, span);
                                 }
                             }
@@ -1075,9 +1074,9 @@ impl<'a> Constrain<'a> for MethodCall<'a> {
                 }
             } else {
                 match expr {
-                    Expr::Ident(ident) => match infer.var(ident.id) {
+                    Expr::Ident(ident) => match infer.var(ident.sym) {
                         Some(var) => {
-                            if ctx.expect_ident(ident.id) != "NULL" {
+                            if ident.as_str() != "NULL" {
                                 infer.eq(var, ty, span);
                             }
                         }
@@ -1544,7 +1543,7 @@ impl<'a> Constrain<'a> for IndexOf<'a> {
         self.index.constrain(ctx, infer, sig)?;
         match self.index {
             Expr::Ident(ident) => {
-                let Some(var) = infer.var(ident.id) else {
+                let Some(var) = infer.var(ident.sym) else {
                     return Err(ctx.undeclared(ident));
                 };
 
@@ -1619,7 +1618,7 @@ impl<'a> Constrain<'a> for Range<'a> {
 
 impl<'a> Constrain<'a> for Ident {
     fn constrain(&self, ctx: &mut Ctx<'a>, infer: &mut InferCtx, _sig: &Sig) -> Result<(), Diag> {
-        if infer.var(self.id).is_none() {
+        if infer.var(self.sym).is_none() {
             Err(ctx.undeclared(self))
         } else {
             Ok(())
@@ -1681,13 +1680,13 @@ pub fn aquire_access_ty<'a>(
     let mut strukt = ctx.tys.strukt(*id);
 
     for (i, acc) in access.accessors.iter().rev().enumerate() {
-        let Some(ty) = strukt.get_field_ty(acc.id) else {
+        let Some(ty) = strukt.get_field_ty(acc.sym) else {
             return Err(ctx.report_error(
                 acc.span,
                 format!(
                     "invalid access: `{}` has no field `{}`",
-                    ctx.expect_ident(strukt.name.id),
-                    ctx.expect_ident(acc.id)
+                    strukt.name.as_str(),
+                    acc.as_str()
                 ),
             ));
         };
